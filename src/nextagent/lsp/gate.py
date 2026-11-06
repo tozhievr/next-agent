@@ -1,6 +1,7 @@
-"""Pre-commit clangd diagnostic gate for Store.edit.
+"""Pre-commit clangd diagnostic gate for atomic Store edits.
 
-No Store revision is committed until the candidate has passed validation.
+All changed documents are opened together before any candidate overlay is sent.
+This allows clangd to observe a coherent multi-document candidate state.
 """
 from pathlib import Path
 
@@ -15,34 +16,51 @@ class DiagnosticGate:
         self.maximum_severity = maximum_severity
         self._version = 0
 
-    def __call__(self, changes: dict[str, tuple[Snapshot, Snapshot]]) -> None:
-        """Validate candidates using a versioned clangd overlay, without writing files.
+    def _next_version(self) -> int:
+        self._version += 1
+        return self._version
 
-        Fail closed on missing diagnostics or newly introduced errors/warnings.
-        The Store owns the SQLite transaction and rolls back on any exception.
+    def __call__(self, changes: dict[str, tuple[Snapshot, Snapshot]]) -> None:
+        """Validate the entire changed-document batch before Store commit.
+
+        Fail closed on missing/stale diagnostics. This is NOT a whole-workspace
+        dependency check: unchanged translation units are not opened or tested.
         """
-        for name, (before, after) in changes.items():
-            path = (self.root / name).resolve()
-            if not path.is_relative_to(self.root):
-                raise ValueError("path escapes workspace")
-            self._version += 1
-            baseline_version = self._version
-            uri = self.client.open_document(path, before.text, baseline_version)
-            try:
-                baseline = require_fresh_diagnostics(
-                    self.client.wait_diagnostics(uri, baseline_version), baseline_version
+        opened: list[str] = []
+        versions: dict[str, int] = {}
+        baseline: dict[str, list[dict]] = {}
+        try:
+            for name, (before, _) in changes.items():
+                path = (self.root / name).resolve()
+                if not path.is_relative_to(self.root):
+                    raise ValueError("path escapes workspace")
+                version = self._next_version()
+                uri = self.client.open_document(path, before.text, version)
+                opened.append(uri)
+                versions[uri] = version
+
+            for uri in opened:
+                version = versions[uri]
+                baseline[uri] = require_fresh_diagnostics(
+                    self.client.wait_diagnostics(uri, version), version
                 )
-                self._version += 1
-                candidate_version = self._version
-                self.client.change_document(uri, after.text, candidate_version)
+
+            for uri, (_, after) in zip(opened, changes.values(), strict=True):
+                version = self._next_version()
+                self.client.change_document(uri, after.text, version)
+                versions[uri] = version
+
+            for uri in opened:
+                version = versions[uri]
                 candidate = require_fresh_diagnostics(
-                    self.client.wait_diagnostics(uri, candidate_version), candidate_version
+                    self.client.wait_diagnostics(uri, version), version
                 )
                 delta = compare_diagnostics(
-                    baseline, candidate, maximum_severity=self.maximum_severity
+                    baseline[uri], candidate, maximum_severity=self.maximum_severity
                 )
                 if not delta.acceptable:
                     raise ValueError(f"diagnostic_regression: {delta.added}")
-            finally:
-                # Do not leave an uncommitted candidate visible to the LSP server.
+        finally:
+            # Close all candidate overlays even if validation fails midway.
+            for uri in reversed(opened):
                 self.client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
