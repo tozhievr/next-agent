@@ -123,7 +123,9 @@ def select(
 
 
 def replace_symbol(
-    snapshot: Snapshot, name: str, replacement: str, kind: str | None = None,\n    scope: str | None = None,\n) -> ChangeSet:
+    snapshot: Snapshot, name: str, replacement: str, kind: str | None = None,
+    scope: str | None = None,
+) -> ChangeSet:
     """Replace a complete top-level syntactic declaration, not its references."""
     symbol = select(snapshot, name, kind, scope)
     return ChangeSet((Edit(symbol.start, symbol.end, replacement),))
