@@ -2,6 +2,12 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.11.1 — 2026-11-06
+
+### Tests
+- Added live clangd multi-file diagnostic rejection test on Ubuntu CI.
+- Confirmed v0.11.0 Ubuntu CI passed with real clangd; Windows and macOS results were still pending at time of update.
+
 ## 0.11.0 — 2026-11-06
 
 ### Added
