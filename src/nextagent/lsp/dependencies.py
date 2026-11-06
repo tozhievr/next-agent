@@ -4,6 +4,7 @@ This is a bounded heuristic, not a preprocessor: computed includes, macro
 expansion, conditional compilation and generated headers are not resolved.
 """
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"\n]+)"', re.MULTILINE)
@@ -16,9 +17,11 @@ def dependent_sources(
     changed: set[str],
     *,
     max_files: int = 4096,
+    snapshot_text: Callable[[str], str] | None = None,
 ) -> set[str]:
     """Find source files with a transitive literal-quoted include of changed headers.
 
+    The optional snapshot_text reader supplies current Store text for each file.
     Paths are relative to root. Fail closed when the scan exceeds max_files,
     or a symlink resolves outside the workspace.
     """
@@ -44,7 +47,11 @@ def dependent_sources(
         count += 1
         if count > max_files:
             raise ValueError("dependency_scan_limit_exceeded")
-        source = path.read_text(encoding="utf-8")
+        name = resolved.relative_to(root).as_posix()
+        source = (
+            snapshot_text(name) if snapshot_text is not None
+            else path.read_text(encoding="utf-8")
+        )
         includes: set[Path] = set()
         for include in _INCLUDE.findall(source):
             target = (path.parent / include).resolve()

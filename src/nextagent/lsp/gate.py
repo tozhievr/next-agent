@@ -31,9 +31,12 @@ class DiagnosticGate:
 
         With snapshot_text, unchanged dependent documents use the Store's
         latest snapshots rather than stale disk content. Dependency discovery
-        still scans on-disk include directives and is not preprocessor-aware.
+        scans Store snapshots when supplied, but only for on-disk file paths.
+        New unflushed files and non-literal includes are not discovered.
         """
-        dependent_names = dependent_sources(self.root, set(changes))
+        dependent_names = dependent_sources(
+            self.root, set(changes), snapshot_text=self.snapshot_text
+        )
         documents: dict[str, tuple[str, str]] = {
             name: (before.text, after.text)
             for name, (before, after) in changes.items()

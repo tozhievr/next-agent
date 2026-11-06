@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.14.0 — 2026-11-06
+
+### Added
+- Optional snapshot_text reader for dependency discovery, allowing current unflushed SQLite include directives to drive transitive dependency scans.
+- DiagnosticGate now forwards its Store snapshot reader to the dependency scanner.
+- Regression tests for newly added and removed unsynced includes.
+
+### Limitations
+- Files must exist on disk to be enumerated by the scanner; newly created Store-only paths are not yet included.
+- Macro/conditional includes and compile_commands.json are not yet supported.
+
 ## 0.13.1 — 2026-11-06
 
 ### Fixed
