@@ -18,10 +18,10 @@
 
 ## Install
 
-Python >= 3.13 is supported by package metadata. CI is pinned to Python 3.16.0a1.
+Python >= 3.13 is supported by package metadata. CI is pinned to Python 3.16.0a1. Until PR #1 is merged, install from the feature branch shown below.
 
 ```sh
-git clone https://github.com/tozhievr/next-agent.git
+git clone --branch feat/aed-m0-foundation https://github.com/tozhievr/next-agent.git
 cd next-agent
 python -m pip install -e '.[dev]'
 nextagent --version
