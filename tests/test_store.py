@@ -80,3 +80,43 @@ def test_reject_canonical_duplicate_paths(tmp_path: Path):
                 "x.c": ChangeSet((Edit(0, 0, "a"),)),
                 "./x.c": ChangeSet((Edit(0, 0, "b"),)),
             })
+
+
+def test_sync_refuses_external_disk_modifications(tmp_path: Path):
+    path = tmp_path / "source.c"
+    path.write_text("before", encoding="utf-8")
+    with Store(tmp_path) as store:
+        store.edit({"source.c": ChangeSet((Edit(0, 6, "buffer"),))})
+        path.write_text("external", encoding="utf-8")
+        with pytest.raises(ValueError, match="disk_conflict"):
+            store.flush()
+        assert path.read_text(encoding="utf-8") == "external"
+        assert store.view("source.c").text == "buffer"
+
+
+def test_sync_rechecks_all_paths_before_writing(tmp_path: Path):
+    a = tmp_path / "a.c"
+    b = tmp_path / "b.c"
+    a.write_text("a", encoding="utf-8")
+    b.write_text("b", encoding="utf-8")
+    with Store(tmp_path) as store:
+        store.edit({
+            "a.c": ChangeSet((Edit(0, 1, "A"),)),
+            "b.c": ChangeSet((Edit(0, 1, "B"),)),
+        })
+        b.write_text("external", encoding="utf-8")
+        with pytest.raises(ValueError, match="disk_conflict"):
+            store.flush()
+        assert a.read_text(encoding="utf-8") == "a"
+        assert b.read_text(encoding="utf-8") == "external"
+
+
+def test_sync_updates_baseline_after_success(tmp_path: Path):
+    path = tmp_path / "file.c"
+    path.write_text("one", encoding="utf-8")
+    with Store(tmp_path) as store:
+        store.edit({"file.c": ChangeSet((Edit(0, 3, "two"),))})
+        store.flush()
+        store.edit({"file.c": ChangeSet((Edit(0, 3, "three"),))})
+        store.flush()
+        assert path.read_text(encoding="utf-8") == "three"
