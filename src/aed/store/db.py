@@ -1,6 +1,7 @@
 """Durable SQLite revision store for the initial M0 editor."""
 
 import json
+from hashlib import blake2b
 import os
 import sqlite3
 import tempfile
@@ -35,6 +36,10 @@ CREATE TABLE IF NOT EXISTS doc_head (
  doc_id INTEGER NOT NULL REFERENCES doc(id), branch_id INTEGER NOT NULL REFERENCES branch(id),
  rev_id INTEGER NOT NULL REFERENCES rev(id), text TEXT NOT NULL, hash BLOB NOT NULL,
  PRIMARY KEY(doc_id,branch_id)
+);
+CREATE TABLE IF NOT EXISTS disk_baseline (
+ doc_id INTEGER PRIMARY KEY REFERENCES doc(id), disk_hash BLOB,
+ exists_on_disk INTEGER NOT NULL CHECK(exists_on_disk IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS doc_delta (
  doc_id INTEGER NOT NULL REFERENCES doc(id), rev_id INTEGER NOT NULL REFERENCES rev(id),
@@ -102,6 +107,16 @@ class Store:
         else:
             self.db.execute("INSERT INTO doc(ws_id,path) VALUES (?,?)", (self.ws_id, name))
             doc_id = self.db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        baseline = self.db.execute(
+            "SELECT 1 FROM disk_baseline WHERE doc_id=?", (doc_id,)
+        ).fetchone()
+        if baseline is None:
+            exists = disk.exists()
+            digest = self._disk_hash(disk) if exists else None
+            self.db.execute(
+                "INSERT INTO disk_baseline(doc_id,disk_hash,exists_on_disk) VALUES (?,?,?)",
+                (doc_id, digest, int(exists)),
+            )
         head = self.db.execute(
             "SELECT rev_id,text FROM doc_head WHERE doc_id=? AND branch_id=?",
             (doc_id, self.branch_id),
@@ -110,6 +125,10 @@ class Store:
             return doc_id, Snapshot.of(doc_id, head[0], head[1])
         text = disk.read_text(encoding="utf-8") if disk.exists() else ""
         return doc_id, Snapshot.of(doc_id, 0, text)
+
+    @staticmethod
+    def _disk_hash(path: Path) -> bytes:
+        return blake2b(path.read_bytes(), digest_size=16).digest()
 
     def view(self, name: str) -> Snapshot:
         snap = self._doc(name)[1]
@@ -201,16 +220,27 @@ class Store:
         ]
 
     def flush(self, paths: list[str] | None = None) -> list[str]:
-        """Atomically write buffers; external disk conflicts are NOT handled in M0."""
+        """Atomically flush files, rejecting externally modified disk baselines."""
         rows = self.db.execute(
-            "SELECT doc.path,head.text FROM doc_head AS head "
-            "JOIN doc ON doc.id=head.doc_id WHERE head.branch_id=?", (self.branch_id,)
+            "SELECT doc.id,doc.path,head.text,base.disk_hash,base.exists_on_disk "
+            "FROM doc_head AS head JOIN doc ON doc.id=head.doc_id "
+            "JOIN disk_baseline AS base ON base.doc_id=doc.id "
+            "WHERE head.branch_id=?", (self.branch_id,)
         ).fetchall()
         allowed = set(paths) if paths is not None else None
+        selected = [row for row in rows if allowed is None or row[1] in allowed]
+
+        # Detect conflicts across ALL selected paths before writing any of them.
+        for _, name, _, expected_hash, expected_exists in selected:
+            path = self._path(name)
+            exists = path.exists()
+            if exists != bool(expected_exists) or (
+                exists and self._disk_hash(path) != expected_hash
+            ):
+                raise ValueError(f"disk_conflict: external modification of {name}")
+
         written = []
-        for name, content in rows:
-            if allowed is not None and name not in allowed:
-                continue
+        for doc_id, name, content, expected_hash, expected_exists in selected:
             path = self._path(name)
             path.parent.mkdir(parents=True, exist_ok=True)
             fd, temporary = tempfile.mkstemp(prefix=".aed-", dir=path.parent)
@@ -219,9 +249,21 @@ class Store:
                     stream.write(content)
                     stream.flush()
                     os.fsync(stream.fileno())
+                if expected_exists:
+                    os.chmod(temporary, path.stat().st_mode)
+                # Recheck immediately before replacement; a watcher/merge is M4.
+                if path.exists() != bool(expected_exists) or (
+                    expected_exists and self._disk_hash(path) != expected_hash
+                ):
+                    raise ValueError(f"disk_conflict: external modification of {name}")
                 os.replace(temporary, path)
             finally:
                 if os.path.exists(temporary):
                     os.unlink(temporary)
+            self.db.execute(
+                "UPDATE disk_baseline SET disk_hash=?,exists_on_disk=1 WHERE doc_id=?",
+                (self._disk_hash(path), doc_id),
+            )
             written.append(name)
+        self.db.commit()
         return written
