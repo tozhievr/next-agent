@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.12.0 — 2026-11-06
+
+### Added
+- Bounded transitive dependency discovery for literal quoted C/C++ includes.
+- Tests for direct/transitive inclusion, unrelated source changes, path traversal and scan limits.
+
+### Limitations
+- Dependency discovery is not yet wired into DiagnosticGate; this is groundwork only.
+- Does not resolve macro includes, conditional compilation, -I search paths, generated headers or compile_commands.json.
+
 ## 0.11.1 — 2026-11-06
 
 ### Tests
