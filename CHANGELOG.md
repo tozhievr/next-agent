@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.1.1 — 2026-11-06
+
+### Fixed
+- `sync` now compares the latest disk content against the imported baseline, rejecting observed external changes with `disk_conflict` before writing.
+- Preserves existing file mode during atomic replacement.
+- Adds regression tests for disk conflicts and repeated sync.
+
+### Remaining limitations
+- Multi-file disk writes are not transactional and race-free against external processes; three-way merge is scheduled for M4.
+
 ## 0.1.0 — 2026-11-06
 
 ### Added
@@ -12,4 +22,4 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Tests, README and durable progress log in `docs/agent-plan.md`.
 
 ### Incomplete
-- External disk modification conflict detection; no semantic addressing, LSP, MCP, JSON-RPC or brain.
+- No three-way disk merge or cross-process file locking; no semantic addressing, LSP, MCP, JSON-RPC or brain.
