@@ -51,9 +51,13 @@ def dispatch(store: Store, request: object) -> dict | None:
 
             snapshot = store.view(params["target"])
             if method == "outline":
-                result = {"symbols": [symbol.to_dict() for symbol in outline(\n                    snapshot, nested=params.get("nested", False)\n                )]}
+                result = {"symbols": [symbol.to_dict() for symbol in outline(
+                    snapshot, nested=params.get("nested", False)
+                )]}
             else:
-                result = select(\n                    snapshot, params["name"], params.get("kind"), params.get("scope")\n                ).to_dict()
+                result = select(
+                    snapshot, params["name"], params.get("kind"), params.get("scope")
+                ).to_dict()
         elif method == "replace_symbol":
             from nextagent.semantic.c23 import replace_symbol
 
@@ -119,5 +123,6 @@ def serve(root: Path, source: TextIO | None = None, sink: TextIO | None = None) 
             else:
                 reply = dispatch(store, request)
             if reply is not None:
-                outgoing.write(json.dumps(reply, ensure_ascii=False) + "\n")
+                outgoing.write(json.dumps(reply, ensure_ascii=False) + "
+")
                 outgoing.flush()
