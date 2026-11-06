@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**", "fix/**", "release/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clang:
+    name: clang / windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 test -Compiler clang
+
+  nextc:
+    # Optional: needs the NEXTC_REPO repository variable (owner/name of the nextc
+    # repository). Skipped when it is not set. Not yet exercised on a runner.
+    name: nextc / windows
+    if: ${{ vars.NEXTC_REPO != '' }}
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nextc
+        shell: pwsh
+        env:
+          NEXTC_REPO: ${{ vars.NEXTC_REPO }}
+        run: |
+          git clone --depth 1 "https://github.com/$env:NEXTC_REPO.git" "$env:RUNNER_TEMP/nextc"
+          $exe = Get-ChildItem "$env:RUNNER_TEMP/nextc" -Recurse -Filter nextc.exe | Select-Object -First 1
+          if (-not $exe) { throw "nextc.exe not found in the cloned repository; build it first" }
+          "NEXTC=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 test -Compiler nextc

@@ -1,0 +1,264 @@
+# Changelog
+
+All product versions follow [Semantic Versioning](https://semver.org/).
+
+## 0.20.1 — 2026-11-06
+
+### Added
+- Build with clang: `./build.ps1 -Compiler clang` (or `NA_COMPILER=clang ./build.sh`); stdio is switched to binary mode under the MSVC CRT.
+- `install.ps1` one-liner installer (downloads the latest release, verifies SHA-256, updates the user PATH).
+- Release workflow: pushing a `v*` tag builds with clang, runs the tests and publishes `nextagent-<version>-windows-x64.zip` plus `SHA256SUMS.txt`.
+- `docs/AGENT_GUIDE.md`, a detailed usage guide for AI models.
+
+### Changed
+- CI now builds and tests with clang (always) and with nextc (optional, when `NEXTC_REPO` is set).
+
+## 0.20.0 — 2026-11-06
+
+### Changed (breaking)
+- Complete rewrite in C23, built with the nextc compiler; no Python, SQLite or tree-sitter dependency.
+- State is an append-only checksummed journal `.aed/journal.aedj`. The old `.aed/state.sqlite3` is not read or migrated.
+- CRLF is preserved exactly.
+- Default `--clangd` severity threshold is warnings and above (as before); errors are always blocking.
+
+### Added
+- `redo`, `undo --rev N` (rebased through later revisions, `undo_conflict` on overlap).
+- Cross-process write lock and torn-tail recovery.
+- MCP stdio bridge (`nextagent mcp`).
+- JSON-RPC parameter type validation; `history` accepts `op=redo` and `rev`.
+- Native test suite (`build.ps1 test`) including live clangd tests when clangd is installed.
+
+### Removed
+- Python package, `pyproject.toml`, pytest suite and Python-based CI.
+
+### Not implemented
+- Branches, offline brain, M3 refactorings, three-way merge/watcher, async writer, socket transport, M5b.
+
+### Limitations
+- CI workflow rewritten but not yet run.
+- clangd does not re-diagnose unchanged dependents for semantic changes to an overlay header.
+
+## 0.19.1 — 2026-11-06
+
+### Fixed
+- Reject virtual document inventories without a snapshot reader, rather than attempting to read nonexistent disk files.
+- Use a set for virtual path membership during bounded dependency traversal.
+- Added guard and file-limit tests.
+
+## 0.19.0 — 2026-11-06
+
+### Added
+- Public read-only Store.snapshot_paths() enumerates tracked document heads, including unflushed new files.
+- Dependency scanner accepts snapshot_paths and traverses Store-only source and header files.
+- DiagnosticGate and JSON-RPC pass Store document inventory into dependency discovery.
+- Added direct and transitive tests for Store-only translation units.
+
+### Limitations
+- clangd may not resolve Store-only headers from dependent translation units without filesystem materialization; diagnostic gate is not a complete virtual filesystem.
+
+## 0.18.4 — 2026-11-06
+
+### Fixed
+- Dependency traversal now recognizes changed unflushed headers in the Store even if they do not yet exist on disk.
+- Added direct and transitive dependency regression tests for new unflushed headers.
+- Verified live clangd header regression test passed on Ubuntu CI for prior commit.
+
+### Limitations
+- Unflushed source files are still not enumerated by the dependency scanner.
+
+## 0.18.3 — 2026-11-06
+
+### Fixed
+- DiagnosticGate captures bounded C/C++ filesystem path inventory and compile_commands.json bytes during validation.
+- Store.edit rechecks build state inside the write transaction; rejects changes as stale_build_state.
+- Tests cover changed compilation database, added translation unit and stable state.
+
+### Limitations
+- Build-state check does not freeze external filesystem; paths can change after recheck and before commit.
+- Only C/C++ source/header path inventory and two supported compilation database locations are tracked.
+
+## 0.18.2 — 2026-11-06
+
+### Fixed
+- Updated transaction-boundary regression test for speculative validation outside SQLite BEGIN IMMEDIATE, as intended since v0.18.0.
+
+## 0.18.1 — 2026-11-06
+
+### Fixed
+- DiagnosticGate records the dependent document texts read during validation.
+- Store.edit rechecks the validator read-set after acquiring the SQLite write lock, rejecting stale dependencies before commit.
+- Added regression tests for dependency mutation during validation and unchanged dependencies.
+
+### Limitations
+- Filesystem discovery and compile_commands.json may still change during validation without detection; read-set covers document contents only.
+
+## 0.18.0 — 2026-11-06
+
+### Changed
+- Store.edit performs optional diagnostic validation before BEGIN IMMEDIATE, reducing SQLite writer lock duration during clangd waits.
+- Rechecks workspace revision and candidate baseline text inside the write transaction before committing.
+- Added tests for unlocked validation, concurrent revisions, disk edits and rejected validators.
+
+### Limitations
+- Optimistic preflight may need retry on stale revisions; dependency files are not individually rechecked after validation.
+
+## 0.17.0 — 2026-11-06
+
+### Added
+- Public read-only Store.snapshot_text(name) accessor that does not import documents, write to SQLite or commit active transactions.
+- JSON-RPC clangd gate uses this accessor; tests verify unflushed snapshots and transaction safety.
+
+### Fixed
+- Removed private Store._doc reader usage from LSP snapshot tests and gate wiring.
+
+## 0.16.1 — 2026-11-06
+
+### Fixed
+- Corrected SQLite snapshot dependency regression test to close its implicit read transaction before a subsequent edit.
+- v0.14.0 CI revealed the failure on all three platforms; latest CI is pending.
+
+## 0.16.0 — 2026-11-06
+
+### Added
+- Per-translation-unit include search paths from compile_commands.json.
+- Nested header traversal inherits each translation unit's include directories.
+- Tests for conflicting include names across independent compilation units and transitive headers.
+
+### Limitations
+- Multiple commands for one source are conservatively merged; -iquote/-I order is not modeled separately.
+- No macro or conditional preprocessing, external include directories, response files or generated headers.
+
+## 0.15.0 — 2026-11-06
+
+### Added
+- Conservative compile_commands.json reader for -I, -iquote and /I directories.
+- DiagnosticGate resolves literal quoted includes using compilation database directories.
+- Tests for arguments/command forms, missing database and workspace escape rejection.
+
+### Limitations
+- Include directories are merged across translation units, not yet scoped per compile command.
+- No macros, conditional compilation, response files, system includes, external include paths or compiler driver evaluation.
+- The implementation deliberately rejects include directories outside the workspace.
+
+## 0.14.0 — 2026-11-06
+
+### Added
+- Optional snapshot_text reader for dependency discovery, allowing current unflushed SQLite include directives to drive transitive dependency scans.
+- DiagnosticGate now forwards its Store snapshot reader to the dependency scanner.
+- Regression tests for newly added and removed unsynced includes.
+
+### Limitations
+- Files must exist on disk to be enumerated by the scanner; newly created Store-only paths are not yet included.
+- Macro/conditional includes and compile_commands.json are not yet supported.
+
+## 0.13.1 — 2026-11-06
+
+### Fixed
+- JSON-RPC clangd gate now reads unchanged dependent documents from the SQLite Store snapshot instead of the potentially stale filesystem.
+- Added regression test for an unflushed dependent source file.
+
+### Limitations
+- Include dependency discovery still reads on-disk directives, not unsynced Store content.
+- Uses a private Store reader during validation; a public snapshot accessor is planned.
+
+## 0.13.0 — 2026-11-06
+
+### Added
+- DiagnosticGate now opens discovered transitive literal-include dependent translation units and checks their diagnostics before committing header changes.
+- Tests for dependent discovery, candidate refresh and atomic rejection on dependent-only regression.
+
+### Limitations
+- Dependency graph uses on-disk quoted includes; unchanged unsynced SQLite documents and compile_commands include paths are not represented.
+- The gate is conservative, but not a complete compilation database or preprocessor-aware validator.
+
+## 0.12.0 — 2026-11-06
+
+### Added
+- Bounded transitive dependency discovery for literal quoted C/C++ includes.
+- Tests for direct/transitive inclusion, unrelated source changes, path traversal and scan limits.
+
+### Limitations
+- Dependency discovery is not yet wired into DiagnosticGate; this is groundwork only.
+- Does not resolve macro includes, conditional compilation, -I search paths, generated headers or compile_commands.json.
+
+## 0.11.1 — 2026-11-06
+
+### Tests
+- Added live clangd multi-file diagnostic rejection test on Ubuntu CI.
+- Confirmed v0.11.0 Ubuntu CI passed with real clangd; Windows and macOS results were still pending at time of update.
+
+## 0.11.0 — 2026-11-06
+
+### Added
+- Batch diagnostic gate opens all changed documents, collects baseline reports, then stages all candidate overlays before comparing diagnostics.
+- Atomic multi-document regression tests for success and rejection.
+
+### Limitations
+- Only changed documents are checked; unchanged dependent translation units are not yet included.
+- Live clangd compatibility and CI remain under verification.
+
+## 0.10.1 — 2026-11-06
+
+### Fixed
+- JSON-RPC now returns structured errors for clangd diagnostic timeouts and connection failures instead of terminating the server.
+- Added regression tests proving the server continues processing subsequent requests and preserves the SQLite revision.
+- Normalized import order for Ruff.
+
+## 0.10.0 — 2026-11-06
+
+### Added
+- Diagnostic validation for Store.undo and JSON-RPC history undo, preserving atomic rollback on rejection.
+- Opt-in real clangd regression test for rejecting a newly introduced C syntax error.
+- Linux CI now runs the live clangd diagnostic test in addition to lifecycle smoke test.
+
+### Limitations
+- Multi-file cross-dependency analysis is not yet implemented; live diagnostic test may expose clangd compatibility issues.
+
+## 0.9.2 — 2026-11-06
+
+### Fixed
+- Ruff UP035 import errors in JSON-RPC and SQLite modules.
+- CI now installs clangd on Ubuntu and runs the real LSP smoke test with Python 3.16.0a1.
+
+## 0.9.1 — 2026-11-06
+
+### Fixed
+- Corrected clangd client lock initialization and serialized LSP writes.
+- Added opt-in real clangd smoke test and version consistency regression test.
+- Repaired escaped newline formatting in documentation.
+
+## 0.9.0 — 2026-11-06
+\n### Added\n- Optional `nextagent serve --clangd` mode enforcing diagnostic validation for JSON-RPC edits and symbol replacements.\n- Server lifecycle owns clangd client, and injected validators enable regression tests without clangd installation.\n\n### Limitations\n- Strict mode rejects unversioned or missing diagnostics; live clangd end-to-end verification is pending.\n- Cross-file diagnostic regressions and history undo are not covered by the gate.\n\n## 0.8.0 — 2026-11-06\n\n### Added\n- Opt-in pre-commit Store validator callback, executed inside the SQLite transaction before revision creation.\n- DiagnosticGate for clangd candidate overlays, versioned diagnostics and regression rejection.\n- Version-aware wait for clangd diagnostics and mock-based Store rollback tests.\n\n### Limitations\n- DiagnosticGate is Python API only; not wired into CLI/JSON-RPC. No live clangd integration test.\n- Fail closed on clangd diagnostics without a version; cross-file diagnostics are not yet validated.\n\n## 0.7.0 — 2026-11-06\n\n### Added\n- Diagnostic delta comparison with duplicate-aware error/warning detection.\n- Fail-closed validation of LSP diagnostic report versions.\n- Tests for new errors, warnings, duplicates, reordering and stale diagnostics.\n\n### Fixed\n- UTF-8 CJK position test now uses byte offsets, resolving the v0.5.0 CI failure.\n\n### Limitations\n- Validation is a standalone component; no Store pre-commit gate or rollback integration yet.\n\n## 0.6.0 — 2026-11-06\n\n### Added\n- Experimental clangd subprocess LSP client with initialize/shutdown lifecycle, request correlation and timeouts.\n- didOpen/didChange notifications, diagnostics capture and formatting requests.\n- Unit tests for missing executable, request correlation and workspace boundary.\n\n### Limitations\n- Not wired into editor JSON-RPC; formatting edits are returned, not applied. No diagnostics delta/rollback yet.\n\n## 0.5.0 — 2026-11-06\n\n### Added\n- Strict LSP position codecs for UTF-8, UTF-16 and UTF-32.\n- Binary Content-Length LSP framing with size limits and malformed-frame rejection.\n- Unicode and protocol framing regression tests.\n\n### Limitations\n- clangd subprocess, lifecycle, diagnostics and formatting are not yet integrated.\n\n## 0.4.0 — 2026-11-06\n\n### Added\n- Scoped nested C23 type/field navigation and ambiguity-safe selection.\n- Revision-guarded JSON-RPC `replace_symbol` for entire syntactic declarations.\n- Tests for scoped field lookup and stale revision rejection.\n\n### Limitations\n- No semantic name resolution, cross-file references or validation of replacement text.\n\n## 0.3.0 — 2026-11-06\n\n### Added\n- Initial C23 tree-sitter syntax navigation: outline, exact-name select, byte-to-Unicode offset mapping.\n- CLI and JSON-RPC outline/select operations, tests for Unicode and ambiguous names.\n\n### Limitations\n- Only top-level syntactic declarations; no cross-file resolution, LSP, refactoring or complete C23 semantic model.\n\n## 0.2.0 — 2026-11-06
+
+### Added
+- NextAgent public identity: `nextagent` CLI, `nextagent` Python package and distribution.
+- Experimental newline-delimited JSON-RPC 2.0 stdio transport for open/view/edit/history/sync.
+- Protocol and entrypoint regression tests.
+
+### Changed
+- Removed the legacy `aed` CLI/import name (breaking change in 0.x development phase).
+
+### Not yet supported
+- Semantic selectors, tree-sitter, LSP, MCP and Unix socket transport.
+
+## 0.1.1 — 2026-11-06
+
+### Fixed
+- `sync` now compares the latest disk content against the imported baseline, rejecting observed external changes with `disk_conflict` before writing.
+- Preserves existing file mode during atomic replacement.
+- Adds regression tests for disk conflicts and repeated sync.
+
+### Remaining limitations
+- Multi-file disk writes are not transactional and race-free against external processes; three-way merge is scheduled for M4.
+
+## 0.1.0 — 2026-11-06
+
+### Added
+- Initial M0 source-editing foundation: immutable Unicode snapshots and invertible changesets.
+- SQLite WAL history, multi-file atomic revisions, stale revision checks and undo.
+- Minimal CLI: view, edit, undo, history, sync.
+- GitHub Actions CI definition for Python 3.16.0a1 on three operating systems.
+- Tests, README and durable progress log in `docs/agent-plan.md`.
+
+### Incomplete
+- No three-way disk merge or cross-process file locking; no semantic addressing, LSP, MCP, JSON-RPC or brain.
