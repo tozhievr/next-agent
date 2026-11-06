@@ -80,7 +80,9 @@ def dependent_sources(
                     target = candidate.resolve()
                     if not target.is_relative_to(root):
                         raise ValueError("include escapes workspace")
-                    if target.is_file():
+                    if target.is_file() or (
+                        snapshot_text is not None and target in changed_paths
+                    ):
                         pending.append(target)
                         break
     return discovered

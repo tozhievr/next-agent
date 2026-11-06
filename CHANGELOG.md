@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.18.4 — 2026-11-06
+
+### Fixed
+- Dependency traversal now recognizes changed unflushed headers in the Store even if they do not yet exist on disk.
+- Added direct and transitive dependency regression tests for new unflushed headers.
+- Verified live clangd header regression test passed on Ubuntu CI for prior commit.
+
+### Limitations
+- Unflushed source files are still not enumerated by the dependency scanner.
+
 ## 0.18.3 — 2026-11-06
 
 ### Fixed
