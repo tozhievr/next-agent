@@ -1,11 +1,11 @@
 """Durable SQLite revision store for the initial M0 editor."""
 
 import json
-from hashlib import blake2b
 import os
 import sqlite3
 import tempfile
 import time
+from hashlib import blake2b
 from pathlib import Path
 
 from nextagent.core.changeset import ChangeSet, Edit
