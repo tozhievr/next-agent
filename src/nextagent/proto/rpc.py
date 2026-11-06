@@ -5,10 +5,11 @@ One JSON object per line; this is NOT LSP Content-Length framing or MCP.
 import json
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Callable, TextIO
 
 from nextagent import __version__
 from nextagent.core.changeset import ChangeSet, Edit
+from nextagent.core.snapshot import Snapshot
 from nextagent.store.db import Store
 
 
@@ -22,7 +23,10 @@ def _edits(ops: list[dict]) -> dict[str, ChangeSet]:
     }
 
 
-def dispatch(store: Store, request: object) -> dict | None:
+def dispatch(
+    store: Store, request: object,
+    validator: Callable[[dict[str, tuple[Snapshot, Snapshot]]], None] | None = None,
+) -> dict | None:
     """Handle one JSON-RPC request; notifications intentionally return no reply."""
     if not isinstance(request, dict):
         return _error(None, -32600, "Invalid Request")
@@ -75,6 +79,7 @@ def dispatch(store: Store, request: object) -> dict | None:
             result = store.edit(
                 {target: changes}, if_rev=expected,
                 label=params.get("label", "replace_symbol"), session_id="jsonrpc",
+                validator=validator,
             )
         elif method == "edit":
             result = store.edit(
@@ -82,6 +87,7 @@ def dispatch(store: Store, request: object) -> dict | None:
                 if_rev=params.get("if_rev"),
                 label=params.get("label", "edit"),
                 session_id="jsonrpc",
+                validator=validator,
             )
         elif method == "history":
             operation = params.get("op", "log")
@@ -108,11 +114,24 @@ def _error(request_id: str | int | None, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
-def serve(root: Path, source: TextIO | None = None, sink: TextIO | None = None) -> None:
+def serve(
+    root: Path, source: TextIO | None = None, sink: TextIO | None = None,
+    *, clangd: str | None = None,
+    validator: Callable[[dict[str, tuple[Snapshot, Snapshot]]], None] | None = None,
+) -> None:
     """Serve JSON objects delimited by newlines until EOF."""
     incoming = source if source is not None else sys.stdin
     outgoing = sink if sink is not None else sys.stdout
-    with Store(root) as store:
+    if clangd is not None and validator is not None:
+        raise ValueError("provide either clangd or validator, not both")
+    from contextlib import nullcontext
+
+    from nextagent.lsp.client import ClangdClient
+    from nextagent.lsp.gate import DiagnosticGate
+
+    context = ClangdClient(root, executable=clangd) if clangd else nullcontext()
+    with context as client, Store(root) as store:
+        gate = DiagnosticGate(root, client) if client is not None else validator
         for line in incoming:
             if not line.strip():
                 continue
@@ -121,7 +140,7 @@ def serve(root: Path, source: TextIO | None = None, sink: TextIO | None = None) 
             except json.JSONDecodeError:
                 reply = _error(None, -32700, "Parse error")
             else:
-                reply = dispatch(store, request)
+                reply = dispatch(store, request, validator=gate)
             if reply is not None:
                 outgoing.write(json.dumps(reply, ensure_ascii=False) + "\n")
                 outgoing.flush()

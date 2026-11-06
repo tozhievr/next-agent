@@ -30,12 +30,14 @@ def main() -> None:
     history.add_argument("--limit", type=int, default=20)
     sync = commands.add_parser("sync")
     sync.add_argument("paths", nargs="*")
-    commands.add_parser("serve", help="JSON-RPC 2.0 over line-delimited stdio")
+    serve_cmd = commands.add_parser("serve", help="JSON-RPC 2.0 over line-delimited stdio")
+    serve_cmd.add_argument("--clangd", nargs="?", const="clangd", default=None,
+                           help="enable strict pre-commit diagnostics with clangd")
     args = parser.parse_args()
     if args.cmd == "serve":
         from nextagent.proto.rpc import serve
 
-        serve(args.root)
+        serve(args.root, clangd=args.clangd)
         return
     with Store(args.root) as store:
         if args.cmd == "view":
