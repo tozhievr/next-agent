@@ -1,13 +1,11 @@
-"""Conservative direct-include dependency discovery for C translation units.
+"""Bounded literal quoted-include dependency discovery.
 
-This is a bounded heuristic, not a preprocessor: computed includes, macro
-expansion, conditional compilation and generated headers are not resolved.
+Source-specific include paths are inherited through nested header traversal.
+Not a preprocessor: macros, conditions and generated files are unsupported.
 """
 import re
 from collections.abc import Callable
 from pathlib import Path
-
-from nextagent.lsp.compilation import compilation_include_dirs
 
 _INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"\n]+)"', re.MULTILINE)
 _SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
@@ -21,13 +19,9 @@ def dependent_sources(
     max_files: int = 4096,
     snapshot_text: Callable[[str], str] | None = None,
     include_dirs: tuple[Path, ...] = (),
+    include_dirs_by_source: dict[str, tuple[Path, ...]] | None = None,
 ) -> set[str]:
-    """Find source files with a transitive literal-quoted include of changed headers.
-
-    The optional snapshot_text reader supplies current Store text for each file.
-    Paths are relative to root. Fail closed when the scan exceeds max_files,
-    or a symlink resolves outside the workspace.
-    """
+    """Return source files whose resolved quoted-include closure touches changed headers."""
     root = root.resolve()
     if max_files < 1:
         raise ValueError("max_files must be positive")
@@ -36,9 +30,7 @@ def dependent_sources(
         raise ValueError("path escapes workspace")
     if not any(path.suffix.lower() in _HEADER_SUFFIXES for path in changed_paths):
         return set()
-
-    dependencies: dict[Path, set[Path]] = {}
-    count = 0
+    sources: list[Path] = []
     for path in root.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in (
             _SOURCE_SUFFIXES | _HEADER_SUFFIXES
@@ -47,37 +39,48 @@ def dependent_sources(
         resolved = path.resolve()
         if not resolved.is_relative_to(root):
             raise ValueError("symlink escapes workspace")
-        count += 1
-        if count > max_files:
+        sources.append(resolved)
+        if len(sources) > max_files:
             raise ValueError("dependency_scan_limit_exceeded")
-        name = resolved.relative_to(root).as_posix()
-        source = (
-            snapshot_text(name) if snapshot_text is not None
-            else path.read_text(encoding="utf-8")
+    discovered: set[str] = set()
+    for source in sources:
+        if source.suffix.lower() not in _SOURCE_SUFFIXES or source in changed_paths:
+            continue
+        name = source.relative_to(root).as_posix()
+        directories = (
+            include_dirs_by_source.get(name, include_dirs)
+            if include_dirs_by_source is not None else include_dirs
         )
-        includes: set[Path] = set()
-        for include in _INCLUDE.findall(source):
-            candidates = ((path.parent / include), *(directory / include for directory in include_dirs))
-            for candidate in candidates:
-                target = candidate.resolve()
-                if not target.is_relative_to(root):
-                    raise ValueError("include escapes workspace")
-                if target.is_file():
-                    includes.add(target)
-                    break
-        dependencies[resolved] = includes
-
-    impacted = set(changed_paths)
-    while True:
-        discovered = {
-            source for source, includes in dependencies.items()
-            if includes & impacted
-        }
-        if discovered <= impacted:
-            break
-        impacted |= discovered
-    return {
-        path.relative_to(root).as_posix()
-        for path in impacted
-        if path.suffix.lower() in _SOURCE_SUFFIXES and path not in changed_paths
-    }
+        if any(not directory.resolve().is_relative_to(root) for directory in directories):
+            raise ValueError("include_directory_escapes_workspace")
+        pending = [source]
+        visited: set[Path] = set()
+        while pending:
+            current = pending.pop()
+            if current in visited:
+                continue
+            visited.add(current)
+            if len(visited) > max_files:
+                raise ValueError("dependency_scan_limit_exceeded")
+            if current in changed_paths:
+                discovered.add(name)
+                break
+            if not current.is_file():
+                continue
+            relative = current.relative_to(root).as_posix()
+            text = (
+                snapshot_text(relative) if snapshot_text is not None
+                else current.read_text(encoding="utf-8")
+            )
+            for include in _INCLUDE.findall(text):
+                for candidate in (
+                    current.parent / include,
+                    *(directory / include for directory in directories),
+                ):
+                    target = candidate.resolve()
+                    if not target.is_relative_to(root):
+                        raise ValueError("include escapes workspace")
+                    if target.is_file():
+                        pending.append(target)
+                        break
+    return discovered

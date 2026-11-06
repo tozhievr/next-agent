@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.16.0 — 2026-11-06
+
+### Added
+- Per-translation-unit include search paths from compile_commands.json.
+- Nested header traversal inherits each translation unit's include directories.
+- Tests for conflicting include names across independent compilation units and transitive headers.
+
+### Limitations
+- Multiple commands for one source are conservatively merged; -iquote/-I order is not modeled separately.
+- No macro or conditional preprocessing, external include directories, response files or generated headers.
+
 ## 0.15.0 — 2026-11-06
 
 ### Added

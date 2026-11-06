@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from nextagent.core.snapshot import Snapshot
-from nextagent.lsp.compilation import compilation_include_dirs
+from nextagent.lsp.compilation import compilation_commands
 from nextagent.lsp.dependencies import dependent_sources
 from nextagent.lsp.validation import compare_diagnostics, require_fresh_diagnostics
 
@@ -37,7 +37,7 @@ class DiagnosticGate:
         """
         dependent_names = dependent_sources(
             self.root, set(changes), snapshot_text=self.snapshot_text,
-            include_dirs=compilation_include_dirs(self.root),
+            include_dirs_by_source=compilation_commands(self.root),
         )
         documents: dict[str, tuple[str, str]] = {
             name: (before.text, after.text)
