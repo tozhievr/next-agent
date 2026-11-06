@@ -32,7 +32,7 @@ def test_dependent_uses_unflushed_store_snapshot(tmp_path):
         assert (tmp_path / "main.c").read_text(encoding="utf-8") == original
         client = RecordingClangd()
         gate = DiagnosticGate(
-            tmp_path, client, snapshot_text=lambda name: store._doc(name)[1].text
+            tmp_path, client, snapshot_text=store.snapshot_text
         )
         store.edit({
             "api.h": ChangeSet((Edit(0, 0, "/* changed */\n"),))

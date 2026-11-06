@@ -131,6 +131,24 @@ class Store:
     def _disk_hash(path: Path) -> bytes:
         return blake2b(path.read_bytes(), digest_size=16).digest()
 
+    def snapshot_text(self, name: str) -> str:
+        """Read current document text without writing or committing SQLite state.
+
+        Safe inside an active edit validator transaction. Unknown documents are
+        read from disk without importing them into the Store.
+        """
+        path = self._path(name)
+        canonical = path.relative_to(self.root).as_posix()
+        row = self.db.execute(
+            "SELECT head.text FROM doc_head AS head "
+            "JOIN doc ON doc.id=head.doc_id "
+            "WHERE doc.ws_id=? AND doc.path=? AND head.branch_id=?",
+            (self.ws_id, canonical, self.branch_id),
+        ).fetchone()
+        if row is not None:
+            return row[0]
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
     def view(self, name: str) -> Snapshot:
         snap = self._doc(name)[1]
         self.db.commit()

@@ -2,6 +2,15 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.17.0 — 2026-11-06
+
+### Added
+- Public read-only Store.snapshot_text(name) accessor that does not import documents, write to SQLite or commit active transactions.
+- JSON-RPC clangd gate uses this accessor; tests verify unflushed snapshots and transaction safety.
+
+### Fixed
+- Removed private Store._doc reader usage from LSP snapshot tests and gate wiring.
+
 ## 0.16.1 — 2026-11-06
 
 ### Fixed

@@ -30,9 +30,8 @@ def test_unsynced_include_graph_from_store_snapshots(tmp_path):
             "main.c": ChangeSet((Edit(0, 0, '#include "api.h"\n'),))
         })
         assert dependent_sources(tmp_path, {"api.h"}) == set()
-        snapshot = lambda name: store._doc(name)[1].text
+        snapshot = store.snapshot_text
         assert dependent_sources(tmp_path, {"api.h"}, snapshot_text=snapshot) == {"main.c"}
-        store.db.commit()  # Snapshot reads can import documents before the next edit.
         client = CaptureClient()
         store.edit(
             {"api.h": ChangeSet((Edit(0, 0, "/* updated */\n"),))},
@@ -51,5 +50,5 @@ def test_dependency_snapshot_removes_obsolete_disk_include(tmp_path):
         })
         assert dependent_sources(tmp_path, {"api.h"}) == {"main.c"}
         assert dependent_sources(
-            tmp_path, {"api.h"}, snapshot_text=lambda name: store._doc(name)[1].text
+            tmp_path, {"api.h"}, snapshot_text=store.snapshot_text
         ) == set()
