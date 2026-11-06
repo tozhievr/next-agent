@@ -56,7 +56,23 @@ static int parse_int(const char *s, int64_t *out) {
     return 0;
 }
 
+#if defined(__clang__) && defined(_WIN32)
+/* The MSVC CRT opens stdio in text mode (LF -> CRLF, Ctrl-Z = EOF); switch to
+ * binary so JSON framing and codepoint offsets are byte-exact. nextc's libc
+ * is already binary. */
+int _setmode(int, int);
+int _fileno(FILE *);
+static void stdio_binary(void) {
+    _setmode(_fileno(stdin), 0x8000);
+    _setmode(_fileno(stdout), 0x8000);
+    _setmode(_fileno(stderr), 0x8000);
+}
+#else
+static void stdio_binary(void) {}
+#endif
+
 int main(int argc, char **argv) {
+    stdio_binary();
     const char *root = ".";
     int i = 1;
     for (; i < argc; i++) {

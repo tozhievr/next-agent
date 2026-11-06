@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.20.1 — 2026-11-06
+
+### Added
+- Build with clang: `./build.ps1 -Compiler clang` (or `NA_COMPILER=clang ./build.sh`); stdio is switched to binary mode under the MSVC CRT.
+- `install.ps1` one-liner installer (downloads the latest release, verifies SHA-256, updates the user PATH).
+- Release workflow: pushing a `v*` tag builds with clang, runs the tests and publishes `nextagent-<version>-windows-x64.zip` plus `SHA256SUMS.txt`.
+- `docs/AGENT_GUIDE.md`, a detailed usage guide for AI models.
+
+### Changed
+- CI now builds and tests with clang (always) and with nextc (optional, when `NEXTC_REPO` is set).
+
 ## 0.20.0 — 2026-11-06
 
 ### Changed (breaking)

@@ -1,0 +1,83 @@
+name: Release
+
+# Push a tag such as v0.20.1 to build, test and publish a GitHub release with
+# nextagent-<version>-windows-x64.zip and SHA256SUMS.txt.
+#   git tag v0.20.1 && git push origin v0.20.1
+# The tag must match NA_VERSION in src/util.h.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v0.20.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Resolve tag and check version
+        id: v
+        shell: pwsh
+        run: |
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { "${{ github.ref_name }}" }
+          $ver = $tag.TrimStart("v")
+          $src = (Select-String -Path src/util.h -Pattern '#define NA_VERSION "([^"]+)"').Matches[0].Groups[1].Value
+          if ($src -ne $ver) { throw "tag $tag does not match NA_VERSION $src in src/util.h" }
+          "tag=$tag" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          "ver=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 test -Compiler clang
+      - name: Package
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.v.outputs.ver }}"
+          $name = "nextagent-$ver-windows-x64"
+          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
+          Copy-Item build/nextagent.exe, README.md, LICENSE, CHANGELOG.md, docs/AGENT_GUIDE.md "dist/$name"
+          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
+          $h = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
+          "$h  $name.zip" | Out-File -Encoding ascii dist/SHA256SUMS.txt
+          Get-Content dist/SHA256SUMS.txt
+      - name: Extract release notes
+        shell: pwsh
+        run: |
+          $ver = "${{ steps.v.outputs.ver }}"
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[?$([regex]::Escape($ver))\]?" | Select-Object -First 1).LineNumber
+          if ($start) {
+              $rest = $lines[$start..($lines.Count - 1)]
+              $end = ($rest | Select-String -Pattern "^## " | Select-Object -First 1).LineNumber
+              $body = if ($end) { $rest[0..($end - 2)] } else { $rest }
+              $body | Set-Content dist/notes.md
+          } else {
+              "Release $ver" | Set-Content dist/notes.md
+          }
+          Add-Content dist/notes.md "`n**Install:** ``irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex``"
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ steps.v.outputs.tag }}"
+          $ver = "${{ steps.v.outputs.ver }}"
+          $files = "dist/nextagent-$ver-windows-x64.zip", "dist/SHA256SUMS.txt"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag @files --clobber
+          } else {
+              $extra = @()
+              if ($ver -match "-") { $extra += "--prerelease" }
+              gh release create $tag @files --title "NextAgent $ver" --notes-file dist/notes.md --verify-tag @extra
+          }

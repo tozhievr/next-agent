@@ -7,7 +7,7 @@ Agents edit by *symbol* or *codepoint range* instead of re-reading whole files, 
 
 Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Windows SDK, Visual Studio, Python or SQLite is required: the result is a single `nextagent.exe` (~170 KB) that talks only to kernel32.
 
-> **Status: 0.20.0, early development.** Version 0.20.0 is a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
+> **Status: 0.20.1, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
 
 ## Contents
 
@@ -15,6 +15,7 @@ Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Win
 - [CLI reference](#cli-reference) · [JSON-RPC](#json-rpc-server) · [MCP](#mcp-bridge)
 - [clangd diagnostic gate](#clangd-diagnostic-gate) · [Storage model](#storage-model) · [Source layout](#source-layout)
 - [Upgrading](#upgrading-from-019) · [Limitations](#limitations-and-not-implemented) · [License](#license)
+- [Install](#install) · **For AI models:** [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) — how to drive the editor
 
 ## Why
 
@@ -38,20 +39,37 @@ Typical agent edit loops are wasteful and fragile: read a file, guess line numbe
 | clangd gate | Pre-commit diagnostics comparison, literal-include dependent discovery, `compile_commands.json` include dirs, fail-closed freshness, build-state recheck inside the write lock. |
 | Sync | Explicit `sync` writes committed text to disk with baseline conflict checks. |
 
-## Build
+## Install
 
-Requirements: the **nextc** compiler (C23, bundled libc23). Optionally `clangd` on `PATH` for the live gate tests.
+One line (PowerShell, Windows x64): downloads the latest release, verifies its SHA-256 and adds it to your user `PATH`.
 
 ```powershell
-./build.ps1            # -> build/nextagent.exe
-./build.ps1 test       # builds and runs build/tests.exe
+irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
+```
+
+A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.20.1"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
+
+## Build
+
+Two compilers are supported; both produce the same `build/nextagent.exe`.
+
+| Compiler | Needs | Select |
+| --- | --- | --- |
+| **nextc** (default) | only nextc and its bundled libc23; no Windows SDK / Visual Studio | `./build.ps1` |
+| **clang** | clang plus the Windows SDK/MSVC runtime (e.g. Visual Studio Build Tools) | `./build.ps1 -Compiler clang` |
+
+```powershell
+./build.ps1                       # -> build/nextagent.exe (nextc)
+./build.ps1 test                  # builds and runs build/tests.exe
+./build.ps1 test -Compiler clang  # same with clang (release builds use this)
 ```
 
 ```sh
-./build.sh [test]      # same, from Git Bash / MSYS
+./build.sh [test]                 # Git Bash / MSYS; NA_COMPILER=clang to use clang
 ```
 
-If `nextc` is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"`.
+If a compiler is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"` or `$env:CLANG = "C:\Program Files\LLVM\bin\clang.exe"`.
+The clang path is verified here only by a syntax/warnings check; the full link runs in CI.
 The suite has 158 checks; the live-clangd ones are skipped when `clangd` is missing.
 
 ## Quick start
@@ -175,7 +193,7 @@ tests/tests.c   test suite
 - **Not implemented:** branches, offline brain, M3 refactorings (rename / references / add-param), three-way merge and file watcher, async writer, socket transport, M5b.
 - The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
 - clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
-- The GitHub Actions workflow was rewritten for nextc but has **not been run**.
+- The GitHub Actions workflows (`ci.yml`, `release.yml`) have **not been run yet**.
 
 See [CHANGELOG.md](CHANGELOG.md) and [docs/agent-plan.md](docs/agent-plan.md).
 

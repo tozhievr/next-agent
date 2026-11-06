@@ -1,11 +1,5 @@
 name: CI
 
-# NextAgent is written in C23 and built with the nextc compiler, which targets
-# Windows x86-64 and needs neither the Windows SDK nor Visual Studio.
-# NOTE: this workflow has not been run. nextc must be obtainable on the runner;
-# set the NEXTC_REPO variable (owner/name of the nextc repository) or adapt the
-# install step to however your organisation distributes the compiler.
-
 on:
   push:
     branches: [main, "feat/**", "fix/**", "release/**"]
@@ -16,9 +10,22 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: nextc / windows
+  clang:
+    name: clang / windows
     runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 test -Compiler clang
+
+  nextc:
+    # Optional: needs the NEXTC_REPO repository variable (owner/name of the nextc
+    # repository). Skipped when it is not set. Not yet exercised on a runner.
+    name: nextc / windows
+    if: ${{ vars.NEXTC_REPO != '' }}
+    runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - name: Install nextc
@@ -26,11 +33,10 @@ jobs:
         env:
           NEXTC_REPO: ${{ vars.NEXTC_REPO }}
         run: |
-          if (-not $env:NEXTC_REPO) { throw "set the NEXTC_REPO repository variable" }
           git clone --depth 1 "https://github.com/$env:NEXTC_REPO.git" "$env:RUNNER_TEMP/nextc"
           $exe = Get-ChildItem "$env:RUNNER_TEMP/nextc" -Recurse -Filter nextc.exe | Select-Object -First 1
           if (-not $exe) { throw "nextc.exe not found in the cloned repository; build it first" }
           "NEXTC=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - name: Build and test
         shell: pwsh
-        run: ./build.ps1 test
+        run: ./build.ps1 test -Compiler nextc
