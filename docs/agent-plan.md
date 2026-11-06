@@ -54,6 +54,14 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 
 NextAgent 0.5.0 is an intentionally incomplete foundation. Partial syntax-based symbol addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
 
+## 0.20.0 milestone notes
+
+- Whole project rewritten in C23 with nextc (Windows x86-64, kernel32 only). Journal store replaces SQLite; own C23 scanner replaces tree-sitter; clangd client uses pipes.
+- Added redo, arbitrary-revision undo, cross-process lock, MCP stdio bridge, RPC parameter validation.
+- Verified locally: 158 checks in `tests/tests.c` pass, including live clangd gate tests (clangd 23.1.3) and CLI/RPC/MCP smoke runs.
+- Unverified: GitHub Actions workflow (not run). Not done: branches, brain, M3 refactorings, three-way merge/watcher, async writer, sockets, M5b.
+- Earlier notes below describe the retired Python implementation.
+
 ## 0.19.1 milestone notes
 
 - Enforce snapshot reader requirement for Store-only inventory and optimize membership lookups.

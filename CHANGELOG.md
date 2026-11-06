@@ -2,6 +2,31 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.20.0 — 2026-11-06
+
+### Changed (breaking)
+- Complete rewrite in C23, built with the nextc compiler; no Python, SQLite or tree-sitter dependency.
+- State is an append-only checksummed journal `.aed/journal.aedj`. The old `.aed/state.sqlite3` is not read or migrated.
+- CRLF is preserved exactly.
+- Default `--clangd` severity threshold is warnings and above (as before); errors are always blocking.
+
+### Added
+- `redo`, `undo --rev N` (rebased through later revisions, `undo_conflict` on overlap).
+- Cross-process write lock and torn-tail recovery.
+- MCP stdio bridge (`nextagent mcp`).
+- JSON-RPC parameter type validation; `history` accepts `op=redo` and `rev`.
+- Native test suite (`build.ps1 test`) including live clangd tests when clangd is installed.
+
+### Removed
+- Python package, `pyproject.toml`, pytest suite and Python-based CI.
+
+### Not implemented
+- Branches, offline brain, M3 refactorings, three-way merge/watcher, async writer, socket transport, M5b.
+
+### Limitations
+- CI workflow rewritten but not yet run.
+- clangd does not re-diagnose unchanged dependents for semantic changes to an overlay header.
+
 ## 0.19.1 — 2026-11-06
 
 ### Fixed

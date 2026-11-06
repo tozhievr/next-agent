@@ -1,5 +1,11 @@
 name: CI
 
+# NextAgent is written in C23 and built with the nextc compiler, which targets
+# Windows x86-64 and needs neither the Windows SDK nor Visual Studio.
+# NOTE: this workflow has not been run. nextc must be obtainable on the runner;
+# set the NEXTC_REPO variable (owner/name of the nextc repository) or adapt the
+# install step to however your organisation distributes the compiler.
+
 on:
   push:
     branches: [main, "feat/**", "fix/**", "release/**"]
@@ -11,38 +17,20 @@ permissions:
 
 jobs:
   test:
-    name: Python 3.16.0a1 / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+    name: nextc / windows
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Python 3.16 alpha 1
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.16.0-alpha.1'
-          allow-prereleases: true
-      - name: Verify exact interpreter
-        shell: bash
-        run: |
-          python -c "import sys; assert sys.version_info[:3] == (3, 16, 0) and sys.version_info.releaselevel == 'alpha' and sys.version_info.serial == 1, sys.version"
-      - name: Install project
-        run: python -m pip install --pre -e '.[dev]'
-      - name: Compile
-        run: python -m compileall -q src tests
-      - name: Test
-        run: python -m pytest -q
-      - name: Install clangd for live LSP smoke test
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y clangd
-      - name: Live clangd integration
-        if: runner.os == 'Linux'
+      - name: Install nextc
+        shell: pwsh
         env:
-          NEXTAGENT_TEST_CLANGD: '1'
-        run: python -m pytest tests/test_clangd_integration.py tests/test_clangd_diagnostic_integration.py -v
-      - name: Lint
-        run: python -m ruff check src tests
-      - name: Build
-        run: python -m build
+          NEXTC_REPO: ${{ vars.NEXTC_REPO }}
+        run: |
+          if (-not $env:NEXTC_REPO) { throw "set the NEXTC_REPO repository variable" }
+          git clone --depth 1 "https://github.com/$env:NEXTC_REPO.git" "$env:RUNNER_TEMP/nextc"
+          $exe = Get-ChildItem "$env:RUNNER_TEMP/nextc" -Recurse -Filter nextc.exe | Select-Object -First 1
+          if (-not $exe) { throw "nextc.exe not found in the cloned repository; build it first" }
+          "NEXTC=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build and test
+        shell: pwsh
+        run: ./build.ps1 test

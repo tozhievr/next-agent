@@ -1,1 +1,0 @@
-"""Immutable editor primitives."""
