@@ -51,9 +51,27 @@ def dispatch(store: Store, request: object) -> dict | None:
 
             snapshot = store.view(params["target"])
             if method == "outline":
-                result = {"symbols": [symbol.to_dict() for symbol in outline(snapshot)]}
+                result = {"symbols": [symbol.to_dict() for symbol in outline(\n                    snapshot, nested=params.get("nested", False)\n                )]}
             else:
-                result = select(snapshot, params["name"], params.get("kind")).to_dict()
+                result = select(\n                    snapshot, params["name"], params.get("kind"), params.get("scope")\n                ).to_dict()
+        elif method == "replace_symbol":
+            from nextagent.semantic.c23 import replace_symbol
+
+            target = params["target"]
+            snapshot = store.view(target)
+            expected = params["if_rev"]
+            # A document snapshot revision and the workspace revision are distinct:
+            # require the current workspace head and compare it to the requested head.
+            if expected != store.head():
+                raise ValueError(f"stale_rev: expected {expected}, current {store.head()}")
+            changes = replace_symbol(
+                snapshot, params["name"], params["replacement"],
+                params.get("kind"), params.get("scope"),
+            )
+            result = store.edit(
+                {target: changes}, if_rev=expected,
+                label=params.get("label", "replace_symbol"), session_id="jsonrpc",
+            )
         elif method == "edit":
             result = store.edit(
                 _edits(params["ops"]),
