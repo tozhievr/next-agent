@@ -4,7 +4,7 @@ Date: 2026-11-06. Source specification: user-provided `aed-architecture.md`, rev
 
 ## Product versioning
 
-Current release: **0.1.0**. Apply SemVer to each completed change:
+Current release: **0.1.1** (patch: safer disk flush). Apply SemVer to each completed change:
 - **Patch** (`x.y.Z`): minor compatible bugfixes, small corrections.
 - **Minor** (`x.Y.0`): moderate to large backward-compatible additions that preserve architecture, including milestones.
 - **Major** (`X.0.0`): global architectural redesigns / breaking stable APIs.
@@ -20,9 +20,11 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 - [x] Single-revision atomic multi-file writes; stale `if_rev` detection.
 - [x] Append-only inverse undo; revision history.
 - [x] Explicit atomic file flush; working memory separated from disk.
+- [x] Baseline hash tracking and preflight external-change detection on flush.
 - [x] Cross-platform Actions workflow targeting Python 3.16.0a1 exactly.
 - [x] Starter tests, README, changelog and plan.
-- [ ] Safe external edit detection / disk baseline (M4); **do not use flush with concurrent file edits**.
+- [x] Basic disk baseline hash checks; conflicts raise `disk_conflict` rather than overwriting observed changes.
+- [ ] Full M4 three-way merge, watcher and cross-process file-locking (TOCTOU races remain possible).
 - [ ] Redo / arbitrary revision undo, migrations and compressed snapshots.
 - [ ] Async single-writer queue and dedicated SQLite thread.
 - [ ] JSON-RPC 2.0 stdio and Unix socket dispatcher.
@@ -49,4 +51,10 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 
 ## Known limitations
 
-M0 is an intentionally incomplete foundation. No semantic addressing; no LSP or diagnostics; no safe protection against external file modification; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+M0 is an intentionally incomplete foundation. No semantic addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+
+## 0.1.1 patch notes
+
+- Added persistent disk baseline and hash comparison before `sync` overwrites files.
+- Added three disk-conflict regression cases: external modification, multi-file preflight, repeated successful sync.
+- GitHub Actions CI validates Python 3.16.0a1; current run status must be checked independently.
