@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.18.1 — 2026-11-06
+
+### Fixed
+- DiagnosticGate records the dependent document texts read during validation.
+- Store.edit rechecks the validator read-set after acquiring the SQLite write lock, rejecting stale dependencies before commit.
+- Added regression tests for dependency mutation during validation and unchanged dependencies.
+
+### Limitations
+- Filesystem discovery and compile_commands.json may still change during validation without detection; read-set covers document contents only.
+
 ## 0.18.0 — 2026-11-06
 
 ### Changed

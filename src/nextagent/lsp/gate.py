@@ -22,6 +22,7 @@ class DiagnosticGate:
         self.maximum_severity = maximum_severity
         self.snapshot_text = snapshot_text
         self._version = 0
+        self.read_set: dict[str, str] = {}
 
     def _next_version(self) -> int:
         self._version += 1
@@ -35,8 +36,21 @@ class DiagnosticGate:
         scans Store snapshots when supplied, but only for on-disk file paths.
         New unflushed files and non-literal includes are not discovered.
         """
+        self.read_set = {}
+
+        def tracked_text(name: str) -> str:
+            path = (self.root / name).resolve()
+            if not path.is_relative_to(self.root):
+                raise ValueError("path escapes workspace")
+            text = (
+                self.snapshot_text(name) if self.snapshot_text is not None
+                else path.read_text(encoding="utf-8")
+            )
+            self.read_set[name] = text
+            return text
+
         dependent_names = dependent_sources(
-            self.root, set(changes), snapshot_text=self.snapshot_text,
+            self.root, set(changes), snapshot_text=tracked_text,
             include_dirs_by_source=compilation_commands(self.root),
         )
         documents: dict[str, tuple[str, str]] = {
@@ -46,10 +60,7 @@ class DiagnosticGate:
         for name in sorted(dependent_names):
             if name not in documents:
                 path = (self.root / name).resolve()
-                text = (
-                    self.snapshot_text(name) if self.snapshot_text is not None
-                    else path.read_text(encoding="utf-8")
-                )
+                text = tracked_text(name)
                 documents[name] = (text, text)
 
         opened: list[str] = []

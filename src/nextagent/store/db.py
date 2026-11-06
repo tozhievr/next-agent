@@ -192,12 +192,20 @@ class Store:
                 baseline = Snapshot.of(0, parent, text)
                 candidates[name] = (baseline, change.apply(baseline))
             validator(candidates)
+            read_set = getattr(validator, "read_set", {})
+            if not isinstance(read_set, dict):
+                raise ValueError("invalid_validator_read_set")
+            dependencies = dict(read_set)
 
         try:
             self.db.execute("BEGIN IMMEDIATE")
             current = self.head()
             if current != parent or (if_rev is not None and current != if_rev):
                 raise ValueError(f"stale_rev: expected {parent}, current {current}")
+            if validator is not None:
+                for name, text in dependencies.items():
+                    if self.snapshot_text(name) != text:
+                        raise ValueError(f"stale_dependency: {name}")
             updated = []
             for name, change in edits.items():
                 doc_id, snap = self._doc(name)
