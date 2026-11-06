@@ -19,6 +19,12 @@ def main() -> None:
     view.add_argument("path")
     edit = commands.add_parser("edit")
     edit.add_argument("--request", type=Path, help="JSON request file, otherwise stdin")
+    outline_cmd = commands.add_parser("outline", help="C23 top-level symbols")
+    outline_cmd.add_argument("path")
+    select_cmd = commands.add_parser("select", help="C23 symbol range")
+    select_cmd.add_argument("path")
+    select_cmd.add_argument("name")
+    select_cmd.add_argument("--kind")
     commands.add_parser("undo")
     history = commands.add_parser("history")
     history.add_argument("--limit", type=int, default=20)
@@ -52,6 +58,14 @@ def main() -> None:
                 if_rev=request.get("if_rev"),
                 label=request.get("label", "edit"),
             )
+        elif args.cmd in ("outline", "select"):
+            from nextagent.semantic.c23 import outline, select
+
+            snapshot = store.view(args.path)
+            if args.cmd == "outline":
+                result = {"symbols": [symbol.to_dict() for symbol in outline(snapshot)]}
+            else:
+                result = select(snapshot, args.name, args.kind).to_dict()
         elif args.cmd == "undo":
             result = store.undo()
         elif args.cmd == "history":

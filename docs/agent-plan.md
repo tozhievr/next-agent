@@ -4,7 +4,7 @@ Date: 2026-11-06. Source specification: user-provided `aed-architecture.md`, rev
 
 ## Product versioning
 
-Current release: **0.2.0** (minor: public NextAgent naming and initial JSON-RPC stdio). Apply SemVer to each completed change:
+Current release: **0.3.0** (minor: initial tree-sitter C23 navigation). Apply SemVer to each completed change:
 - **Patch** (`x.y.Z`): minor compatible bugfixes, small corrections.
 - **Minor** (`x.Y.0`): moderate to large backward-compatible additions that preserve architecture, including milestones.
 - **Major** (`X.0.0`): global architectural redesigns / breaking stable APIs.
@@ -32,7 +32,7 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 
 ## Planned specification milestones
 
-- [ ] **M1:** C23 tree-sitter grammar, selectors, symbol regions, outline.
+- [~] **M1:** C23 tree-sitter parsing, top-level symbol outline and exact-name selectors implemented; robust symbol regions, nested symbols, full C23 constructs and semantic resolution remain.
 - [ ] **M2:** clangd LSP client, UTF-8/16/32 position codec, formatting, diagnostics delta, rollback.
 - [ ] **M3:** rename, references, add_param, include and quickfix refactoring.
 - [ ] **M3b:** brain L0/L1 static metrics, graph, seen, notes, conventions.
@@ -52,9 +52,9 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 
 ## Known limitations
 
-NextAgent 0.2.0 is an intentionally incomplete foundation. No semantic addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+NextAgent 0.2.0 is an intentionally incomplete foundation. Partial syntax-based symbol addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
 
-## 0.2.0 milestone notes
+## 0.3.0 milestone notes\n\n- Added tree-sitter-c grammar and initial top-level outline/select API, Unicode codepoint offsets, ambiguity detection.\n- Added CLI and JSON-RPC exposure and regression tests.\n- Not a complete C23 semantic resolver; M1 remains in progress. Await exact Python 3.16.0a1 CI.\n\n## 0.2.0 milestone notes
 
 - Product identity standardized as NextAgent, distribution and import package `nextagent`, CLI `nextagent`; removed old `aed` Python package/command.
 - Added experimental JSON-RPC 2.0 line-delimited stdio dispatcher and integration tests; no LSP/MCP framing.

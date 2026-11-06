@@ -4,17 +4,17 @@
 
 **NextAgent** is a headless, transactional code editor built for AI coding agents. Its goal is to make reliable edits without repeatedly reading entire files, calculating line numbers, and generating temporary scripts.
 
-**Current version: 0.2.0 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
+**Current version: 0.3.0 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
 
 ## Features available today
 
 - Immutable Unicode document snapshots, codepoint-offset changesets, inversion and position mapping.
 - SQLite WAL-backed atomic multi-file edit transactions, optimistic revision checks and append-only undo history.
 - Explicit filesystem sync with disk-baseline conflict checks (not a three-way merge).
-- CLI and **experimental JSON-RPC 2.0 over newline-delimited stdio** for basic open/view/edit/history/sync methods.
+- Initial C23 tree-sitter top-level symbol outline and exact-name selection (syntax only, not LSP symbol resolution).\n- CLI and **experimental JSON-RPC 2.0 over newline-delimited stdio** for basic open/view/edit/history/sync methods.
 - Tests and CI on Python **3.16.0a1** (Linux, Windows, macOS).
 
-**Not implemented yet:** semantic selectors, tree-sitter, clangd/LSP, diagnostics, MCP bridge, offline brain, async writer, socket transport, branches and full disk merge. Current edits use explicit Unicode offsets.
+**Not implemented yet:** full semantic selectors, clangd/LSP, diagnostics, MCP bridge, offline brain, async writer, socket transport, branches and full disk merge. Current edits use explicit Unicode offsets.
 
 ## Install
 
@@ -33,7 +33,7 @@ python -m pytest -q
 ```sh
 mkdir example
 printf 'hello\n' > example/demo.c
-nextagent --root example view demo.c
+nextagent --root example view demo.c\nnextagent --root example outline demo.c
 printf '{"if_rev":0,"ops":[{"path":"demo.c","start":0,"end":5,"text":"world"}]}' | nextagent --root example edit
 nextagent --root example history
 nextagent --root example sync demo.c
@@ -49,11 +49,11 @@ Run `nextagent --root ./project serve` and send **one JSON object per line** to 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"open"}
 {"jsonrpc":"2.0","id":2,"method":"edit","params":{"if_rev":0,"ops":[{"path":"src/main.c","start":0,"end":0,"text":"int main(void) { return 0; }"}]}}
-{"jsonrpc":"2.0","id":3,"method":"view","params":{"target":"src/main.c"}}
+{"jsonrpc":"2.0","id":3,"method":"view","params":{"target":"src/main.c"}}\n{"jsonrpc":"2.0","id":5,"method":"outline","params":{"target":"src/main.c"}}\n{"jsonrpc":"2.0","id":6,"method":"select","params":{"target":"src/main.c","name":"main","kind":"function"}}
 {"jsonrpc":"2.0","id":4,"method":"sync","params":{"op":"flush"}}
 ```
 
-Replies are JSON-RPC 2.0 responses, one per line. Notifications (requests without `id`) produce no reply. `history` supports `op=log` or `op=undo`. This framing is **not** the Content-Length framing used by LSP and is **not** an MCP server. More transport options are planned.
+C23 `outline` and `select` are syntax-only and operate on top-level declarations. Ambiguous names are rejected; there is no cross-file name resolution yet.\n\nReplies are JSON-RPC 2.0 responses, one per line. Notifications (requests without `id`) produce no reply. `history` supports `op=log` or `op=undo`. This framing is **not** the Content-Length framing used by LSP and is **not** an MCP server. More transport options are planned.
 
 ## Safety and roadmap
 

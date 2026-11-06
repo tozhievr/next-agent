@@ -46,6 +46,14 @@ def dispatch(store: Store, request: object) -> dict | None:
         elif method == "view":
             snap = store.view(params["target"])
             result = {"rev": snap.rev, "path": params["target"], "text": snap.text}
+        elif method in ("outline", "select"):
+            from nextagent.semantic.c23 import outline, select
+
+            snapshot = store.view(params["target"])
+            if method == "outline":
+                result = {"symbols": [symbol.to_dict() for symbol in outline(snapshot)]}
+            else:
+                result = select(snapshot, params["name"], params.get("kind")).to_dict()
         elif method == "edit":
             result = store.edit(
                 _edits(params["ops"]),
