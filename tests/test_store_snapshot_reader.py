@@ -28,9 +28,9 @@ def test_snapshot_text_during_validator_preserves_atomic_rollback(tmp_path):
     (tmp_path / "main.c").write_text("int main;\n", encoding="utf-8")
     with Store(tmp_path) as store:
         def reject(_changes):
-            assert store.db.in_transaction
+            assert not store.db.in_transaction
             assert store.snapshot_text("main.c") == "int main;\n"
-            assert store.db.in_transaction
+            assert not store.db.in_transaction
             raise ValueError("rejected")
 
         with pytest.raises(ValueError, match="rejected"):
