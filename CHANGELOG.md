@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.11.0 — 2026-11-06
+
+### Added
+- Batch diagnostic gate opens all changed documents, collects baseline reports, then stages all candidate overlays before comparing diagnostics.
+- Atomic multi-document regression tests for success and rejection.
+
+### Limitations
+- Only changed documents are checked; unchanged dependent translation units are not yet included.
+- Live clangd compatibility and CI remain under verification.
+
 ## 0.10.1 — 2026-11-06
 
 ### Fixed
