@@ -7,7 +7,7 @@ import tempfile
 import time
 from hashlib import blake2b
 from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from nextagent.core.changeset import ChangeSet, Edit
 from nextagent.core.snapshot import Snapshot
