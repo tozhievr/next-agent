@@ -2,6 +2,11 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.18.2 — 2026-11-06
+
+### Fixed
+- Updated transaction-boundary regression test for speculative validation outside SQLite BEGIN IMMEDIATE, as intended since v0.18.0.
+
 ## 0.18.1 — 2026-11-06
 
 ### Fixed
