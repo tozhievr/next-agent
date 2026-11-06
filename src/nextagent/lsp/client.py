@@ -3,10 +3,10 @@
 This is a synchronous, single-owner client. It does not apply workspace edits.
 """
 import queue
-import time
 import shutil
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ class ClangdClient:
         self._diagnostics: dict[str, dict] = {}
         self._next_id = 0
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._diagnostics_changed = threading.Condition(self._lock)
         self._reader: threading.Thread | None = None
         self._reader_error: BaseException | None = None
@@ -87,6 +88,8 @@ class ClangdClient:
                 waiters = list(self._pending.values())
             for waiter in waiters:
                 waiter.put({"error": {"message": "clangd connection closed"}})
+            with self._diagnostics_changed:
+                self._diagnostics_changed.notify_all()
 
     def request(self, method: str, params: dict[str, Any]) -> Any:
         if self.process is None or self.process.stdin is None:
@@ -97,9 +100,10 @@ class ClangdClient:
             request_id = self._next_id
             self._pending[request_id] = waiter
         try:
-            write_message(self.process.stdin, {
-                "jsonrpc": "2.0", "id": request_id, "method": method, "params": params,
-            })
+            with self._write_lock:
+                write_message(self.process.stdin, {
+                    "jsonrpc": "2.0", "id": request_id, "method": method, "params": params,
+                })
             try:
                 response = waiter.get(timeout=self.timeout)
             except queue.Empty as exc:
@@ -114,9 +118,10 @@ class ClangdClient:
     def notify(self, method: str, params: dict[str, Any]) -> None:
         if self.process is None or self.process.stdin is None:
             raise RuntimeError("clangd is not running")
-        write_message(self.process.stdin, {
-            "jsonrpc": "2.0", "method": method, "params": params,
-        })
+        with self._write_lock:
+            write_message(self.process.stdin, {
+                "jsonrpc": "2.0", "method": method, "params": params,
+            })
 
     def open_document(self, path: Path, text: str, version: int = 1) -> str:
         path = path.resolve()
@@ -143,6 +148,10 @@ class ClangdClient:
         deadline = time.monotonic() + self.timeout
         with self._diagnostics_changed:
             while True:
+                if self._reader_error is not None or (
+                    self.process is not None and self.process.poll() is not None
+                ):
+                    raise RuntimeError("clangd connection closed")
                 report = self._diagnostics.get(uri)
                 if report is not None and report.get("version") == version:
                     return report
