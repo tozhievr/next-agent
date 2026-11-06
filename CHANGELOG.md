@@ -2,6 +2,12 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.9.2 — 2026-11-06
+
+### Fixed
+- Ruff UP035 import errors in JSON-RPC and SQLite modules.
+- CI now installs clangd on Ubuntu and runs the real LSP smoke test with Python 3.16.0a1.
+
 ## 0.9.1 — 2026-11-06
 
 ### Fixed
