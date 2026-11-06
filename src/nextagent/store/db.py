@@ -5,9 +5,9 @@ import os
 import sqlite3
 import tempfile
 import time
+from collections.abc import Callable
 from hashlib import blake2b
 from pathlib import Path
-from collections.abc import Callable
 
 from nextagent.core.changeset import ChangeSet, Edit
 from nextagent.core.snapshot import Snapshot
@@ -195,7 +195,11 @@ class Store:
             self.db.rollback()
             raise
 
-    def undo(self) -> dict:
+    def undo(
+        self,
+        *,
+        validator: Callable[[dict[str, tuple[Snapshot, Snapshot]]], None] | None = None,
+    ) -> dict:
         """Append the inverse of HEAD to preserve an auditable history."""
         rev_id = self.head()
         if not rev_id:
@@ -210,6 +214,7 @@ class Store:
             {name: _decode(inverse) for name, inverse in rows},
             if_rev=rev_id,
             label=f"undo revision {rev_id}",
+            validator=validator,
         )
 
     def history(self, limit: int = 20) -> list[dict]:

@@ -95,7 +95,7 @@ def dispatch(
             if operation == "log":
                 result = store.history(params.get("n", 20))
             elif operation == "undo":
-                result = store.undo()
+                result = store.undo(validator=validator)
             else:
                 raise ValueError("unsupported history operation")
         elif method == "sync":

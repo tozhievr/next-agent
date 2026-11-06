@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Linux'
         env:
           NEXTAGENT_TEST_CLANGD: '1'
-        run: python -m pytest tests/test_clangd_integration.py -v
+        run: python -m pytest tests/test_clangd_integration.py tests/test_clangd_diagnostic_integration.py -v
       - name: Lint
         run: python -m ruff check src tests
       - name: Build

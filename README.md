@@ -4,12 +4,12 @@
 
 **NextAgent** is a headless, transactional code editor built for AI coding agents. Its goal is to make reliable edits without repeatedly reading entire files, calculating line numbers, and generating temporary scripts.
 
-**Current version: 0.9.2 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
+**Current version: 0.10.0 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
 
 ## Features available today
 
 - Immutable Unicode document snapshots, codepoint-offset changesets, inversion and position mapping.
-- SQLite WAL-backed atomic multi-file edit transactions, optimistic revision checks and append-only undo history.
+- SQLite WAL-backed atomic multi-file edit transactions, optimistic revision checks and append-only undo history (including opt-in diagnostic validation of undo).
 - Explicit filesystem sync with disk-baseline conflict checks (not a three-way merge).
 - C23 tree-sitter symbol outline, scoped struct/union/enum fields and guarded whole-declaration replacement (syntax only, not LSP symbol resolution).
 - CLI and **experimental JSON-RPC 2.0 over newline-delimited stdio** for basic open/view/edit/history/sync methods.
@@ -17,7 +17,7 @@
 
 **Not implemented yet:** full semantic selectors, automatic clangd integration into editing, diagnostics delta and rollback, MCP bridge, offline brain, async writer, socket transport, branches and full disk merge. Current edits use explicit Unicode offsets.
 
-## Install
+`nextagent --root ./project serve --clangd` also validates `history` undo operations before committing their inverse edits. Cross-file semantic impact is not yet covered.\n\n## Install
 
 Python >= 3.13 is supported by package metadata. CI is pinned to Python 3.16.0a1. Until PR #1 is merged, install from the feature branch shown below.
 

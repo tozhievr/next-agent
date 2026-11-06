@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.10.0 — 2026-11-06
+
+### Added
+- Diagnostic validation for Store.undo and JSON-RPC history undo, preserving atomic rollback on rejection.
+- Opt-in real clangd regression test for rejecting a newly introduced C syntax error.
+- Linux CI now runs the live clangd diagnostic test in addition to lifecycle smoke test.
+
+### Limitations
+- Multi-file cross-dependency analysis is not yet implemented; live diagnostic test may expose clangd compatibility issues.
+
 ## 0.9.2 — 2026-11-06
 
 ### Fixed

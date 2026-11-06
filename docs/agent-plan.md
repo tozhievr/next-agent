@@ -4,7 +4,7 @@ Date: 2026-11-06. Source specification: user-provided `aed-architecture.md`, rev
 
 ## Product versioning
 
-Current release: **0.9.2** (minor: opt-in JSON-RPC diagnostic enforcement). Apply SemVer to each completed change:
+Current release: **0.10.0** (minor: opt-in JSON-RPC diagnostic enforcement). Apply SemVer to each completed change:
 - **Patch** (`x.y.Z`): minor compatible bugfixes, small corrections.
 - **Minor** (`x.Y.0`): moderate to large backward-compatible additions that preserve architecture, including milestones.
 - **Major** (`X.0.0`): global architectural redesigns / breaking stable APIs.
@@ -53,6 +53,13 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 ## Known limitations
 
 NextAgent 0.5.0 is an intentionally incomplete foundation. Partial syntax-based symbol addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+
+## 0.10.0 milestone notes
+
+- Added opt-in pre-commit diagnostic validation to Store.undo and JSON-RPC history undo.
+- Added real clangd parse-regression test in Linux CI (Python 3.16.0a1).
+- Cross-file diagnostics, concurrency and comprehensive LSP integration remain.
+- CI pending.
 
 ## 0.9.2 milestone notes
 
