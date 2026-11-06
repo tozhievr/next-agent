@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.13.1 — 2026-11-06
+
+### Fixed
+- JSON-RPC clangd gate now reads unchanged dependent documents from the SQLite Store snapshot instead of the potentially stale filesystem.
+- Added regression test for an unflushed dependent source file.
+
+### Limitations
+- Include dependency discovery still reads on-disk directives, not unsynced Store content.
+- Uses a private Store reader during validation; a public snapshot accessor is planned.
+
 ## 0.13.0 — 2026-11-06
 
 ### Added

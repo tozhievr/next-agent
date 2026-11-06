@@ -3,6 +3,7 @@
 Changed documents and literal-include dependent translation units are opened
 as a single overlay. This is not complete preprocessor dependency resolution.
 """
+from collections.abc import Callable
 from pathlib import Path
 
 from nextagent.core.snapshot import Snapshot
@@ -11,10 +12,14 @@ from nextagent.lsp.validation import compare_diagnostics, require_fresh_diagnost
 
 
 class DiagnosticGate:
-    def __init__(self, root: Path, client, *, maximum_severity: int = 2):
+    def __init__(
+        self, root: Path, client, *, maximum_severity: int = 2,
+        snapshot_text: Callable[[str], str] | None = None,
+    ):
         self.root = root.resolve()
         self.client = client
         self.maximum_severity = maximum_severity
+        self.snapshot_text = snapshot_text
         self._version = 0
 
     def _next_version(self) -> int:
@@ -24,9 +29,9 @@ class DiagnosticGate:
     def __call__(self, changes: dict[str, tuple[Snapshot, Snapshot]]) -> None:
         """Validate changed files and discovered dependents before SQLite commit.
 
-        Dependents are loaded from disk, so unsynced SQLite revisions in
-        unchanged files are not represented. A complete workspace overlay
-        requires the Store to provide those snapshots explicitly.
+        With snapshot_text, unchanged dependent documents use the Store's
+        latest snapshots rather than stale disk content. Dependency discovery
+        still scans on-disk include directives and is not preprocessor-aware.
         """
         dependent_names = dependent_sources(self.root, set(changes))
         documents: dict[str, tuple[str, str]] = {
@@ -36,7 +41,10 @@ class DiagnosticGate:
         for name in sorted(dependent_names):
             if name not in documents:
                 path = (self.root / name).resolve()
-                text = path.read_text(encoding="utf-8")
+                text = (
+                    self.snapshot_text(name) if self.snapshot_text is not None
+                    else path.read_text(encoding="utf-8")
+                )
                 documents[name] = (text, text)
 
         opened: list[str] = []

@@ -132,7 +132,10 @@ def serve(
 
     context = ClangdClient(root, executable=clangd) if clangd else nullcontext()
     with context as client, Store(root) as store:
-        gate = DiagnosticGate(root, client) if client is not None else validator
+        gate = (
+            DiagnosticGate(root, client, snapshot_text=lambda name: store._doc(name)[1].text)
+            if client is not None else validator
+        )
         for line in incoming:
             if not line.strip():
                 continue
