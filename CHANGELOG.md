@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.13.0 — 2026-11-06
+
+### Added
+- DiagnosticGate now opens discovered transitive literal-include dependent translation units and checks their diagnostics before committing header changes.
+- Tests for dependent discovery, candidate refresh and atomic rejection on dependent-only regression.
+
+### Limitations
+- Dependency graph uses on-disk quoted includes; unchanged unsynced SQLite documents and compile_commands include paths are not represented.
+- The gate is conservative, but not a complete compilation database or preprocessor-aware validator.
+
 ## 0.12.0 — 2026-11-06
 
 ### Added
