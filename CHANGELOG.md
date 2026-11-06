@@ -2,6 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.19.1 — 2026-11-06
+
+### Fixed
+- Reject virtual document inventories without a snapshot reader, rather than attempting to read nonexistent disk files.
+- Use a set for virtual path membership during bounded dependency traversal.
+- Added guard and file-limit tests.
+
 ## 0.19.0 — 2026-11-06
 
 ### Added
