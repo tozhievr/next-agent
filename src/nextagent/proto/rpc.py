@@ -5,7 +5,8 @@ One JSON object per line; this is NOT LSP Content-Length framing or MCP.
 import json
 import sys
 from pathlib import Path
-from typing import Callable, TextIO
+from collections.abc import Callable
+from typing import TextIO
 
 from nextagent import __version__
 from nextagent.core.changeset import ChangeSet, Edit
