@@ -21,9 +21,9 @@ class ClangdClient:
         self.process: subprocess.Popen[bytes] | None = None
         self._pending: dict[int, queue.Queue[dict]] = {}
         self._diagnostics: dict[str, dict] = {}
-        self._diagnostics_changed = threading.Condition(self._lock)
         self._next_id = 0
         self._lock = threading.Lock()
+        self._diagnostics_changed = threading.Condition(self._lock)
         self._reader: threading.Thread | None = None
         self._reader_error: BaseException | None = None
         self.encoding = "utf-16"
