@@ -4,6 +4,7 @@ import json
 import subprocess
 import sys
 
+from nextagent import __version__
 from nextagent.proto.rpc import serve
 
 
@@ -48,4 +49,4 @@ def test_nextagent_module_entrypoint():
         [sys.executable, "-m", "nextagent", "--version"],
         capture_output=True, text=True, check=True,
     )
-    assert process.stdout.strip() == "NextAgent 0.2.0"
+    assert process.stdout.strip() == f"NextAgent {__version__}"
