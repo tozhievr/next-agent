@@ -18,6 +18,7 @@ def dependent_sources(
     *,
     max_files: int = 4096,
     snapshot_text: Callable[[str], str] | None = None,
+    snapshot_paths: tuple[str, ...] = (),
     include_dirs: tuple[Path, ...] = (),
     include_dirs_by_source: dict[str, tuple[Path, ...]] | None = None,
 ) -> set[str]:
@@ -42,6 +43,16 @@ def dependent_sources(
         sources.append(resolved)
         if len(sources) > max_files:
             raise ValueError("dependency_scan_limit_exceeded")
+    for name in snapshot_paths:
+        target = (root / name).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError("snapshot path escapes workspace")
+        if target.suffix.lower() not in (_SOURCE_SUFFIXES | _HEADER_SUFFIXES):
+            continue
+        if target not in sources:
+            sources.append(target)
+            if len(sources) > max_files:
+                raise ValueError("dependency_scan_limit_exceeded")
     discovered: set[str] = set()
     for source in sources:
         if source.suffix.lower() not in _SOURCE_SUFFIXES or source in changed_paths:
@@ -65,7 +76,7 @@ def dependent_sources(
             if current in changed_paths:
                 discovered.add(name)
                 break
-            if not current.is_file():
+            if not current.is_file() and current not in sources:
                 continue
             relative = current.relative_to(root).as_posix()
             text = (
@@ -81,7 +92,8 @@ def dependent_sources(
                     if not target.is_relative_to(root):
                         raise ValueError("include escapes workspace")
                     if target.is_file() or (
-                        snapshot_text is not None and target in changed_paths
+                        snapshot_text is not None
+                        and (target in changed_paths or target in sources)
                     ):
                         pending.append(target)
                         break

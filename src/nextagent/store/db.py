@@ -131,6 +131,16 @@ class Store:
     def _disk_hash(path: Path) -> bytes:
         return blake2b(path.read_bytes(), digest_size=16).digest()
 
+    def snapshot_paths(self) -> tuple[str, ...]:
+        """List tracked document paths without mutating SQLite state."""
+        rows = self.db.execute(
+            "SELECT doc.path FROM doc_head AS head "
+            "JOIN doc ON doc.id=head.doc_id "
+            "WHERE doc.ws_id=? AND head.branch_id=? ORDER BY doc.path",
+            (self.ws_id, self.branch_id),
+        ).fetchall()
+        return tuple(row[0] for row in rows)
+
     def snapshot_text(self, name: str) -> str:
         """Read current document text without writing or committing SQLite state.
 

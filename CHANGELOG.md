@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.19.0 — 2026-11-06
+
+### Added
+- Public read-only Store.snapshot_paths() enumerates tracked document heads, including unflushed new files.
+- Dependency scanner accepts snapshot_paths and traverses Store-only source and header files.
+- DiagnosticGate and JSON-RPC pass Store document inventory into dependency discovery.
+- Added direct and transitive tests for Store-only translation units.
+
+### Limitations
+- clangd may not resolve Store-only headers from dependent translation units without filesystem materialization; diagnostic gate is not a complete virtual filesystem.
+
 ## 0.18.4 — 2026-11-06
 
 ### Fixed

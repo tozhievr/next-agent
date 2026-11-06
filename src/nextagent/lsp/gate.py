@@ -16,11 +16,13 @@ class DiagnosticGate:
     def __init__(
         self, root: Path, client, *, maximum_severity: int = 2,
         snapshot_text: Callable[[str], str] | None = None,
+        snapshot_paths: Callable[[], tuple[str, ...]] | None = None,
     ):
         self.root = root.resolve()
         self.client = client
         self.maximum_severity = maximum_severity
         self.snapshot_text = snapshot_text
+        self.snapshot_paths = snapshot_paths
         self._version = 0
         self.read_set: dict[str, str] = {}
         self.build_state: tuple[tuple[str, bytes | None], ...] = ()
@@ -76,6 +78,7 @@ class DiagnosticGate:
         dependent_names = dependent_sources(
             self.root, set(changes), snapshot_text=tracked_text,
             include_dirs_by_source=compilation_commands(self.root),
+            snapshot_paths=self.snapshot_paths() if self.snapshot_paths else (),
         )
         documents: dict[str, tuple[str, str]] = {
             name: (before.text, after.text)
