@@ -7,6 +7,7 @@ import tempfile
 import time
 from hashlib import blake2b
 from pathlib import Path
+from typing import Callable
 
 from nextagent.core.changeset import ChangeSet, Edit
 from nextagent.core.snapshot import Snapshot
@@ -148,6 +149,7 @@ class Store:
         if_rev: int | None = None,
         label: str = "edit",
         session_id: str = "cli",
+        validator: Callable[[dict[str, tuple[Snapshot, Snapshot]]], None] | None = None,
     ) -> dict:
         """Commit all file changes as a single SQLite transaction."""
         if not edits:
@@ -163,6 +165,8 @@ class Store:
             for name, change in edits.items():
                 doc_id, snap = self._doc(name)
                 updated.append((name, doc_id, change.apply(snap), change, change.invert(snap)))
+            if validator is not None:
+                validator({name: (self._doc(name)[1], snap) for name, _, snap, _, _ in updated})
             timestamp = int(time.time())
             txn_id = self.db.execute(
                 "INSERT INTO txn(session_id,label,status,ts) VALUES (?,?,'open',?)",

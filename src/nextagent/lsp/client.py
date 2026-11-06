@@ -3,6 +3,7 @@
 This is a synchronous, single-owner client. It does not apply workspace edits.
 """
 import queue
+import time
 import shutil
 import subprocess
 import threading
@@ -20,6 +21,7 @@ class ClangdClient:
         self.process: subprocess.Popen[bytes] | None = None
         self._pending: dict[int, queue.Queue[dict]] = {}
         self._diagnostics: dict[str, dict] = {}
+        self._diagnostics_changed = threading.Condition(self._lock)
         self._next_id = 0
         self._lock = threading.Lock()
         self._reader: threading.Thread | None = None
@@ -75,8 +77,9 @@ class ClangdClient:
                 elif message.get("method") == "textDocument/publishDiagnostics":
                     params = message.get("params", {})
                     if isinstance(params, dict) and isinstance(params.get("uri"), str):
-                        with self._lock:
+                        with self._diagnostics_changed:
                             self._diagnostics[params["uri"]] = params
+                            self._diagnostics_changed.notify_all()
         except (EOFError, ValueError, OSError) as exc:
             self._reader_error = exc
         finally:
@@ -134,6 +137,19 @@ class ClangdClient:
     def diagnostics(self, uri: str) -> dict | None:
         with self._lock:
             return self._diagnostics.get(uri)
+
+    def wait_diagnostics(self, uri: str, version: int) -> dict:
+        """Wait for version-tagged diagnostics; never accept stale or unversioned data."""
+        deadline = time.monotonic() + self.timeout
+        with self._diagnostics_changed:
+            while True:
+                report = self._diagnostics.get(uri)
+                if report is not None and report.get("version") == version:
+                    return report
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("diagnostics_unavailable_or_stale")
+                self._diagnostics_changed.wait(remaining)
 
     def formatting(self, uri: str, tab_size: int = 4) -> list[dict]:
         return self.request("textDocument/formatting", {
