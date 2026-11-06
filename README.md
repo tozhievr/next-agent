@@ -4,7 +4,7 @@
 
 `aed` is a transactional source-code editing engine designed for AI agents. The architectural target is semantic selectors via tree-sitter and LSP, compact results, SQLite revision history, and an optional offline `brain` for token-efficient navigation.
 
-**Status: v0.1.0 (initial M0 prototype).** This build implements immutable Unicode snapshots, codepoint-based changesets, atomic multi-file transactions, SQLite persistence, history, inverse undo, a minimal CLI and explicit disk synchronization. **Semantic selection, LSP, MCP, JSON-RPC, external disk conflict handling, async writer and brain are NOT implemented.**
+**Status: v0.1.1 (initial M0 prototype + disk-conflict guard).** This build implements immutable Unicode snapshots, codepoint-based changesets, atomic multi-file transactions, SQLite persistence, history, inverse undo, a minimal CLI and explicit disk synchronization. **Semantic selection, LSP, MCP, JSON-RPC, three-way external-disk merge, async writer and brain are NOT implemented.**
 
 ## Installation
 
@@ -32,6 +32,6 @@ aed --root example undo
 
 An edit request contains `ops` (objects with `path`, `start`, `end`, `text`) and optional `if_rev` and `label`. Offsets refer to zero-based **Python Unicode codepoints**, not byte indices or line numbers. All edits address the same original version of their respective buffers; each batch commits once. The editor owns its buffers; `sync` writes to the filesystem explicitly.
 
-**Safety warning:** this prototype does not detect external modifications before `sync` and may overwrite concurrently modified files. Do not run against untrusted workspaces or concurrently edited files.
+**Safety warning:** `sync` compares files with their imported disk baselines and raises `disk_conflict` on observed external modifications. Full three-way merge, filesystem locking and race-free multi-file sync are still unimplemented. Avoid concurrent file edits and untrusted workspaces.
 
 See [docs/agent-plan.md](docs/agent-plan.md) for milestones, test evidence, risks and version policy. The project follows the supplied *aed architecture v1.1* specification as its product target. Licensed under MIT.
