@@ -1,11 +1,12 @@
-"""Pre-commit clangd diagnostic gate for atomic Store edits.
+"""Pre-commit clangd diagnostic gate with bounded dependent-unit validation.
 
-All changed documents are opened together before any candidate overlay is sent.
-This allows clangd to observe a coherent multi-document candidate state.
+Changed documents and literal-include dependent translation units are opened
+as a single overlay. This is not complete preprocessor dependency resolution.
 """
 from pathlib import Path
 
 from nextagent.core.snapshot import Snapshot
+from nextagent.lsp.dependencies import dependent_sources
 from nextagent.lsp.validation import compare_diagnostics, require_fresh_diagnostics
 
 
@@ -21,21 +22,33 @@ class DiagnosticGate:
         return self._version
 
     def __call__(self, changes: dict[str, tuple[Snapshot, Snapshot]]) -> None:
-        """Validate the entire changed-document batch before Store commit.
+        """Validate changed files and discovered dependents before SQLite commit.
 
-        Fail closed on missing/stale diagnostics. This is NOT a whole-workspace
-        dependency check: unchanged translation units are not opened or tested.
+        Dependents are loaded from disk, so unsynced SQLite revisions in
+        unchanged files are not represented. A complete workspace overlay
+        requires the Store to provide those snapshots explicitly.
         """
+        dependent_names = dependent_sources(self.root, set(changes))
+        documents: dict[str, tuple[str, str]] = {
+            name: (before.text, after.text)
+            for name, (before, after) in changes.items()
+        }
+        for name in sorted(dependent_names):
+            if name not in documents:
+                path = (self.root / name).resolve()
+                text = path.read_text(encoding="utf-8")
+                documents[name] = (text, text)
+
         opened: list[str] = []
         versions: dict[str, int] = {}
         baseline: dict[str, list[dict]] = {}
         try:
-            for name, (before, _) in changes.items():
+            for name, (before, _) in documents.items():
                 path = (self.root / name).resolve()
                 if not path.is_relative_to(self.root):
                     raise ValueError("path escapes workspace")
                 version = self._next_version()
-                uri = self.client.open_document(path, before.text, version)
+                uri = self.client.open_document(path, before, version)
                 opened.append(uri)
                 versions[uri] = version
 
@@ -45,9 +58,9 @@ class DiagnosticGate:
                     self.client.wait_diagnostics(uri, version), version
                 )
 
-            for uri, (_, after) in zip(opened, changes.values(), strict=True):
+            for uri, (_, after) in zip(opened, documents.values(), strict=True):
                 version = self._next_version()
-                self.client.change_document(uri, after.text, version)
+                self.client.change_document(uri, after, version)
                 versions[uri] = version
 
             for uri in opened:
@@ -61,6 +74,5 @@ class DiagnosticGate:
                 if not delta.acceptable:
                     raise ValueError(f"diagnostic_regression: {delta.added}")
         finally:
-            # Close all candidate overlays even if validation fails midway.
             for uri in reversed(opened):
                 self.client.notify("textDocument/didClose", {"textDocument": {"uri": uri}})
