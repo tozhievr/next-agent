@@ -4,7 +4,7 @@
 
 **NextAgent** is a headless, transactional code editor built for AI coding agents. Its goal is to make reliable edits without repeatedly reading entire files, calculating line numbers, and generating temporary scripts.
 
-**Current version: 0.10.0 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
+**Current version: 0.10.1 (early development).** The architecture is based on the supplied *aed architecture v1.1* design. **NextAgent** is the product name, `nextagent` is both the installed command and Python import package. `aed` is only the historical name of the specification.
 
 ## Features available today
 

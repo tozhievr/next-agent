@@ -4,8 +4,8 @@ One JSON object per line; this is NOT LSP Content-Length framing or MCP.
 """
 import json
 import sys
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import TextIO
 
 from nextagent import __version__
@@ -104,7 +104,7 @@ def dispatch(
             result = {"ok": True, "written": store.flush(params.get("paths"))}
         else:
             return None if not has_id else _error(request_id, -32601, "Method not found")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (KeyError, TypeError, ValueError, TimeoutError, RuntimeError) as exc:
         return None if not has_id else _error(request_id, -32602, str(exc))
     if not has_id:
         return None

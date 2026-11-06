@@ -2,6 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.10.1 — 2026-11-06
+
+### Fixed
+- JSON-RPC now returns structured errors for clangd diagnostic timeouts and connection failures instead of terminating the server.
+- Added regression tests proving the server continues processing subsequent requests and preserves the SQLite revision.
+- Normalized import order for Ruff.
+
 ## 0.10.0 — 2026-11-06
 
 ### Added
