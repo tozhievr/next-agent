@@ -34,6 +34,14 @@ jobs:
         run: python -m compileall -q src tests
       - name: Test
         run: python -m pytest -q
+      - name: Install clangd for live LSP smoke test
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y clangd
+      - name: Live clangd integration
+        if: runner.os == 'Linux'
+        env:
+          NEXTAGENT_TEST_CLANGD: '1'
+        run: python -m pytest tests/test_clangd_integration.py -v
       - name: Lint
         run: python -m ruff check src tests
       - name: Build
