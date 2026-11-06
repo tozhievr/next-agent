@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.18.0 — 2026-11-06
+
+### Changed
+- Store.edit performs optional diagnostic validation before BEGIN IMMEDIATE, reducing SQLite writer lock duration during clangd waits.
+- Rechecks workspace revision and candidate baseline text inside the write transaction before committing.
+- Added tests for unlocked validation, concurrent revisions, disk edits and rejected validators.
+
+### Limitations
+- Optimistic preflight may need retry on stale revisions; dependency files are not individually rechecked after validation.
+
 ## 0.17.0 — 2026-11-06
 
 ### Added

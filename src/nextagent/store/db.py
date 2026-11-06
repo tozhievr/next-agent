@@ -169,22 +169,41 @@ class Store:
         session_id: str = "cli",
         validator: Callable[[dict[str, tuple[Snapshot, Snapshot]]], None] | None = None,
     ) -> dict:
-        """Commit all file changes as a single SQLite transaction."""
+        """Validate outside the write transaction, then commit with rechecks.
+
+        Validation is speculative: concurrent revisions or disk changes after
+        validation abort the commit instead of silently committing stale edits.
+        """
         if not edits:
             raise ValueError("empty edit batch")
-        if len({self._path(name) for name in edits}) != len(edits):
+        canonical = {name: self._path(name) for name in edits}
+        if len(set(canonical.values())) != len(edits):
             raise ValueError("duplicate canonical paths in edit batch")
+        parent = self.head()
+        if if_rev is not None and if_rev != parent:
+            raise ValueError(f"stale_rev: expected {if_rev}, current {parent}")
+
+        expected: dict[str, str] = {}
+        if validator is not None:
+            candidates: dict[str, tuple[Snapshot, Snapshot]] = {}
+            for name, change in edits.items():
+                text = self.snapshot_text(name)
+                expected[name] = text
+                baseline = Snapshot.of(0, parent, text)
+                candidates[name] = (baseline, change.apply(baseline))
+            validator(candidates)
+
         try:
             self.db.execute("BEGIN IMMEDIATE")
-            parent = self.head()
-            if if_rev is not None and if_rev != parent:
-                raise ValueError(f"stale_rev: expected {if_rev}, current {parent}")
+            current = self.head()
+            if current != parent or (if_rev is not None and current != if_rev):
+                raise ValueError(f"stale_rev: expected {parent}, current {current}")
             updated = []
             for name, change in edits.items():
                 doc_id, snap = self._doc(name)
+                if validator is not None and snap.text != expected[name]:
+                    raise ValueError(f"stale_snapshot: {name}")
                 updated.append((name, doc_id, change.apply(snap), change, change.invert(snap)))
-            if validator is not None:
-                validator({name: (self._doc(name)[1], snap) for name, _, snap, _, _ in updated})
             timestamp = int(time.time())
             txn_id = self.db.execute(
                 "INSERT INTO txn(session_id,label,status,ts) VALUES (?,?,'open',?)",
