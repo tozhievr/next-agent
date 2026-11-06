@@ -7,6 +7,8 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+from nextagent.lsp.compilation import compilation_include_dirs
+
 _INCLUDE = re.compile(r'^\s*#\s*include\s*"([^"\n]+)"', re.MULTILINE)
 _SOURCE_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx"})
 _HEADER_SUFFIXES = frozenset({".h", ".hh", ".hpp", ".hxx"})
@@ -18,6 +20,7 @@ def dependent_sources(
     *,
     max_files: int = 4096,
     snapshot_text: Callable[[str], str] | None = None,
+    include_dirs: tuple[Path, ...] = (),
 ) -> set[str]:
     """Find source files with a transitive literal-quoted include of changed headers.
 
@@ -54,10 +57,14 @@ def dependent_sources(
         )
         includes: set[Path] = set()
         for include in _INCLUDE.findall(source):
-            target = (path.parent / include).resolve()
-            if not target.is_relative_to(root):
-                raise ValueError("include escapes workspace")
-            includes.add(target)
+            candidates = ((path.parent / include), *(directory / include for directory in include_dirs))
+            for candidate in candidates:
+                target = candidate.resolve()
+                if not target.is_relative_to(root):
+                    raise ValueError("include escapes workspace")
+                if target.is_file():
+                    includes.add(target)
+                    break
         dependencies[resolved] = includes
 
     impacted = set(changed_paths)

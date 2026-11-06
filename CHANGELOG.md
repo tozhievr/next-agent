@@ -2,6 +2,18 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.15.0 — 2026-11-06
+
+### Added
+- Conservative compile_commands.json reader for -I, -iquote and /I directories.
+- DiagnosticGate resolves literal quoted includes using compilation database directories.
+- Tests for arguments/command forms, missing database and workspace escape rejection.
+
+### Limitations
+- Include directories are merged across translation units, not yet scoped per compile command.
+- No macros, conditional compilation, response files, system includes, external include paths or compiler driver evaluation.
+- The implementation deliberately rejects include directories outside the workspace.
+
 ## 0.14.0 — 2026-11-06
 
 ### Added

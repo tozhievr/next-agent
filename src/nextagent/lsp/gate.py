@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from nextagent.core.snapshot import Snapshot
+from nextagent.lsp.compilation import compilation_include_dirs
 from nextagent.lsp.dependencies import dependent_sources
 from nextagent.lsp.validation import compare_diagnostics, require_fresh_diagnostics
 
@@ -35,7 +36,8 @@ class DiagnosticGate:
         New unflushed files and non-literal includes are not discovered.
         """
         dependent_names = dependent_sources(
-            self.root, set(changes), snapshot_text=self.snapshot_text
+            self.root, set(changes), snapshot_text=self.snapshot_text,
+            include_dirs=compilation_include_dirs(self.root),
         )
         documents: dict[str, tuple[str, str]] = {
             name: (before.text, after.text)
