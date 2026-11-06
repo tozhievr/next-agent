@@ -23,10 +23,33 @@ class DiagnosticGate:
         self.snapshot_text = snapshot_text
         self._version = 0
         self.read_set: dict[str, str] = {}
+        self.build_state: tuple[tuple[str, bytes | None], ...] = ()
 
     def _next_version(self) -> int:
         self._version += 1
         return self._version
+
+    def _build_state(self) -> tuple[tuple[str, bytes | None], ...]:
+        """Capture compilation database bytes and the bounded C/C++ path inventory."""
+        paths = []
+        for path in self.root.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in (
+                ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"
+            ):
+                continue
+            resolved = path.resolve()
+            if not resolved.is_relative_to(self.root):
+                raise ValueError("symlink escapes workspace")
+            paths.append(resolved.relative_to(self.root).as_posix())
+            if len(paths) > 4096:
+                raise ValueError("dependency_scan_limit_exceeded")
+        state: list[tuple[str, bytes | None]] = [(name, None) for name in sorted(paths)]
+        for name in ("compile_commands.json", "build/compile_commands.json"):
+            path = (self.root / name).resolve()
+            if not path.is_relative_to(self.root):
+                raise ValueError("compilation_database_escapes_workspace")
+            state.append((name, path.read_bytes() if path.is_file() else None))
+        return tuple(state)
 
     def __call__(self, changes: dict[str, tuple[Snapshot, Snapshot]]) -> None:
         """Validate changed files and discovered dependents before SQLite commit.
@@ -37,6 +60,7 @@ class DiagnosticGate:
         New unflushed files and non-literal includes are not discovered.
         """
         self.read_set = {}
+        self.build_state = self._build_state()
 
         def tracked_text(name: str) -> str:
             path = (self.root / name).resolve()

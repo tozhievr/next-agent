@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.18.3 — 2026-11-06
+
+### Fixed
+- DiagnosticGate captures bounded C/C++ filesystem path inventory and compile_commands.json bytes during validation.
+- Store.edit rechecks build state inside the write transaction; rejects changes as stale_build_state.
+- Tests cover changed compilation database, added translation unit and stable state.
+
+### Limitations
+- Build-state check does not freeze external filesystem; paths can change after recheck and before commit.
+- Only C/C++ source/header path inventory and two supported compilation database locations are tracked.
+
 ## 0.18.2 — 2026-11-06
 
 ### Fixed

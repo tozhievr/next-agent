@@ -196,6 +196,7 @@ class Store:
             if not isinstance(read_set, dict):
                 raise ValueError("invalid_validator_read_set")
             dependencies = dict(read_set)
+            build_state = getattr(validator, "build_state", None)
 
         try:
             self.db.execute("BEGIN IMMEDIATE")
@@ -203,6 +204,10 @@ class Store:
             if current != parent or (if_rev is not None and current != if_rev):
                 raise ValueError(f"stale_rev: expected {parent}, current {current}")
             if validator is not None:
+                if build_state is not None:
+                    current_state = validator._build_state()
+                    if current_state != build_state:
+                        raise ValueError("stale_build_state")
                 for name, text in dependencies.items():
                     if self.snapshot_text(name) != text:
                         raise ValueError(f"stale_dependency: {name}")
