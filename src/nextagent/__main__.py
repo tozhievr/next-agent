@@ -5,15 +5,15 @@ import json
 import sys
 from pathlib import Path
 
-from aed import __version__
-from aed.core.changeset import ChangeSet, Edit
-from aed.store.db import Store
+from nextagent import __version__
+from nextagent.core.changeset import ChangeSet, Edit
+from nextagent.store.db import Store
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="aed")
+    parser = argparse.ArgumentParser(prog="nextagent")
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--version", action="version", version=f"aed {__version__}")
+    parser.add_argument("--version", action="version", version=f"NextAgent {__version__}")
     commands = parser.add_subparsers(dest="cmd", required=True)
     view = commands.add_parser("view")
     view.add_argument("path")
@@ -24,7 +24,13 @@ def main() -> None:
     history.add_argument("--limit", type=int, default=20)
     sync = commands.add_parser("sync")
     sync.add_argument("paths", nargs="*")
+    commands.add_parser("serve", help="JSON-RPC 2.0 over line-delimited stdio")
     args = parser.parse_args()
+    if args.cmd == "serve":
+        from nextagent.proto.rpc import serve
+
+        serve(args.root)
+        return
     with Store(args.root) as store:
         if args.cmd == "view":
             snapshot = store.view(args.path)

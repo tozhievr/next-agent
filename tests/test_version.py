@@ -1,7 +1,7 @@
 import tomllib
 from pathlib import Path
 
-from aed import __version__
+from nextagent import __version__
 
 
 def test_version_matches_package_metadata():

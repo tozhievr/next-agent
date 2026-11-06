@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from aed.core.changeset import ChangeSet, Edit
-from aed.store.db import Store
+from nextagent.core.changeset import ChangeSet, Edit
+from nextagent.store.db import Store
 
 
 def test_atomic_durable_batch_undo_and_sync(tmp_path: Path):

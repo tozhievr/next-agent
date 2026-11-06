@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from aed.core.snapshot import Snapshot
+from nextagent.core.snapshot import Snapshot
 
 
 @dataclass(frozen=True, slots=True)

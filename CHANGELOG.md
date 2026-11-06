@@ -2,6 +2,19 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.2.0 — 2026-11-06
+
+### Added
+- NextAgent public identity: `nextagent` CLI, `nextagent` Python package and distribution.
+- Experimental newline-delimited JSON-RPC 2.0 stdio transport for open/view/edit/history/sync.
+- Protocol and entrypoint regression tests.
+
+### Changed
+- Removed the legacy `aed` CLI/import name (breaking change in 0.x development phase).
+
+### Not yet supported
+- Semantic selectors, tree-sitter, LSP, MCP and Unix socket transport.
+
 ## 0.1.1 — 2026-11-06
 
 ### Fixed

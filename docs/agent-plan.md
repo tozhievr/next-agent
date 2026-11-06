@@ -1,15 +1,15 @@
-# aed: agent implementation plan and progress
+# NextAgent: implementation plan and progress
 
 Date: 2026-11-06. Source specification: user-provided `aed-architecture.md`, revision **1.1**, sections 1–19.
 
 ## Product versioning
 
-Current release: **0.1.1** (patch: safer disk flush). Apply SemVer to each completed change:
+Current release: **0.2.0** (minor: public NextAgent naming and initial JSON-RPC stdio). Apply SemVer to each completed change:
 - **Patch** (`x.y.Z`): minor compatible bugfixes, small corrections.
 - **Minor** (`x.Y.0`): moderate to large backward-compatible additions that preserve architecture, including milestones.
 - **Major** (`X.0.0`): global architectural redesigns / breaking stable APIs.
 
-For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pyproject.toml`, `src/aed/__init__.py` and `CHANGELOG.md` synchronized, and add a version consistency test. Avoid unexplained bumps.
+For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pyproject.toml`, `src/nextagent/__init__.py` and `CHANGELOG.md` synchronized, and add a version consistency test. Avoid unexplained bumps.
 
 ## M0: SQLite, ChangeSet, CLI — initial foundation (partial)
 
@@ -27,7 +27,8 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 - [ ] Full M4 three-way merge, watcher and cross-process file-locking (TOCTOU races remain possible).
 - [ ] Redo / arbitrary revision undo, migrations and compressed snapshots.
 - [ ] Async single-writer queue and dedicated SQLite thread.
-- [ ] JSON-RPC 2.0 stdio and Unix socket dispatcher.
+- [x] Experimental line-delimited JSON-RPC 2.0 stdio dispatcher (open/view/edit/history/sync).
+- [ ] Unix socket transport, schema validation and full protocol coverage.
 
 ## Planned specification milestones
 
@@ -51,7 +52,13 @@ For 0.x pre-1.0, document breaking changes even if using minor bumps. Keep `pypr
 
 ## Known limitations
 
-M0 is an intentionally incomplete foundation. No semantic addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+NextAgent 0.2.0 is an intentionally incomplete foundation. No semantic addressing; no LSP or diagnostics; basic preflight protection but no cross-process file lock or three-way merge; current operations use explicit offsets; no concurrency isolation; no complete M0 redo or history compaction. Mark progress only on observed results rather than on aspirational architecture.
+
+## 0.2.0 milestone notes
+
+- Product identity standardized as NextAgent, distribution and import package `nextagent`, CLI `nextagent`; removed old `aed` Python package/command.
+- Added experimental JSON-RPC 2.0 line-delimited stdio dispatcher and integration tests; no LSP/MCP framing.
+- Updated README and version test. Await CI on exact Python 3.16.0a1; do not claim green before observing.
 
 ## 0.1.1 patch notes
 

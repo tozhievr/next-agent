@@ -8,8 +8,8 @@ import tempfile
 import time
 from pathlib import Path
 
-from aed.core.changeset import ChangeSet, Edit
-from aed.core.snapshot import Snapshot
+from nextagent.core.changeset import ChangeSet, Edit
+from nextagent.core.snapshot import Snapshot
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS workspace (
