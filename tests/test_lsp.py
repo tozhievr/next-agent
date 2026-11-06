@@ -13,7 +13,7 @@ def test_unicode_positions(encoding, character):
     text = "a😀z\n你好"
     assert offset_to_position(text, 2, encoding).character == character
     assert position_to_offset(text, 0, character, encoding) == 2
-    assert position_to_offset(text, 1, 2, encoding) == len(text)
+    assert position_to_offset(text, 1, 6 if encoding == "utf-8" else 2, encoding) == len(text)
 
 
 def test_invalid_mid_surrogate_and_utf8_sequence():
