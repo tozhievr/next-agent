@@ -2,6 +2,12 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.16.1 — 2026-11-06
+
+### Fixed
+- Corrected SQLite snapshot dependency regression test to close its implicit read transaction before a subsequent edit.
+- v0.14.0 CI revealed the failure on all three platforms; latest CI is pending.
+
 ## 0.16.0 — 2026-11-06
 
 ### Added
