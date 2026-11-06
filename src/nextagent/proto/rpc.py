@@ -123,6 +123,5 @@ def serve(root: Path, source: TextIO | None = None, sink: TextIO | None = None) 
             else:
                 reply = dispatch(store, request)
             if reply is not None:
-                outgoing.write(json.dumps(reply, ensure_ascii=False) + "
-")
+                outgoing.write(json.dumps(reply, ensure_ascii=False) + "\n")
                 outgoing.flush()
