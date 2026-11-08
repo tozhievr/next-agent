@@ -204,6 +204,11 @@ nextagent replace PATH --old S --new S [--all]           # literal replacement, 
 nextagent replace PATH --lines 10-14 --new-file F        # swap whole lines (no old text needed; empty --new deletes)
 nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole function/type
 nextagent patch FILE|-                                   # [{path,old,new,all}] across files, ONE revision
+#   locators in a patch edit: old | start_line/end_line | before_line/after_line | at_end (EOF) | symbol | before_symbol/after_symbol | create
+#   PREFER symbol or text anchors over line numbers for insertions: a number taken from an earlier read or from memory
+#   drifts as soon as anything above it changes (a test inserted by `after-line 1811` once landed in the middle of another
+#   statement). Use before-symbol/after-symbol, `append PATH TEXT` for the end of a file, or `view PATH --lines A-B` right
+#   before a line-based edit to confirm the number.
 nextagent references NAME [--path P] | rename NAME NEW | add-param FUNC "int x" --default 0
 echo '{"if_rev":N,"ops":[...]}' | nextagent edit         # codepoint-offset edits
 nextagent merge [PATH] [--theirs|--ours] [--dry-run]       # a human/git/formatter edited files: 3-way merge instead of disk_conflict
