@@ -2,6 +2,14 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.23.0 — 2026-11-08
+
+### Added
+- Incremental C23 outline: a per-document cache finds the changed byte range, re-lexes only a small window around it and splices the result with the unchanged top-level items (including nested symbols). JSON-RPC/MCP servers keep up to 32 caches; a one-character edit in a 40 KB file lexes about 11% of the tokens of a full scan. A differential fuzz test (300 random edits) checks that the cache is identical to a from-scratch scan.
+
+### Changed
+- A function whose body is never closed is now handled like the unterminated tail of the file, so results no longer depend on how much text follows it.
+
 ## 0.22.0 â€” 2026-11-08
 
 ### Changed

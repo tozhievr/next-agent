@@ -284,10 +284,12 @@ int main(int argc, char **argv) {
         goto bad;
     }
 done:
+    rpc_release(&rpc);
     store_close(store);
     return code;
 bad:
     usage();
+    rpc_release(&rpc);
     store_close(store);
     return 2;
 }

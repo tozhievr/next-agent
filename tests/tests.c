@@ -287,6 +287,101 @@ static void test_store(void) {
     free(ws);
 }
 
+static bool same_symbols(const SymbolList *a, const SymbolList *b) {
+    if (a->n != b->n) return false;
+    for (size_t i = 0; i < a->n; i++) {
+        const Symbol *x = &a->v[i], *y = &b->v[i];
+        if (strcmp(x->name, y->name) || strcmp(x->kind, y->kind) || strcmp(x->scope, y->scope) ||
+            x->start != y->start || x->end != y->end || x->line != y->line || x->column != y->column)
+            return false;
+    }
+    return true;
+}
+
+static void test_incremental_outline(void) {
+    g_test = "incremental_outline";
+    Buf b;
+    buf_init(&b);
+    for (int i = 0; i < 400; i++)
+        buf_printf(&b, "struct S%d { int a; int b; };\nstatic int f%d(int x) { return x + %d; }\nint v%d = %d;\n", i, i, i, i, i);
+    char *text = na_strdup(b.p);
+    size_t len = b.len;
+    buf_free(&b);
+    OutlineCache *c = outline_cache_new();
+    Snapshot *s = snap_new(1, text, len);
+    SymbolList inc, full;
+    CHECK(c23_outline_cached(c, s, true, &inc) == 0);
+    size_t first_tokens = outline_cache_last_tokens(c);
+    symbols_free(&inc);
+    snap_free(s);
+    /* a one-character edit in the middle re-lexes a small window, not the file */
+    text[len / 2] = text[len / 2] == 'x' ? 'y' : 'x';
+    s = snap_new(2, text, len);
+    CHECK(c23_outline_cached(c, s, true, &inc) == 0);
+    CHECK(outline_cache_last_tokens(c) * 5 < first_tokens);
+    CHECK(outline_cache_last_reused(c) > 1000);
+    c23_outline(s, true, &full);
+    CHECK(same_symbols(&inc, &full));
+    symbols_free(&inc);
+    symbols_free(&full);
+    snap_free(s);
+
+    /* differential fuzz: random edits, cached result must equal a from-scratch scan */
+    static const char *const frags[] = {";", "{", "}", "(", ")", "/*", "*/", "//", "\n", "\"", "'", "#", "int z;", "struct Q { int q; };",
+                                        " ", "x", "\\n", "\xc3\xa9", "typedef int T;", "int fn(void) { return 1; }\n", "enum E { A, B };"};
+    uint32_t rng = 12345;
+    int mismatches = 0;
+    for (int step = 0; step < 300; step++) {
+        rng = rng * 1664525u + 1013904223u;
+        size_t pos = (rng >> 8) % (len + 1);
+        while (pos < len && ((unsigned char)text[pos] & 0xC0) == 0x80) pos++; /* codepoint boundary */
+        rng = rng * 1664525u + 1013904223u;
+        size_t del = (rng >> 8) % 4;
+        size_t dend = pos;
+        for (size_t k = 0; k < del && dend < len; k++) {
+            dend++;
+            while (dend < len && ((unsigned char)text[dend] & 0xC0) == 0x80) dend++;
+        }
+        rng = rng * 1664525u + 1013904223u;
+        const char *ins = (rng >> 8) % 3 == 0 ? "" : frags[(rng >> 12) % (sizeof frags / sizeof *frags)];
+        size_t il = strlen(ins);
+        char *nt = na_alloc(len - (dend - pos) + il + 1);
+        memcpy(nt, text, pos);
+        memcpy(nt + pos, ins, il);
+        memcpy(nt + pos + il, text + dend, len - dend);
+        len = len - (dend - pos) + il;
+        nt[len] = 0;
+        free(text);
+        text = nt;
+        s = snap_new(3 + step, text, len);
+        c23_outline_cached(c, s, true, &inc);
+        c23_outline(s, true, &full);
+        size_t div = outline_cache_first_divergence(c, s);
+        if (div != (size_t)-1 && !mismatches) printf("  cache diverges from a full scan at item %zu (step %d)\n", div, step);
+        if (div != (size_t)-1) mismatches++;
+        if (!same_symbols(&inc, &full)) {
+            if (!mismatches) {
+                printf("  first incremental mismatch: step %d pos %zu del %zu ins \"%s\" (%zu vs %zu symbols)\n", step,
+                       pos, del, ins, inc.n, full.n);
+                size_t k = 0;
+                while (k < inc.n && k < full.n && inc.v[k].start == full.v[k].start && !strcmp(inc.v[k].name, full.v[k].name)) k++;
+                if (k < inc.n) printf("    inc[%zu] %s %s @%zu-%zu\n", k, inc.v[k].kind, inc.v[k].name, inc.v[k].start, inc.v[k].end);
+                if (k < full.n) printf("    full[%zu] %s %s @%zu-%zu\n", k, full.v[k].kind, full.v[k].name, full.v[k].start, full.v[k].end);
+                printf("    tokens=%zu reused=%zu\n", outline_cache_last_tokens(c), outline_cache_last_reused(c));
+                for (size_t q = pos > 60 ? pos - 60 : 0; q < pos + 160 && q < len; q++) putchar(text[q] == '\n' ? '~' : text[q]);
+                putchar('\n');
+            }
+            mismatches++;
+        }
+        symbols_free(&inc);
+        symbols_free(&full);
+        snap_free(s);
+    }
+    CHECK(mismatches == 0);
+    outline_cache_free(c);
+    free(text);
+}
+
 static void test_journal_deltas(void) {
     g_test = "journal_deltas";
     char *ws = new_ws();
@@ -984,6 +1079,7 @@ int main(void) {
     RUN(test_core);
     RUN(test_store);
     RUN(test_journal_deltas);
+    RUN(test_incremental_outline);
     RUN(test_store_torn_tail_and_conflict);
     RUN(test_validator);
     RUN(test_c23);

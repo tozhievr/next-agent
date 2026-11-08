@@ -126,6 +126,35 @@ static int batch_from_ops(const J *ops, Batch *b) {
 /* --------------------------------------------------------------- methods */
 static const Validator *validator_of(Rpc *r) { return r->has_validator ? &r->validator : NULL; }
 
+static OutlineCache *outline_cache_of(Rpc *r, const char *target) {
+    char *canon = store_canon(r->store, target);
+    if (!canon) return NULL;
+    for (size_t i = 0; i < r->ncaches; i++)
+        if (strcmp(r->cache_paths[i], canon) == 0) {
+            free(canon);
+            return r->caches[i];
+        }
+    size_t slot = r->ncaches;
+    if (slot == 32) {
+        slot = r->next_evict++ % 32;
+        free(r->cache_paths[slot]);
+        outline_cache_free(r->caches[slot]);
+    } else {
+        r->ncaches++;
+    }
+    r->cache_paths[slot] = canon;
+    r->caches[slot] = outline_cache_new();
+    return r->caches[slot];
+}
+
+void rpc_release(Rpc *r) {
+    for (size_t i = 0; i < r->ncaches; i++) {
+        free(r->cache_paths[i]);
+        outline_cache_free(r->caches[i]);
+    }
+    r->ncaches = 0;
+}
+
 static int m_view(Rpc *r, const J *p, J **out) {
     const char *target;
     if (need_str(p, "target", &target)) return -1;
@@ -147,7 +176,8 @@ static int m_outline(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     SymbolList list;
-    int rc = c23_outline(s, nested, &list);
+    OutlineCache *oc = outline_cache_of(r, target);
+    int rc = oc ? c23_outline_cached(oc, s, nested, &list) : c23_outline(s, nested, &list);
     if (rc == 0) {
         J *arr = j_arr();
         for (size_t i = 0; i < list.n; i++) j_push(arr, symbol_to_json(&list.v[i]));
@@ -168,7 +198,8 @@ static int m_select(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     Symbol sym;
-    int rc = c23_select(s, name, kind, scope, &sym);
+    OutlineCache *oc = outline_cache_of(r, target);
+    int rc = oc ? c23_select_cached(oc, s, name, kind, scope, &sym) : c23_select(s, name, kind, scope, &sym);
     if (rc == 0) {
         *out = symbol_to_json(&sym);
         free(sym.name);
@@ -192,7 +223,9 @@ static int m_replace_symbol(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     ChangeSet cs;
-    int rc = c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, &cs);
+    OutlineCache *oc = outline_cache_of(r, target);
+    int rc = oc ? c23_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, &cs)
+                : c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, &cs);
     snap_free(s);
     if (rc != 0) return -1;
     EditResult res;
