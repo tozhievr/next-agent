@@ -15,16 +15,16 @@ exit=0
 {"rev":1,"paths":["a.c","a.h"],"sites":4,"source":"syntax"}
 $ nextagent view a.c
 exit=0
-{"rev":1,"path":"a.c","text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x) { return x * 2; }\nint run(void) { return area(area(3) + 1); }\nstruct P { int x; int y; };\n"}
+{"rev":1,"path":"a.c","lines":6,"text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x) { return x * 2; }\nint run(void) { return area(area(3) + 1); }\nstruct P { int x; int y; };\n"}
 $ nextagent add-param area int mode --default 0
 exit=0
-{"rev":2,"paths":["a.c","a.h"],"declarations":2,"calls":2}
+{"rev":2,"paths":["a.c","a.h"],"declarations":2,"calls":2,"source":"syntax"}
 $ nextagent add-include a.c stdlib.h --system
 exit=0
 {"rev":3,"paths":["a.c"],"changed":true}
 $ nextagent view a.c
 exit=0
-{"rev":3,"path":"a.c","text":"#include \"a.h\"\n#include <stdlib.h>\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
+{"rev":3,"path":"a.c","lines":7,"text":"#include \"a.h\"\n#include <stdlib.h>\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
 $ nextagent history
 exit=0
 [{"rev":3,"parent":2,"label":"add_include","ts":0},{"rev":2,"parent":1,"label":"add_param","ts":0},{"rev":1,"parent":null,"label":"rename","ts":0}]
@@ -33,7 +33,7 @@ exit=0
 {"rev":4,"paths":["a.c"]}
 $ nextagent view a.c
 exit=0
-{"rev":4,"path":"a.c","text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
+{"rev":4,"path":"a.c","lines":6,"text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
 $ nextagent redo
 exit=0
 {"rev":5,"paths":["a.c"]}

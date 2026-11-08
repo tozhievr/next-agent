@@ -2,6 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.28.0 - 2026-11-08
+
+### Added
+- `add_param` through the language server: the server resolves which occurrences are the function (declarations, definitions, calls); only those are edited, so same-named functions elsewhere are left alone. Without a server the token-based version still works (`source`: `syntax`).
+- CLI/RPC editing commands for working on a workspace with NextAgent itself: `replace PATH --old/--new` (literal text, unique match unless `--all`; LF text is converted to CRLF in CRLF files), `replace-symbol PATH NAME --new/--new-file`, `view PATH --lines A-B --raw`; RPC `replace_text` and `view` with `start_line`/`end_line`.
+- `serve --lsp --no-gate`: language servers for navigation and refactoring without the diagnostic gate; `NA_LSP_TRACE=1` prints every LSP message (debugging).
+- Cross-file queries wait until the server has analysed the synced documents (`lsp_client_settle`).
+
+### Changed
+- The diagnostic gate sends header changes before source changes. URIs use a lowercase drive letter on Windows.
+
 ## 0.27.0 - 2026-11-08
 
 ### Changed

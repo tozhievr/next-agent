@@ -31,6 +31,18 @@ int rf_add_param(Store *st, const char *function, const char *param, const char 
                  int64_t position, const StrList *only, int64_t if_rev, const char *label,
                  const char *session, const Validator *validator, EditResult *res, RfCounts *counts);
 
+/* Identifier occurrence (workspace-relative path, codepoint offset of its first character). */
+typedef struct {
+    const char *path;
+    size_t start;
+} RfSite;
+
+/* Like rf_add_param, but only the given occurrences (references of one symbol resolved by a language
+ * server) are declarations or call sites; same-spelled identifiers elsewhere are left alone. */
+int rf_add_param_sites(Store *st, const char *function, const char *param, const char *default_arg,
+                       int64_t position, const RfSite *sites, size_t nsites, int64_t if_rev, const char *label,
+                       const char *session, const Validator *validator, EditResult *res, RfCounts *counts);
+
 /* Inserts `#include` after the last existing include (or the include guard).
  * `*changed` is false when the header was already included (nothing committed). */
 int rf_add_include(Store *st, const char *target, const char *header, bool system, int64_t if_rev,

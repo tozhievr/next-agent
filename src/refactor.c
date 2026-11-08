@@ -512,9 +512,18 @@ typedef struct {
     size_t nsites;
 } FileSites;
 
-int rf_add_param(Store *st, const char *function, const char *param, const char *default_arg,
-                 int64_t position, const StrList *only, int64_t if_rev, const char *label,
-                 const char *session, const Validator *validator, EditResult *res, RfCounts *counts) {
+static bool site_selected(const RfSite *f, size_t n, const char *path, size_t start) {
+    for (size_t i = 0; i < n; i++)
+        if (f[i].start == start && strcmp(f[i].path, path) == 0) return true;
+    return false;
+}
+
+/* `filter` (optional): only identifiers at exactly these positions are call/declaration sites, as
+ * resolved by a language server; otherwise every same-spelled identifier followed by `(` is one. */
+static int add_param_impl(Store *st, const char *function, const char *param, const char *default_arg,
+                          int64_t position, const StrList *only, int64_t if_rev, const char *label,
+                          const char *session, const Validator *validator, EditResult *res, RfCounts *counts,
+                          const RfSite *filter, size_t nfilter) {
     if (!valid_ident(function) || is_keyword(function)) return na_fail("invalid parameter: function must be a C identifier");
     if (!param || !param[0] || strpbrk(param, "\r\n")) return na_fail("invalid parameter: param must be one line of text");
     if (position < -1) return na_fail("invalid parameter: position must be >= -1");
@@ -537,9 +546,11 @@ int rf_add_param(Store *st, const char *function, const char *param, const char 
         cur.len = len;
         tokenize(text, len, &cur.t);
         size_t cap = 0;
+        Cursor pos = {text, 0, 0};
         for (size_t i = 0; i < cur.t.n; i++) {
             if (cur.t.v[i].k != 'i' || !ident_eq(text, &cur.t.v[i], function)) continue;
-            if (is_member(&cur.t, i) || !tok_p(&cur.t, i + 1, '(')) continue;
+            if (!tok_p(&cur.t, i + 1, '(')) continue;
+            if (filter ? !site_selected(filter, nfilter, cur.path, cur_cp(&pos, cur.t.v[i].s)) : is_member(&cur.t, i)) continue;
             size_t close = match_paren(&cur.t, i + 1);
             if (close == (size_t)-1) continue;
             if (cur.nsites == cap) {
@@ -660,6 +671,27 @@ int rf_add_param(Store *st, const char *function, const char *param, const char 
         counts->calls = ncall;
     }
     plan_free(&plan);
+    return rc;
+}
+
+int rf_add_param(Store *st, const char *function, const char *param, const char *default_arg,
+                 int64_t position, const StrList *only, int64_t if_rev, const char *label,
+                 const char *session, const Validator *validator, EditResult *res, RfCounts *counts) {
+    if (!valid_ident(function) || is_keyword(function)) return na_fail("invalid parameter: function must be a C identifier");
+    return add_param_impl(st, function, param, default_arg, position, only, if_rev, label, session, validator, res,
+                          counts, NULL, 0);
+}
+
+int rf_add_param_sites(Store *st, const char *function, const char *param, const char *default_arg,
+                       int64_t position, const RfSite *sites, size_t nsites, int64_t if_rev, const char *label,
+                       const char *session, const Validator *validator, EditResult *res, RfCounts *counts) {
+    StrList files;
+    sl_init(&files);
+    for (size_t i = 0; i < nsites; i++)
+        if (!sl_has(&files, sites[i].path)) sl_push(&files, sites[i].path);
+    int rc = add_param_impl(st, function, param, default_arg, position, &files, if_rev, label, session, validator, res,
+                            counts, sites, nsites);
+    sl_free(&files);
     return rc;
 }
 

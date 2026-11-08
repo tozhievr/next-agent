@@ -7,7 +7,9 @@
 
 static void usage(void) {
     fputs("usage: nextagent [--root DIR] [--version] <command> [args]\n"
-          "  view PATH\n"
+          "  view PATH [--lines A-B] [--raw]\n"
+          "  replace PATH (--old S|--old-file F) (--new S|--new-file F) [--all] [--if-rev N]\n"
+          "  replace-symbol PATH NAME (--new S|--new-file F) [--kind K] [--scope S] [--if-rev N]\n"
           "  edit [--request FILE]          JSON request {ops:[{path,start,end,text}],if_rev,label}\n"
           "  outline PATH [--nested]\n"
           "  select PATH NAME [--kind K] [--scope S]\n"
@@ -20,10 +22,12 @@ static void usage(void) {
           "  add-param FUNCTION PARAM [--default EXPR] [--position N] [--path P]...\n"
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
-          "  serve [--clangd[=EXE]|--lsp]        JSON-RPC 2.0, one object per line on stdio\n"
-          "  mcp [--clangd[=EXE]|--lsp]         MCP stdio bridge\n",
+          "  serve [--clangd[=EXE]|--lsp [--no-gate]]        JSON-RPC 2.0, one object per line on stdio\n"
+          "  mcp [--clangd[=EXE]|--lsp [--no-gate]]         MCP stdio bridge\n",
           stderr);
 }
+
+static bool g_raw; /* view --raw */
 
 /* Run one RPC method and print its result as JSON; returns the exit code. */
 static int run_method(Rpc *r, const char *method, J *params) {
@@ -41,6 +45,9 @@ static int run_method(Rpc *r, const char *method, J *params) {
         const J *msg = j_get(err, "message");
         fprintf(stderr, "nextagent: %s\n", j_is_str(msg) ? msg->s : "error");
         code = 1;
+    } else if (res && g_raw && j_is_str(j_get(res, "text"))) {
+        const J *t = j_get(res, "text");
+        fwrite(t->s, 1, t->slen, stdout); /* --raw: the document text itself */
     } else if (res) {
         Buf out;
         buf_init(&out);
@@ -58,6 +65,33 @@ static int parse_int(const char *s, int64_t *out) {
     long long v = strtoll(s, &end, 10);
     if (!s[0] || *end) return -1;
     *out = v;
+    return 0;
+}
+
+/* "A-B" or "A" (1-based, inclusive) */
+static int parse_range(const char *s, int64_t *a, int64_t *b) {
+    char *end = NULL;
+    long long x = strtoll(s, &end, 10);
+    if (end == s || x < 1) return -1;
+    *a = *b = x;
+    if (*end == '-') {
+        const char *q = end + 1;
+        long long y = strtoll(q, &end, 10);
+        if (end == q || y < x) return -1;
+        *b = y;
+    }
+    return *end ? -1 : 0;
+}
+
+/* Whole file as text (UTF-8, copied); a trailing newline is kept exactly. */
+static int read_text(const char *path, char **out) {
+    Buf b;
+    buf_init(&b);
+    if (pf_read_file(path, &b) != 0) {
+        buf_free(&b);
+        return -1;
+    }
+    *out = buf_take(&b);
     return 0;
 }
 
@@ -152,10 +186,58 @@ int main(int argc, char **argv) {
     int code = 0;
 
     if (strcmp(cmd, "view") == 0) {
-        if (nargs != 1) goto bad;
+        if (nargs < 1) goto bad;
         J *p = j_obj();
         j_set(p, "target", j_str(args[0]));
+        for (int k = 1; k < nargs; k++) {
+            int64_t a, b;
+            if (strcmp(args[k], "--raw") == 0) g_raw = true;
+            else if (k + 1 < nargs && strcmp(args[k], "--lines") == 0 && parse_range(args[k + 1], &a, &b) == 0) {
+                j_set(p, "start_line", j_int(a));
+                j_set(p, "end_line", j_int(b));
+                k++;
+            } else {
+                json_free(p);
+                goto bad;
+            }
+        }
         code = run_method(&rpc, "view", p);
+    } else if (strcmp(cmd, "replace") == 0 || strcmp(cmd, "replace-symbol") == 0) {
+        bool sym = cmd[7] != 0;
+        int npos = sym ? 2 : 1;
+        if (nargs < npos) goto bad;
+        J *p = j_obj();
+        j_set(p, "target", j_str(args[0]));
+        if (sym) j_set(p, "name", j_str(args[1]));
+        const char *old = NULL, *neu = NULL;
+        char *old_buf = NULL, *new_buf = NULL;
+        bool ok = true;
+        for (int k = npos; k < nargs && ok; k++) {
+            int64_t n;
+            const char *a = args[k];
+            if (k + 1 < nargs && !sym && strcmp(a, "--old") == 0) old = args[++k];
+            else if (k + 1 < nargs && !sym && strcmp(a, "--old-file") == 0) ok = read_text(args[++k], &old_buf) == 0, old = old_buf;
+            else if (k + 1 < nargs && strcmp(a, "--new") == 0) neu = args[++k];
+            else if (k + 1 < nargs && strcmp(a, "--new-file") == 0) ok = read_text(args[++k], &new_buf) == 0, neu = new_buf;
+            else if (!sym && strcmp(a, "--all") == 0) j_set(p, "all", j_bool(true));
+            else if (k + 1 < nargs && sym && strcmp(a, "--kind") == 0) j_set(p, "kind", j_str(args[++k]));
+            else if (k + 1 < nargs && sym && strcmp(a, "--scope") == 0) j_set(p, "scope", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(a, "--label") == 0) j_set(p, "label", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(a, "--if-rev") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "if_rev", j_int(n)), k++;
+            else ok = false;
+        }
+        if (!ok || !neu || (!sym && !old)) {
+            free(old_buf);
+            free(new_buf);
+            json_free(p);
+            goto bad;
+        }
+        if (!sym) j_set(p, "old", j_str(old));
+        j_set(p, sym ? "replacement" : "new", j_str(neu));
+        if (sym && !j_get(p, "if_rev")) j_set(p, "if_rev", j_int(store_head(store)));
+        free(old_buf);
+        free(new_buf);
+        code = run_method(&rpc, sym ? "replace_symbol" : "replace_text", p);
     } else if (strcmp(cmd, "edit") == 0) {
         const char *file = NULL;
         for (int k = 0; k < nargs; k++) {
@@ -260,10 +342,11 @@ int main(int argc, char **argv) {
         code = run_method(&rpc, "sync", p);
     } else if (strcmp(cmd, "serve") == 0 || strcmp(cmd, "mcp") == 0) {
         const char *clangd = NULL, *lsp_clangd = NULL;
-        bool use_hub = false;
+        bool use_hub = false, no_gate = false;
         for (int k = 0; k < nargs; k++) {
             if (strcmp(args[k], "--clangd") == 0) clangd = "clangd";
             else if (strncmp(args[k], "--clangd=", 9) == 0) clangd = args[k] + 9;
+            else if (strcmp(args[k], "--no-gate") == 0) no_gate = true;
             else if (strcmp(args[k], "--lsp") == 0) use_hub = true;
             else if (strncmp(args[k], "--lsp=", 6) == 0) use_hub = true, lsp_clangd = args[k] + 6;
             else goto bad;
@@ -285,9 +368,11 @@ int main(int argc, char **argv) {
         }
         if (use_hub) {
             hub = lsp_hub_new(store_root(store), lsp_clangd && *lsp_clangd ? lsp_clangd : NULL, 20000);
-            gate = gate_new(store_root(store), lsp_hub_ops(hub), store, 2);
-            rpc.validator = gate_validator(gate);
-            rpc.has_validator = true;
+            if (!no_gate) { /* --no-gate: language servers for navigation/refactoring only, no diagnostic gate */
+                gate = gate_new(store_root(store), lsp_hub_ops(hub), store, 2);
+                rpc.validator = gate_validator(gate);
+                rpc.has_validator = true;
+            }
             rpc.hub = hub;
         }
         rpc.session = "jsonrpc";

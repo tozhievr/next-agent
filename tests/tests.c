@@ -1016,7 +1016,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 13);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 14);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1487,6 +1487,48 @@ static void test_semantic(void) {
     free(ws);
 }
 
+/* add_param through a real language server: only the occurrences clangd resolves to this function change. */
+static void test_live_semantic(void) {
+    g_test = "clangd-semantic";
+    char *exe = pf_which("clangd");
+    if (!exe) {
+        printf("  skip: clangd not on PATH\n");
+        return;
+    }
+    free(exe);
+    char *ws = new_ws();
+    put_file(ws, "compile_flags.txt", "-xc\n-std=c23\n"); /* headers are C here, not clangd's default C++ */
+    put_file(ws, "a.h", "int add(int a, int b);\n");
+    put_file(ws, "a.c", "#include \"a.h\"\nint add(int a, int b) { return a + b; }\n");
+    put_file(ws, "b.c", "#include \"a.h\"\nint use(void) { return add(1, 2); }\n");
+    put_file(ws, "c.c", "static int add(int x) { return x; }\nint other(void) { return add(3); }\n");
+    Store *st = store_open(ws);
+    LspHub *hub = lsp_hub_new(ws, NULL, 30000);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.hub = hub;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"add_param\",\"params\":{\"function\":\"add\",\"param\":\"int c\",\"default\":\"0\"}}");
+    CHECK(strstr(err_of(a), "ambiguous_symbol") != NULL); /* the header's add and c.c's static add are different symbols */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"add_param\",\"params\":{\"function\":\"add\",\"param\":\"int c\",\"default\":\"0\",\"path\":\"a.h\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strcmp(j_get(res, "source")->s, "lsp") == 0);
+    CHECK(res && j_get(res, "calls")->i == 1 && j_get(res, "declarations")->i == 2);
+    json_free(a);
+    char *vb = view_text(st, "b.c"), *vc = view_text(st, "c.c"), *vh = view_text(st, "a.h");
+    CHECK(strstr(vb, "add(1, 2, 0)") != NULL);
+    CHECK(strstr(vc, "add(3)") != NULL && !strstr(vc, "int c"));
+    CHECK(strstr(vh, "int add(int a, int b, int c)") != NULL);
+    free(vb);
+    free(vc);
+    free(vh);
+    lsp_hub_free(hub);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
     {
@@ -1519,6 +1561,7 @@ int main(int argc, char **argv) {
     RUN(test_rpc);
     RUN(test_lsp_hub);
     RUN(test_semantic);
+    RUN(test_live_semantic);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

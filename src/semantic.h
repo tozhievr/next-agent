@@ -4,6 +4,7 @@
 #ifndef NA_SEMANTIC_H
 #define NA_SEMANTIC_H
 #include "index.h"
+#include "refactor.h"
 
 typedef struct {
     Store *st;
@@ -17,6 +18,10 @@ int sem_references(Sem *s, const char *name, const char *kind, const char *scope
 int sem_rename(Sem *s, const char *name, const char *kind, const char *scope, const char *path,
                const char *new_name, int64_t if_rev, const char *label, const char *session,
                const Validator *validator, EditResult *res, size_t *sites);
+/* Adds a parameter to a function and an argument to every call site the server resolves. */
+int sem_add_param(Sem *s, const char *function, const char *param, const char *default_arg, int64_t position,
+                  const char *kind, const char *scope, const char *path, int64_t if_rev, const char *label,
+                  const char *session, const Validator *validator, EditResult *res, RfCounts *counts);
 /* Symbols of the whole workspace whose name contains `query` (case-insensitive). */
 int sem_find_symbols(Sem *s, const char *query, const char *kind, size_t limit, J **out);
 

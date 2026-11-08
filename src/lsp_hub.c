@@ -426,6 +426,11 @@ int lsp_hub_sync(LspHub *h, const char *abs_path, const char *text, size_t len) 
     return 0;
 }
 
+void lsp_hub_settle(LspHub *h, const char *abs_path) {
+    LspClient *c = client_for(h, abs_path, NULL);
+    if (c) lsp_client_settle(c, abs_path, 8000);
+}
+
 static void loc_add(LspLocs *l, char *path, size_t sl, size_t sc, size_t el, size_t ec, const char *text, size_t tlen,
                     bool has_text) {
     if (l->n == l->cap) {

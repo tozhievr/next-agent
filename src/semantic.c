@@ -1,4 +1,5 @@
 #include "semantic.h"
+#include "refactor.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -232,6 +233,8 @@ static int resolve(Sem *s, Docs *docs, const char *name, const char *kind, const
 
 /* Makes the servers see the current text of every file that mentions `name`. */
 static int sync_candidates(Sem *s, Docs *docs, const char *name) {
+    StrList synced;
+    sl_init(&synced);
     for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
         const char *p = wsi_path(s->ix, i);
         if (!wsi_has_ident(s->ix, i, name)) continue;
@@ -242,9 +245,15 @@ static int sync_candidates(Sem *s, Docs *docs, const char *name) {
             Doc *d = docs_get(docs, p);
             rc = d ? lsp_hub_sync(s->hub, abs, d->text, d->len) : -1;
         }
+        if (handled && rc == 0) sl_push(&synced, abs);
         free(abs);
-        if (rc != 0) return rc;
+        if (rc != 0) {
+            sl_free(&synced);
+            return rc;
+        }
     }
+    for (size_t i = 0; i < synced.n; i++) lsp_hub_settle(s->hub, synced.v[i]);
+    sl_free(&synced);
     return 0;
 }
 
@@ -413,7 +422,49 @@ int sem_rename(Sem *s, const char *name, const char *kind, const char *scope, co
     return rc;
 }
 
+/* ---- add_param: the server resolves which occurrences are the function; the syntax work is local ---- */
+int sem_add_param(Sem *s, const char *function, const char *param, const char *default_arg, int64_t position,
+                  const char *kind, const char *scope, const char *path, int64_t if_rev, const char *label,
+                  const char *session, const Validator *validator, EditResult *res, RfCounts *counts) {
+    if (!s->hub) return na_fail("no_language_server: no language server hub is enabled (start with --lsp)");
+    int64_t head = store_head(s->st);
+    if (if_rev == STORE_NO_REV) if_rev = head;
+    else if (if_rev != head) return na_fail("stale_rev: expected %lld, current %lld", (long long)if_rev, (long long)head);
+
+    Docs docs = {.s = s};
+    Def def = {0};
+    LspLocs locs = {0};
+    Span *spans = NULL;
+    size_t ns = 0;
+    RfSite *sites = NULL;
+    int rc = resolve(s, &docs, function, kind, scope, path, &def);
+    if (rc == 0) rc = sync_candidates(s, &docs, function);
+    if (rc == 0) {
+        Doc *d = docs_get(&docs, def.path);
+        char *abs = abs_of(s, def.path);
+        rc = d ? lsp_hub_references(s->hub, abs, d->text, d->len, def.offset, true, &locs) : -1;
+        free(abs);
+    }
+    if (rc == 0) rc = to_spans(s, &docs, &locs, &spans, &ns);
+    if (rc == 0) {
+        sites = na_alloc((ns + 1) * sizeof *sites);
+        for (size_t i = 0; i < ns; i++) {
+            sites[i].path = spans[i].path;
+            sites[i].start = spans[i].start;
+        }
+        rc = rf_add_param_sites(s->st, function, param, default_arg, position, sites, ns, if_rev, label, session,
+                                validator, res, counts);
+    }
+    free(sites);
+    spans_free(spans, ns);
+    lsp_locs_free(&locs);
+    free(def.path);
+    docs_free(&docs);
+    return rc;
+}
+
 /* ---- find_symbols ---- */
+
 static bool contains_ci(const char *hay, const char *needle) {
     size_t n = strlen(needle);
     if (n == 0) return true;

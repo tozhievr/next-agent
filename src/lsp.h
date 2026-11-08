@@ -112,6 +112,7 @@ size_t lsp_client_ranged_changes(const LspClient *c);
 size_t lsp_client_full_changes(const LspClient *c);
 /* Opens (or incrementally updates) a document and returns its URI (malloc'd). */
 int lsp_client_sync(LspClient *c, const char *abs_path, const char *text, size_t len, char **uri);
+bool lsp_client_settle(LspClient *c, const char *abs_path, int budget_ms);
 const char *lsp_language_id(const char *path); /* "c", "python", ... or "plaintext" */
 
 /* ---- language server hub: one server per language family, started on demand ---- */
@@ -144,6 +145,8 @@ char *lsp_uri_to_path(const char *uri); /* file:// URI -> normalized absolute pa
 PosEnc lsp_hub_encoding(LspHub *h, const char *abs_path);
 /* Opens or incrementally updates a document in the server that owns it. */
 int lsp_hub_sync(LspHub *h, const char *abs_path, const char *text, size_t len);
+/* Waits (bounded) until the server has analysed the synced text, so cross-file queries see it. */
+void lsp_hub_settle(LspHub *h, const char *abs_path);
 /* textDocument/references at a codepoint offset of the (already synced) document. */
 int lsp_hub_references(LspHub *h, const char *abs_path, const char *text, size_t len, size_t offset,
                        bool include_declaration, LspLocs *out);
