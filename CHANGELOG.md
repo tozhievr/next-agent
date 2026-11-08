@@ -2,6 +2,12 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.27.0 - 2026-11-08
+
+### Changed
+- Language servers first for every language, C included: `outline`, `select` and `replace_symbol` ask the server (clangd for C) and fall back to the built-in scanner only when no server is installed or the request fails.
+- A declaration and its definition (or several definitions the server lists among each other's references) resolve to one symbol instead of `ambiguous_symbol`.
+
 ## 0.26.0 - 2026-11-08
 
 ### Added

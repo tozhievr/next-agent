@@ -66,97 +66,12 @@ static char *rel_of(const Sem *s, const char *abs) {
     return na_strdup(p);
 }
 
-/* ---- definition lookup ---- */
-typedef struct {
-    char *path;
-    const Symbol *sym;
-    size_t offset; /* codepoint offset of the name token */
-} Def;
-
-static bool whole_word_at(const char *t, size_t len, size_t at, size_t n) {
-    bool before = at == 0 || !(isalnum((unsigned char)t[at - 1]) || t[at - 1] == '_' || (unsigned char)t[at - 1] >= 0x80);
-    bool after = at + n >= len || !(isalnum((unsigned char)t[at + n]) || t[at + n] == '_' || (unsigned char)t[at + n] >= 0x80);
-    return before && after;
-}
-
-static int name_offset(Docs *docs, const char *path, const Symbol *sym, const char *name, size_t *off) {
-    if (sym->sel != (size_t)-1) {
-        *off = sym->sel;
-        return 0;
-    }
-    Doc *d = docs_get(docs, path);
-    if (!d) return -1;
-    size_t b0 = cp_to_byte(d->text, d->len, sym->start), b1 = cp_to_byte(d->text, d->len, sym->end), n = strlen(name);
-    if (b0 == (size_t)-1) b0 = 0;
-    if (b1 == (size_t)-1 || b1 > d->len) b1 = d->len;
-    for (size_t i = b0; i + n <= b1; i++)
-        if (memcmp(d->text + i, name, n) == 0 && whole_word_at(d->text, d->len, i, n)) {
-            *off = utf8_cp_count(d->text, i);
-            return 0;
-        }
-    return na_fail("symbol_not_found: cannot locate the name %s inside its declaration in %s", name, path);
-}
-
-static int resolve(Sem *s, Docs *docs, const char *name, const char *kind, const char *scope, const char *path, Def *out) {
-    if (wsi_refresh(s->ix) != 0) return -1;
-    char *want = NULL;
-    if (path && *path && !(want = store_canon(s->st, path))) return -1;
-    size_t hits = 0, fi = 0, si = 0;
-    Buf cand;
-    buf_init(&cand);
-    for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
-        if (want && strcmp(wsi_path(s->ix, i), want) != 0) continue;
-        const SymbolList *l = wsi_symbols(s->ix, i);
-        for (size_t k = 0; k < l->n; k++) {
-            const Symbol *y = &l->v[k];
-            if (strcmp(y->name, name) != 0) continue;
-            if (kind && *kind && strcmp(kind, y->kind) != 0) continue;
-            if (scope && strcmp(scope, y->scope) != 0) continue;
-            if (hits < 8) buf_printf(&cand, "%s%s:%zu%s%s", hits ? ", " : "", wsi_path(s->ix, i), y->line, y->scope[0] ? " in " : "", y->scope);
-            hits++;
-            fi = i;
-            si = k;
-        }
-    }
-    free(want);
-    if (hits == 0) {
-        buf_free(&cand);
-        return na_fail("symbol_not_found: %s", name);
-    }
-    if (hits > 1) {
-        int rc = na_fail("ambiguous_symbol: %s (%zu definitions: %s; narrow with kind, scope or path)", name, hits, cand.p);
-        buf_free(&cand);
-        return rc;
-    }
-    buf_free(&cand);
-    out->path = na_strdup(wsi_path(s->ix, fi));
-    out->sym = &wsi_symbols(s->ix, fi)->v[si];
-    return name_offset(docs, out->path, out->sym, name, &out->offset);
-}
-
-/* Makes the servers see the current text of every file that mentions `name`. */
-static int sync_candidates(Sem *s, Docs *docs, const char *name) {
-    for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
-        const char *p = wsi_path(s->ix, i);
-        if (!wsi_has_ident(s->ix, i, name)) continue;
-        char *abs = abs_of(s, p);
-        bool handled = lsp_hub_handles(s->hub, abs);
-        int rc = 0;
-        if (handled) {
-            Doc *d = docs_get(docs, p);
-            rc = d ? lsp_hub_sync(s->hub, abs, d->text, d->len) : -1;
-        }
-        free(abs);
-        if (rc != 0) return rc;
-    }
-    return 0;
-}
-
 /* ---- locations -> codepoint ranges ---- */
-typedef struct {
+struct Span {
     char *path;
     size_t start, end;
-} Span;
+};
+typedef struct Span Span;
 
 static int cmp_span(const void *a, const void *b) {
     const Span *x = a, *y = b;
@@ -205,10 +120,136 @@ static int to_spans(Sem *s, Docs *docs, const LspLocs *locs, Span **out, size_t 
     return 0;
 }
 
-static void spans_free(Span *v, size_t n) {
+static void spans_free_impl(Span *v, size_t n) {
     for (size_t i = 0; i < n; i++) free(v[i].path);
     free(v);
 }
+
+/* ---- definition lookup ---- */
+typedef struct {
+    char *path;
+    const Symbol *sym;
+    size_t offset; /* codepoint offset of the name token */
+} Def;
+
+static bool whole_word_at(const char *t, size_t len, size_t at, size_t n) {
+    bool before = at == 0 || !(isalnum((unsigned char)t[at - 1]) || t[at - 1] == '_' || (unsigned char)t[at - 1] >= 0x80);
+    bool after = at + n >= len || !(isalnum((unsigned char)t[at + n]) || t[at + n] == '_' || (unsigned char)t[at + n] >= 0x80);
+    return before && after;
+}
+
+static int name_offset(Docs *docs, const char *path, const Symbol *sym, const char *name, size_t *off) {
+    if (sym->sel != (size_t)-1) {
+        *off = sym->sel;
+        return 0;
+    }
+    Doc *d = docs_get(docs, path);
+    if (!d) return -1;
+    size_t b0 = cp_to_byte(d->text, d->len, sym->start), b1 = cp_to_byte(d->text, d->len, sym->end), n = strlen(name);
+    if (b0 == (size_t)-1) b0 = 0;
+    if (b1 == (size_t)-1 || b1 > d->len) b1 = d->len;
+    for (size_t i = b0; i + n <= b1; i++)
+        if (memcmp(d->text + i, name, n) == 0 && whole_word_at(d->text, d->len, i, n)) {
+            *off = utf8_cp_count(d->text, i);
+            return 0;
+        }
+    return na_fail("symbol_not_found: cannot locate the name %s inside its declaration in %s", name, path);
+}
+
+static void spans_free(struct Span *v, size_t n);
+
+#define MAX_DEFS 16
+
+static int sync_candidates(Sem *s, Docs *docs, const char *name);
+static int to_spans(Sem *s, Docs *docs, const LspLocs *locs, struct Span **out, size_t *n);
+
+static int resolve(Sem *s, Docs *docs, const char *name, const char *kind, const char *scope, const char *path, Def *out) {
+    if (wsi_refresh(s->ix) != 0) return -1;
+    char *want = NULL;
+    if (path && *path && !(want = store_canon(s->st, path))) return -1;
+    Def defs[MAX_DEFS];
+    size_t hits = 0, stored = 0;
+    Buf cand;
+    buf_init(&cand);
+    for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
+        if (want && strcmp(wsi_path(s->ix, i), want) != 0) continue;
+        const SymbolList *l = wsi_symbols(s->ix, i);
+        for (size_t k = 0; k < l->n; k++) {
+            const Symbol *y = &l->v[k];
+            if (strcmp(y->name, name) != 0) continue;
+            if (kind && *kind && strcmp(kind, y->kind) != 0) continue;
+            if (scope && strcmp(scope, y->scope) != 0) continue;
+            if (hits < 8) buf_printf(&cand, "%s%s:%zu%s%s", hits ? ", " : "", wsi_path(s->ix, i), y->line, y->scope[0] ? " in " : "", y->scope);
+            if (stored < MAX_DEFS) {
+                defs[stored].path = na_strdup(wsi_path(s->ix, i));
+                defs[stored].sym = y;
+                defs[stored].offset = 0;
+                stored++;
+            }
+            hits++;
+        }
+    }
+    free(want);
+    int rc = 0;
+    if (hits == 0) rc = na_fail("symbol_not_found: %s", name);
+    else if (hits > stored) rc = na_fail("ambiguous_symbol: %s (%zu definitions; narrow with kind, scope or path)", name, hits);
+    for (size_t i = 0; rc == 0 && i < stored; i++) rc = name_offset(docs, defs[i].path, defs[i].sym, name, &defs[i].offset);
+    /* A declaration and its definition are one entity: the server decides by listing both as references. */
+    if (rc == 0 && stored > 1) {
+        rc = sync_candidates(s, docs, name);
+        LspLocs locs = {0};
+        struct Span *spans = NULL;
+        size_t ns = 0;
+        if (rc == 0) {
+            Doc *d = docs_get(docs, defs[0].path);
+            char *abs = abs_of(s, defs[0].path);
+            rc = d ? lsp_hub_references(s->hub, abs, d->text, d->len, defs[0].offset, true, &locs) : -1;
+            free(abs);
+        }
+        if (rc == 0) rc = to_spans(s, docs, &locs, &spans, &ns);
+        if (rc == 0) {
+            size_t other = 0;
+            for (size_t i = 1; i < stored; i++) {
+                bool covered = false;
+                for (size_t k = 0; k < ns && !covered; k++)
+                    covered = strcmp(spans[k].path, defs[i].path) == 0 && spans[k].start == defs[i].offset;
+                if (!covered) other++;
+            }
+            if (other) rc = na_fail("ambiguous_symbol: %s (%zu definitions: %s; narrow with kind, scope or path)", name, hits, cand.p);
+        }
+        spans_free(spans, ns);
+        lsp_locs_free(&locs);
+    }
+    buf_free(&cand);
+    if (rc == 0) {
+        *out = defs[0];
+        for (size_t i = 1; i < stored; i++) free(defs[i].path);
+    } else {
+        for (size_t i = 0; i < stored; i++) free(defs[i].path);
+    }
+    return rc;
+}
+
+/* Makes the servers see the current text of every file that mentions `name`. */
+static int sync_candidates(Sem *s, Docs *docs, const char *name) {
+    for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
+        const char *p = wsi_path(s->ix, i);
+        if (!wsi_has_ident(s->ix, i, name)) continue;
+        char *abs = abs_of(s, p);
+        bool handled = lsp_hub_handles(s->hub, abs);
+        int rc = 0;
+        if (handled) {
+            Doc *d = docs_get(docs, p);
+            rc = d ? lsp_hub_sync(s->hub, abs, d->text, d->len) : -1;
+        }
+        free(abs);
+        if (rc != 0) return rc;
+    }
+    return 0;
+}
+
+
+static void spans_free(struct Span *v, size_t n) { spans_free_impl(v, n); }
 
 /* ---- references ---- */
 int sem_references(Sem *s, const char *name, const char *kind, const char *scope, const char *path, J **out) {

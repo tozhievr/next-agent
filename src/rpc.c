@@ -165,10 +165,9 @@ static bool is_c_family(const char *p) {
     return false;
 }
 
-/* Non-C documents are outlined by a language server when one is available. */
-static bool use_lsp(Rpc *r, const char *target) {
-    return r->hub && !is_c_family(target) && lsp_hub_handles(r->hub, target);
-}
+/* Language servers are asked first; C-family files fall back to the built-in scanner when no server
+ * is installed or the request fails. */
+static bool use_lsp(Rpc *r, const char *target) { return r->hub && lsp_hub_handles(r->hub, target); }
 
 static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
     char *canon = store_canon(r->store, target);
@@ -184,7 +183,10 @@ static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool neste
 }
 
 static int outline_any(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
-    if (use_lsp(r, target)) return lsp_symbols(r, target, s, nested, out);
+    if (use_lsp(r, target)) {
+        if (lsp_symbols(r, target, s, nested, out) == 0) return 0;
+        if (!is_c_family(target)) return -1;
+    }
     OutlineCache *oc = outline_cache_of(r, target);
     return oc ? c23_outline_cached(oc, s, nested, out) : c23_outline(s, nested, out);
 }
@@ -193,10 +195,12 @@ static int select_any(Rpc *r, const char *target, const Snapshot *s, const char 
                       const char *scope, Symbol *out) {
     if (use_lsp(r, target)) {
         SymbolList all;
-        if (lsp_symbols(r, target, s, true, &all) != 0) return -1;
-        int rc = symbols_select(&all, name, kind, scope, out);
-        symbols_free(&all);
-        return rc;
+        if (lsp_symbols(r, target, s, true, &all) == 0) {
+            int rc = symbols_select(&all, name, kind, scope, out);
+            symbols_free(&all);
+            return rc;
+        }
+        if (!is_c_family(target)) return -1;
     }
     OutlineCache *oc = outline_cache_of(r, target);
     return oc ? c23_select_cached(oc, s, name, kind, scope, out) : c23_select(s, name, kind, scope, out);
