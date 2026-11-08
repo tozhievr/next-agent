@@ -7,7 +7,7 @@ Agents edit by *symbol* or *codepoint range* instead of re-reading whole files, 
 
 Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Windows SDK, Visual Studio, Python or SQLite is required: the result is a single `nextagent.exe` (~170 KB) that talks only to kernel32.
 
-> **Status: 0.20.1, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
+> **Status: 0.21.0, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
 
 ## Contents
 
@@ -47,7 +47,7 @@ One line (PowerShell, Windows x64): downloads the latest release, verifies its S
 irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
 ```
 
-A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.20.1"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
+A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.21.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
 
 ## Build
 
@@ -70,7 +70,7 @@ Two compilers are supported; both produce the same `build/nextagent.exe`.
 
 If a compiler is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"` or `$env:CLANG = "C:\Program Files\LLVM\bin\clang.exe"`.
 The clang path is verified here only by a syntax/warnings check; the full link runs in CI.
-The suite has 158 checks; the live-clangd ones are skipped when `clangd` is missing.
+The suite has 207 checks; the live-clangd ones are skipped when `clangd` is missing.
 
 ## Quick start
 

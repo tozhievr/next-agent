@@ -4,6 +4,7 @@
 #include "../src/json.h"
 #include "../src/lsp.h"
 #include "../src/platform.h"
+#include "../src/refactor.h"
 #include "../src/rpc.h"
 #include "../src/store.h"
 #include <stdio.h>
@@ -699,6 +700,130 @@ static J *call(Rpc *r, const char *req) {
     return a;
 }
 
+static bool history_undo_ok(Store *st) {
+    EditResult r;
+    if (store_undo(st, 0, NULL, &r) != 0) return false;
+    edit_result_free(&r);
+    char *a = view_text(st, "a.c");
+    bool ok = a && strstr(a, "int calc(int x)") != NULL && strstr(a, "area") == NULL;
+    free(a);
+    return ok;
+}
+
+static void test_refactor(void) {
+    g_test = "refactor";
+    char *ws = new_ws();
+    put_file(ws, "a.h", "#ifndef A_H\n#define A_H\nint calc(int x);\nvoid log_it(const char *fmt, ...);\n#endif\n");
+    put_file(ws, "a.c",
+             "/* calc(1) in a comment, \xc3\xa9\xc3\xa8 */\n#include \"a.h\"\n#include <stdio.h>\n"
+             "int calc(int x) { return x * 2; }\n"
+             "int run(void) {\n  const char *s = \"calc(2)\";\n  int v = calc(calc(3) + 1);\n"
+             "  struct { int calc; } m; m.calc = 4;\n  return v + m.calc + (s != 0);\n}\n"
+             "void log_it(const char *fmt, ...) { (void)fmt; }\n"
+             "int other(void) { log_it(\"x\", 1, 2); return calc(0); }\n");
+    Store *st = store_open(ws);
+    CHECK(st != NULL);
+    J *o = NULL;
+    CHECK(rf_references(st, "calc", NULL, true, &o) == 0);
+    CHECK(o && j_get(o, "count")->i == 8); /* decl, def, 3 calls, field decl, 2 member uses; none in comment/string */
+    json_free(o);
+    CHECK(rf_references(st, "calc", NULL, false, &o) == 0 && j_get(o, "count")->i == 6);
+    json_free(o);
+    CHECK_ERR(rf_references(st, "1bad", NULL, true, &o), "invalid parameter");
+
+    /* rename */
+    EditResult res;
+    RfCounts c;
+    CHECK_ERR(rf_rename(st, "calc", "if", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "non-keyword");
+    CHECK_ERR(rf_rename(st, "calc", "other", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "name_conflict");
+    CHECK_ERR(rf_rename(st, "calc", "area", NULL, true, false, 5, NULL, "t", NULL, &res, &c), "stale_rev");
+    CHECK_ERR(rf_rename(st, "nosuch", "area", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "symbol_not_found");
+    CHECK(rf_rename(st, "calc", "area", NULL, true, false, 0, "rn", "t", NULL, &res, &c) == 0);
+    CHECK(res.rev == 1 && res.paths.n == 2 && c.sites == 8);
+    edit_result_free(&res);
+    char *a = view_text(st, "a.c");
+    CHECK(strstr(a, "int area(int x)") != NULL);
+    CHECK(strstr(a, "area(area(3) + 1)") != NULL);
+    CHECK(strstr(a, "/* calc(1) in a comment") != NULL); /* comment untouched */
+    CHECK(strstr(a, "\"calc(2)\"") != NULL);             /* string untouched */
+    CHECK(strstr(a, "m.area = 4") != NULL);
+    free(a);
+    CHECK(history_undo_ok(st));
+
+    /* add_param: definition, prototype and 4 call sites; offsets after multibyte text */
+    CHECK_ERR(rf_add_param(st, "calc", "int mode", NULL, -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "default");
+    CHECK_ERR(rf_add_param(st, "calc", "int mode", "0", 9, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "position out of range");
+    CHECK_ERR(rf_add_param(st, "nofn", "int m", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "symbol_not_found");
+    CHECK(rf_add_param(st, "calc", "int mode", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    CHECK(c.sites == 2 && c.calls == 3); /* run: 2 calls, other: 1 call, member use has no parens -> not counted */
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "int calc(int x, int mode) {") != NULL);
+    CHECK(strstr(a, "calc(calc(3, 0) + 1, 0)") != NULL);
+    CHECK(strstr(a, "return calc(0, 0);") != NULL);
+    CHECK(strstr(a, "/* calc(1) in a comment") != NULL);
+    free(a);
+    char *h = view_text(st, "a.h");
+    CHECK(strstr(h, "int calc(int x, int mode);") != NULL);
+    free(h);
+    /* position 0 and variadic: new parameter goes before `...` */
+    CHECK(rf_add_param(st, "log_it", "int level", "3", 0, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    CHECK(rf_add_param(st, "log_it", "const char *tag", "\"t\"", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "void log_it(int level, const char *fmt, const char *tag, ...)") != NULL);
+    CHECK(strstr(a, "log_it(3, \"x\", \"t\", 1, 2)") != NULL);
+    free(a);
+    /* (void) and () parameter lists */
+    put_file(ws, "v.c", "int z(void);\nint z(void) { return 1; }\nint y(void) { return z(); }\nint w() { return z(); }\n");
+    CHECK(rf_add_param(st, "z", "int k", "5", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    char *v = view_text(st, "v.c");
+    CHECK_STR(v, "int z(int k);\nint z(int k) { return 1; }\nint y(void) { return z(5); }\nint w() { return z(5); }\n");
+    free(v);
+    CHECK(rf_add_param(st, "w", "int q", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    v = view_text(st, "v.c");
+    CHECK(strstr(v, "int w(int q) {") != NULL);
+    free(v);
+
+    /* add_include */
+    bool changed;
+    CHECK(rf_add_include(st, "a.c", "stdlib.h", true, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && changed);
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "#include <stdio.h>\n#include <stdlib.h>\nint calc") != NULL);
+    free(a);
+    CHECK(rf_add_include(st, "a.c", "stdlib.h", true, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && !changed);
+    CHECK(res.paths.n == 0);
+    edit_result_free(&res);
+    CHECK(rf_add_include(st, "a.h", "types.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && changed);
+    edit_result_free(&res);
+    h = view_text(st, "a.h");
+    CHECK(strstr(h, "#define A_H\n#include \"types.h\"\nint calc") != NULL); /* after the include guard */
+    free(h);
+    put_file(ws, "crlf.c", "int q;\r\nint r;\r\n");
+    CHECK(rf_add_include(st, "crlf.c", "q.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0);
+    edit_result_free(&res);
+    char *cr = view_text(st, "crlf.c");
+    CHECK_STR(cr, "#include \"q.h\"\r\n\r\nint q;\r\nint r;\r\n");
+    free(cr);
+    CHECK_ERR(rf_add_include(st, "a.c", "bad\"name.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed), "invalid parameter");
+
+    /* find_symbols and unflushed documents */
+    CHECK(edit1(st, "n.c", 0, 0, "int calc_extra(void) { return 0; }\n", STORE_NO_REV, NULL, NULL) == 0);
+    CHECK(rf_find_symbols(st, "CALC", NULL, 0, &o) == 0);
+    CHECK(j_get(o, "count")->i >= 1 && !j_get(o, "truncated")->b);
+    json_free(o);
+    CHECK(rf_find_symbols(st, "", "function", 2, &o) == 0 && j_get(o, "truncated")->b && j_get(o, "count")->i == 2);
+    json_free(o);
+    CHECK(rf_references(st, "calc_extra", NULL, true, &o) == 0 && j_get(o, "count")->i == 1); /* sees the unflushed file */
+    json_free(o);
+    store_close(st);
+    free(ws);
+}
+
 static void test_rpc(void) {
     g_test = "rpc";
     char *ws = new_ws();
@@ -758,7 +883,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 7);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 12);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -825,6 +950,7 @@ int main(void) {
     RUN(test_store_torn_tail_and_conflict);
     RUN(test_validator);
     RUN(test_c23);
+    RUN(test_refactor);
     RUN(test_lsp_codec_framing);
     RUN(test_lsp_diag);
     RUN(test_lsp_build);

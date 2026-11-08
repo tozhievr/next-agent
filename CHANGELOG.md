@@ -2,6 +2,14 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.21.0 — 2026-11-08
+
+### Added
+- M3 refactoring (syntactic, comment/string/`#include`-aware): `references`, `rename`, `add_param`, `add_include`, `find_symbols` as CLI commands, JSON-RPC methods and MCP tools. Multi-file edits commit as one revision and see unflushed documents.
+
+### Fixed
+- Test sources no longer depend on the compiler's encoding of non-ASCII string literals.
+
 ## 0.20.1 — 2026-11-06
 
 ### Added

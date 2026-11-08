@@ -1,6 +1,7 @@
 #include "rpc.h"
 #include "c23.h"
 #include "platform.h"
+#include "refactor.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -295,6 +296,99 @@ static int m_open(Rpc *r, const J *p, J **out) {
     return 0;
 }
 
+/* ------------------------------------------------------------ refactorings */
+static int opt_paths(const J *p, const char *key, StrList *out) {
+    sl_init(out);
+    const J *v = j_get(p, key);
+    if (!v || v->k == J_NULL) return 0;
+    if (v->k != J_ARR) return na_fail("invalid parameter: %s must be an array", key);
+    for (size_t i = 0; i < v->n; i++) {
+        if (!j_is_str(v->items[i])) {
+            sl_free(out);
+            return na_fail("invalid parameter: %s must contain strings", key);
+        }
+        sl_push(out, v->items[i]->s);
+    }
+    return 0;
+}
+
+static const char *session_of(Rpc *r) { return r->session ? r->session : "jsonrpc"; }
+
+static int m_references(Rpc *r, const J *p, J **out) {
+    const char *name;
+    bool members;
+    StrList only;
+    if (need_str(p, "name", &name) || opt_bool(p, "members", true, &members) || opt_paths(p, "paths", &only)) return -1;
+    int rc = rf_references(r->store, name, &only, members, out);
+    sl_free(&only);
+    return rc;
+}
+
+static int m_rename(Rpc *r, const J *p, J **out) {
+    const char *name, *new_name, *label;
+    bool members, allow;
+    int64_t if_rev;
+    StrList only;
+    if (need_str(p, "name", &name) || need_str(p, "new_name", &new_name) || opt_str(p, "label", &label) ||
+        opt_bool(p, "members", true, &members) || opt_bool(p, "allow_existing", false, &allow) ||
+        opt_int(p, "if_rev", STORE_NO_REV, &if_rev) || opt_paths(p, "paths", &only))
+        return -1;
+    EditResult res;
+    RfCounts c;
+    int rc = rf_rename(r->store, name, new_name, &only, members, allow, if_rev, label, session_of(r), validator_of(r), &res, &c);
+    sl_free(&only);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "sites", j_int((int64_t)c.sites));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_add_param(Rpc *r, const J *p, J **out) {
+    const char *function, *param, *def, *label;
+    int64_t pos, if_rev;
+    StrList only;
+    if (need_str(p, "function", &function) || need_str(p, "param", &param) || opt_str(p, "default", &def) ||
+        opt_int(p, "position", -1, &pos) || opt_str(p, "label", &label) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev) ||
+        opt_paths(p, "paths", &only))
+        return -1;
+    EditResult res;
+    RfCounts c;
+    int rc = rf_add_param(r->store, function, param, def, pos, &only, if_rev, label, session_of(r), validator_of(r), &res, &c);
+    sl_free(&only);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "declarations", j_int((int64_t)c.sites));
+    j_set(*out, "calls", j_int((int64_t)c.calls));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_add_include(Rpc *r, const J *p, J **out) {
+    const char *target, *header, *label;
+    bool system;
+    int64_t if_rev;
+    if (need_str(p, "target", &target) || need_str(p, "header", &header) || opt_bool(p, "system", false, &system) ||
+        opt_str(p, "label", &label) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev))
+        return -1;
+    EditResult res;
+    bool changed;
+    if (rf_add_include(r->store, target, header, system, if_rev, label, session_of(r), validator_of(r), &res, &changed) != 0)
+        return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "changed", j_bool(changed));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_find_symbols(Rpc *r, const J *p, J **out) {
+    const char *query, *kind;
+    int64_t limit;
+    if (need_str(p, "query", &query) || opt_str(p, "kind", &kind) || opt_int(p, "limit", 100, &limit)) return -1;
+    if (limit < 0) return na_fail("invalid parameter: limit must be non-negative");
+    return rf_find_symbols(r->store, query, kind, (size_t)limit, out);
+}
+
 typedef struct {
     const char *name;
     int (*fn)(Rpc *, const J *, J **);
@@ -303,7 +397,8 @@ typedef struct {
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
     {"replace_symbol", m_replace_symbol},       {"edit", m_edit},      {"history", m_history},
-    {"sync", m_sync},
+    {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
+    {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
 };
 
 /* 0 ok, -1 failure (na_errmsg), -2 unknown method */
@@ -390,6 +485,16 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\",\"enum\":[\"log\",\"undo\",\"redo\"]},\"n\":{\"type\":\"integer\"},\"rev\":{\"type\":\"integer\"}}}"));
     j_push(arr, tool_def("sync", "Flush committed revisions to disk.",
                          "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"));
+    j_push(arr, tool_def("references", "List identifier occurrences of a name across the workspace (syntactic).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"members\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("rename", "Rename an identifier across the workspace in one atomic revision (syntactic).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"new_name\":{\"type\":\"string\"},\"if_rev\":{\"type\":\"integer\"},\"members\":{\"type\":\"boolean\"},\"allow_existing\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"name\",\"new_name\"]}"));
+    j_push(arr, tool_def("add_param", "Add a parameter to a C function and an argument to every call site.",
+                         "{\"type\":\"object\",\"properties\":{\"function\":{\"type\":\"string\"},\"param\":{\"type\":\"string\"},\"default\":{\"type\":\"string\"},\"position\":{\"type\":\"integer\"},\"if_rev\":{\"type\":\"integer\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"function\",\"param\"]}"));
+    j_push(arr, tool_def("add_include", "Insert an #include after the last include (no-op if present).",
+                         "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"header\":{\"type\":\"string\"},\"system\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"header\"]}"));
+    j_push(arr, tool_def("find_symbols", "Search top-level symbols across the workspace by name substring.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     return arr;
 }
 
