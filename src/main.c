@@ -23,6 +23,7 @@ static void usage(void) {
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
           "  search QUERY [--word] [-i] [--context N] [--path SUBSTR] [--limit N]\n"
+          "  locate QUERY [--path SUBSTR] [--limit N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
           "  serve [--clangd[=EXE]|--lsp [--no-gate]]        JSON-RPC 2.0, one object per line on stdio\n"
           "  mcp [--clangd[=EXE]|--lsp [--no-gate]]         MCP stdio bridge\n",
@@ -426,6 +427,20 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "search", p);
+    } else if (strcmp(cmd, "locate") == 0) {
+        if (nargs < 1) goto bad;
+        J *p = j_obj();
+        j_set(p, "query", j_str(args[0]));
+        for (int k = 1; k < nargs; k++) {
+            int64_t n;
+            if (k + 1 < nargs && strcmp(args[k], "--path") == 0) j_set(p, "path", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(args[k], "--limit") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "limit", j_int(n)), k++;
+            else {
+                json_free(p);
+                goto bad;
+            }
+        }
+        code = run_method(&rpc, "hybrid_search", p);
     } else if (strcmp(cmd, "patch") == 0) {
         /* patch [FILE|-]: JSON {"edits":[{path,old,new,all}],"if_rev":N,"label":S} or just the edits array */
         Buf data;

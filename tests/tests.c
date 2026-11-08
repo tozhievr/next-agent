@@ -1016,7 +1016,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 16);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 17);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1529,7 +1529,37 @@ static void test_live_semantic(void) {
     free(ws);
 }
 
+static void test_hybrid(void) {
+    g_test = "hybrid";
+    char *ws = new_ws();
+    put_file(ws, "net.c", "int open_socket(int port) {\n  return port + 1;\n}\nint parse_config_file(const char *path) {\n  /* read the settings from disk */\n  return path != 0;\n}\n");
+    put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 2;\n}\n");
+    put_file(ws, "notes.c", "int unrelated(void) { return 0; }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"where do we parse the config\"}}");
+    const J *res = a ? j_get(a, "result") : NULL, *m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n >= 1);
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "parse_config_file") == 0);
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "path")->s, "net.c") == 0 && j_get(m->items[0], "start_line")->i == 4);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"hybrid_search\",\"params\":{\"query\":\"drawButton\",\"limit\":1}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n == 1 && strcmp(j_get(m->items[0], "symbol")->s, "draw_button") == 0); /* camelCase finds snake_case */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"hybrid_search\",\"params\":{\"query\":\"zzz_nothing\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 0);
+    json_free(a);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
+
     g_test = "agent_tools";
     char *ws = new_ws();
     put_file(ws, "a.c", "int f(void) {\r\n  return 1;\r\n}\r\nint g(void) {\r\n  return 2;\r\n}\r\n");
@@ -1613,6 +1643,7 @@ int main(int argc, char **argv) {
     RUN(test_lsp_hub);
     RUN(test_semantic);
     RUN(test_live_semantic);
+    RUN(test_hybrid);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

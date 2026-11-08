@@ -2,7 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.30.0 - 2026-11-08
+
+### Added
+- Hybrid search: `locate QUERY` (RPC/MCP `hybrid_search`) ranks functions and code chunks for a natural-language or identifier query. BM25 over code words (camelCase and snake_case are split, so `drawButton` finds `draw_button`), BM25 over symbol and path names and an exact-phrase signal are fused with reciprocal rank fusion. Deterministic, no libm, identical on Windows and Linux. No embeddings or model needed.
+
 ## 0.29.0 - 2026-11-08
+
 
 ### Added
 - Agent ergonomics (fewer calls, fewer tokens): `search` (grep over the index with context), `patch` (many literal replacements across files as one revision), `view --symbol NAME`, `--brief` compact output (`NEXTAGENT_BRIEF=1`).

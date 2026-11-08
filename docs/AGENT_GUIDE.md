@@ -183,6 +183,7 @@ Run the build. If it fails and you want to back out: `{"method":"history","param
 
 ```
 nextagent --brief search QUERY [--word] [-i] [--context N] [--path SUBSTR]   # grep: path:line: text
+nextagent --brief locate "how are edits flushed" [--limit N]   # ranked: best functions for a question
 nextagent --brief find QUERY [--kind K]                  # symbols by name, all indexed languages
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
@@ -198,7 +199,7 @@ Every command that changes text writes the result to disk immediately (`--no-syn
 
 ## 13. What does not exist
 
-Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, embeddings/semantic-similarity search (`search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, embedding-based semantic search (`locate` is lexical BM25 over code words and names, `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

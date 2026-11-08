@@ -656,6 +656,15 @@ static int m_search(Rpc *r, const J *p, J **out) {
     return sem_search(&s, query, word, icase, (size_t)context, path, (size_t)limit, out);
 }
 
+static int m_hybrid_search(Rpc *r, const J *p, J **out) {
+    const char *query, *path;
+    int64_t limit;
+    if (need_str(p, "query", &query) || opt_str(p, "path", &path) || opt_int(p, "limit", 10, &limit)) return -1;
+    if (limit < 0) return na_fail("invalid parameter: limit must be non-negative");
+    Sem s = sem_of(r);
+    return sem_hybrid(&s, query, path, (size_t)limit, out);
+}
+
 /* Several literal replacements in several files as one revision:
  * edits: [{path, old, new, all?}], each `old` must match exactly once unless `all`. */
 static int m_patch(Rpc *r, const J *p, J **out) {
@@ -758,7 +767,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -846,6 +855,8 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"old\",\"new\"]}"));
     j_push(arr, tool_def("search", "Grep the workspace: one hit per line with optional context (query is literal text).",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"word\":{\"type\":\"boolean\"},\"ignore_case\":{\"type\":\"boolean\"},\"context\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("hybrid_search", "Ranked code search for a natural-language or identifier query: BM25 over code words and symbol/path names plus exact phrase, fused. Returns the best functions/chunks, not lines.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
                          "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",
