@@ -226,10 +226,10 @@ tests/tests.c   test suite
 
 ## Limitations and not implemented
 
-- **Not implemented:** branches, offline brain, M3 refactorings (rename / references / add-param), three-way merge and file watcher, async writer, socket transport, M5b.
+- **Not implemented:** branches, offline brain, three-way merge and file watcher, async writer, socket transport, M5b.
 - The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
 - clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
-- The GitHub Actions workflows (`ci.yml`, `release.yml`) have **not been run yet**.
+- Refactorings (`references`, `rename`, `add_param`) are token-based and C-only; for other languages only outline/select/replace and the diagnostic gate go through LSP.
 
 See [CHANGELOG.md](CHANGELOG.md) and [docs/agent-plan.md](docs/agent-plan.md).
 
