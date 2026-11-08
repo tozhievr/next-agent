@@ -543,6 +543,7 @@ int lsp_hub_rename(LspHub *h, const char *abs_path, const char *text, size_t len
         json_free(res);
         return na_fail("rename_unsupported: the language server returned no edits");
     }
+
     const J *changes = j_get(res, "changes"), *docs = j_get(res, "documentChanges");
     if (changes && changes->k == J_OBJ)
         for (size_t i = 0; i < changes->n; i++) collect_edits(changes->items[i], changes->keys[i], out);

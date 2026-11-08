@@ -187,6 +187,8 @@ Example client configuration:
 | Zig, Lua | `zls`, `lua-language-server` |
 
 With the hub, `outline`, `select` and `replace_symbol` work on non-C files through `textDocument/documentSymbol` (`nested` returns children with `scope`), and the pre-commit diagnostic gate also vets edits to those files. Edits reach the server as ranged `didChange` notifications when it supports incremental sync. `lsp_servers` lists what is configured, installed and running.
+Verified live: clangd (C/C++), pyright (Python), typescript-language-server (TypeScript/JavaScript; the project must have `typescript` 5.x in its `node_modules`, otherwise the server fails to initialize and nextagent sees no symbols). On Windows start npm-installed servers as `node <path>/langserver.index.js --stdio` (a `.cmd` shim cannot be spawned directly). `tests/lspcheck.py` re-runs the check.
+
 Add or override servers in `<root>/.aed/lsp.json`:
 
 ```json

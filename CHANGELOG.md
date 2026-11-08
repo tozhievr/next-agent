@@ -2,6 +2,15 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.40.1 - 2026-11-09
+
+### Fixed
+- Language servers now get `workspaceFolders` in `initialize`. Without it pyright limited `rename` to the file the symbol is defined in (a rename of a function used in another module changed only the definition and left the callers broken).
+- `references`/`rename` no longer burn 8 s per candidate file waiting for diagnostics that lazy servers (pyright, typescript-language-server) never publish before a request: the wait ends when the server is silent for 1.5 s, and a server that never published anything gets one short wait only. 16 s became 3 s on a two-file workspace; clangd (which publishes eagerly) is unaffected.
+
+### Added
+- `tests/lspcheck.py`: live check of language servers through `serve --lsp` (outline, find_symbols, references, rename). Verified with clangd, pyright 1.1.x and typescript-language-server 5.x + TypeScript 5.9 (TypeScript 7 is not supported by that server).
+
 ## 0.40.0 - 2026-11-09
 
 ### Added

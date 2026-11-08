@@ -28,6 +28,8 @@ struct LspClient {
     size_t ndocs, capdocs;
     int sync_kind; /* textDocumentSync.change: 0 none, 1 full, 2 incremental */
     char *lang;    /* languageId override */
+    bool saw_report; /* the server has published diagnostics at least once */
+    bool no_push;    /* it did not within the first wait: it analyses lazily, so settling is not worth waiting for */
     size_t ranged, full;
 };
 
@@ -85,6 +87,7 @@ static void store_report(LspClient *c, const J *params) {
     const J *uri = j_get(params, "uri"), *diags = j_get(params, "diagnostics"), *ver = j_get(params, "version");
     if (!j_is_str(uri) || !diags || diags->k != J_ARR) return;
     J *report = j_obj();
+    c->saw_report = true;
     if (j_is_int(ver)) j_set(report, "version", j_int(ver->i));
     /* deep copy via round trip */
     char *dump = json_dump(diags);
@@ -228,6 +231,16 @@ LspClient *lsp_client_start(const char *root, const char *exe, const char *args,
     J *params = j_obj();
     j_set(params, "processId", j_null());
     j_set(params, "rootUri", j_str(rooturi));
+    { /* servers such as pyright limit rename/references to the open file without workspace folders */
+        const char *base = strrchr(root, '/');
+        const char *base2 = strrchr(root, 0x5c);
+        if (base2 > base) base = base2;
+        J *folders = j_arr(), *folder = j_obj();
+        j_set(folder, "uri", j_str(rooturi));
+        j_set(folder, "name", j_str(base && base[1] ? base + 1 : "workspace"));
+        j_push(folders, folder);
+        j_set(params, "workspaceFolders", folders);
+    }
     free(rooturi);
     J *caps = j_obj(), *general = j_obj(), *encs = j_arr();
     j_push(encs, j_str("utf-8"));
@@ -240,6 +253,9 @@ LspClient *lsp_client_start(const char *root, const char *exe, const char *args,
     j_set(ds, "hierarchicalDocumentSymbolSupport", j_bool(true));
     j_set(td, "documentSymbol", ds);
     j_set(caps, "textDocument", td);
+    J *wsc = j_obj();
+    j_set(wsc, "workspaceFolders", j_bool(true));
+    j_set(caps, "workspace", wsc);
     j_set(params, "capabilities", caps);
     J *res = NULL;
     if (clangd_request(c, "initialize", params, &res) != 0) {
@@ -459,9 +475,12 @@ bool lsp_client_settle(LspClient *c, const char *abs_path, int budget_ms) {
     char *uri = lsp_path_to_uri(abs_path);
     OpenDoc *d = find_doc(c, uri);
     int64_t want = d ? d->version : 0;
+    /* a server that has never published diagnostics gets one short wait; if none arrive it is lazy
+     * (pyright, tsserver publish only after a request) and later settles return at once */
+    if (!c->saw_report && budget_ms > 2000) budget_ms = 2000;
     uint64_t deadline = pf_now_ms() + (uint64_t)(budget_ms < c->timeout_ms ? budget_ms : c->timeout_ms);
     bool ok = false;
-    while (d) {
+    while (d && !c->no_push) {
         J *r = find_report(c, uri);
         const J *ver = r ? j_get(r, "version") : NULL;
         if (j_is_int(ver) && ver->i >= want) {
@@ -469,8 +488,17 @@ bool lsp_client_settle(LspClient *c, const char *abs_path, int budget_ms) {
             break;
         }
         uint64_t now = pf_now_ms();
-        if (now >= deadline || pump(c, (int)(deadline - now), -1, NULL) < 0) break;
+        if (now >= deadline) break;
+        int slice = (int)(deadline - now);
+        if (slice > 1500) slice = 1500; /* a server that says nothing for 1.5 s is not going to publish */
+        int pr = pump(c, slice, -1, NULL);
+        if (pr < 0 || (pr == 0 && slice == 1500)) break;
     }
+    if (getenv("NEXTAGENT_TRACE"))
+        fprintf(stderr, "trace: settle %s want v%lld ok=%d report=%s (%d ms)\n", uri, (long long)want, ok,
+                find_report(c, uri) ? json_dump(find_report(c, uri)) : "none",
+                (int)(pf_now_ms() - (deadline - (uint64_t)(budget_ms < c->timeout_ms ? budget_ms : c->timeout_ms))));
+    if (!ok && d && !c->saw_report) c->no_push = true;
     free(uri);
     return ok;
 }
