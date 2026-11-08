@@ -109,6 +109,7 @@ nextagent --root example sync            # writes demo.c to disk
 nextagent [--root DIR] [--version] <command>
 
 view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
+context QUERY [--budget TOKENS]                   best code for a question as one pack
 locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)
 search QUERY [--word] [-i] [--context N]         grep over the workspace index
 replace PATH --old S --new S [--all]              literal replacement

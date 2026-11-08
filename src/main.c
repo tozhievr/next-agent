@@ -23,6 +23,7 @@ static void usage(void) {
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
           "  search QUERY [--word] [-i] [--context N] [--path SUBSTR] [--limit N]\n"
+          "  context QUERY [--budget TOKENS] [--path SUBSTR]   best code for a question, cut to a token budget\n"
           "  locate QUERY [--path SUBSTR] [--limit N] [--embed N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
           "  serve [--clangd[=EXE]|--lsp [--no-gate]]        JSON-RPC 2.0, one object per line on stdio\n"
@@ -50,6 +51,20 @@ static bool print_brief(const char *method, const J *res) {
             const J *p = j_get(syms->items[i], "path");
             brief_symbol(syms->items[i], j_is_str(p) ? p->s : NULL);
         }
+        return true;
+    }
+    const J *blocks = j_get(res, "blocks");
+    if (blocks && blocks->k == J_ARR) { /* context pack: a header line per block, then its code */
+        for (size_t i = 0; i < blocks->n; i++) {
+            const J *b = blocks->items[i], *sym = j_get(b, "symbol");
+            printf("## %s:%lld-%lld%s%s\n", j_get(b, "path")->s, (long long)j_get(b, "start_line")->i, (long long)j_get(b, "end_line")->i,
+                   sym ? " " : "", sym ? sym->s : "");
+            fputs(j_get(b, "text")->s, stdout);
+            size_t tl = j_get(b, "text")->slen;
+            if (tl == 0 || j_get(b, "text")->s[tl - 1] != '\n') putchar('\n');
+        }
+        printf("-- ~%lld/%lld tokens%s\n", (long long)j_get(res, "tokens")->i, (long long)j_get(res, "budget")->i,
+               j_get(res, "truncated")->b ? ", truncated" : "");
         return true;
     }
     const J *matches = j_get(res, "matches");
@@ -433,6 +448,21 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "search", p);
+    } else if (strcmp(cmd, "context") == 0) {
+        if (nargs < 1) goto bad;
+        J *p = j_obj();
+        j_set(p, "query", j_str(args[0]));
+        for (int k = 1; k < nargs; k++) {
+            int64_t n;
+            if (k + 1 < nargs && strcmp(args[k], "--path") == 0) j_set(p, "path", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(args[k], "--budget") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "budget", j_int(n)), k++;
+            else if (k + 1 < nargs && strcmp(args[k], "--embed") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "embed_budget", j_int(n)), k++;
+            else {
+                json_free(p);
+                goto bad;
+            }
+        }
+        code = run_method(&rpc, "context", p);
     } else if (strcmp(cmd, "locate") == 0) {
         if (nargs < 1) goto bad;
         J *p = j_obj();

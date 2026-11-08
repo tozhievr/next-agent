@@ -2,7 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.34.0 - 2026-11-09
+
+### Added
+- `context QUERY [--budget TOKENS]` (RPC/MCP `context`): a ready-to-read context pack for a question. The best chunks of `hybrid_search` as code with `## path:lines symbol` headers, overlapping blocks dropped, cut at a line to fit the token budget (default 4000, about 4 bytes per token). One call instead of search + several views.
+
 ## 0.33.0 - 2026-11-09
+
 
 ### Added
 - `replace PATH --lines A-B (--new S | --new-file F)` (RPC `replace_text` with `start_line`/`end_line`): replaces whole lines without quoting the old text. Line endings of the file are kept, the final newline is supplied, an empty replacement deletes the lines.

@@ -1017,7 +1017,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 17);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 18);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1564,6 +1564,15 @@ static void test_hybrid(void) {
     res = a ? j_get(a, "result") : NULL;
     m = res ? j_get(res, "matches") : NULL;
     CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "compute_checksum") == 0); /* the doc comment is part of the chunk */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"context\",\"params\":{\"query\":\"sum the bytes of a buffer\",\"budget\":200}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "blocks") : NULL;
+    CHECK(m && m->n >= 1 && strstr(j_get(m->items[0], "text")->s, "compute_checksum") && j_get(res, "tokens")->i <= 200);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"context\",\"params\":{\"query\":\"draw\",\"budget\":100}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "blocks")->n >= 1 && j_get(res, "tokens")->i <= 100); /* never over budget */
     json_free(a);
     a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"hybrid_search\",\"params\":{\"query\":\"unrelated\"}}");
     res = a ? j_get(a, "result") : NULL;

@@ -716,6 +716,82 @@ static int m_search(Rpc *r, const J *p, J **out) {
     return sem_search(&s, query, word, icase, (size_t)context, path, (size_t)limit, out);
 }
 
+/* Context pack: the best code for a question, as text, within a token budget (about 4 bytes per token).
+ * Blocks are the ranked chunks of hybrid_search, overlapping ones are dropped, the last one is cut at a line. */
+static int m_context(Rpc *r, const J *p, J **out) {
+    const char *query, *path;
+    int64_t budget, embed;
+    if (need_str(p, "query", &query) || opt_str(p, "path", &path) || opt_int(p, "budget", 4000, &budget) ||
+        opt_int(p, "embed_budget", 256, &embed))
+        return -1;
+    if (budget < 100 || budget > 200000) return na_fail("invalid parameter: budget must be 100..200000 tokens");
+    Sem s = sem_of(r);
+    J *res;
+    if (sem_hybrid(&s, query, path, 40, (size_t)embed, &res) != 0) return -1;
+    const J *m = j_get(res, "matches");
+    J *blocks = j_arr();
+    size_t cap = (size_t)budget * 4, used = 0;
+    bool truncated = false;
+    for (size_t i = 0; m && i < m->n && !truncated; i++) {
+        const J *h = m->items[i];
+        const char *rel = j_get(h, "path")->s;
+        int64_t a = j_get(h, "start_line")->i, b = j_get(h, "end_line")->i;
+        bool overlap = false;
+        for (size_t k = 0; k < blocks->n && !overlap; k++) {
+            const J *o = blocks->items[k];
+            overlap = strcmp(j_get(o, "path")->s, rel) == 0 && a <= j_get(o, "end_line")->i && b >= j_get(o, "start_line")->i;
+        }
+        if (overlap) continue;
+        char *text = NULL;
+        size_t len;
+        if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+            free(text);
+            continue;
+        }
+        size_t from = 0, to = 0, line = 1;
+        while (line < (size_t)a && from < len) {
+            if (text[from++] == '\n') line++;
+        }
+        to = from;
+        int64_t last = a - 1;
+        while (line <= (size_t)b && to < len) {
+            size_t e = to;
+            while (e < len && text[e] != '\n') e++;
+            if (e < len) e++;
+            if (used + (e - from) > cap) {
+                truncated = true;
+                break;
+            }
+            to = e;
+            last = (int64_t)line;
+            line++;
+        }
+        if (last >= a && to > from) {
+            J *o = j_obj();
+            j_set(o, "path", j_str(rel));
+            j_set(o, "start_line", j_int(a));
+            j_set(o, "end_line", j_int(last));
+            const J *sym = j_get(h, "symbol");
+            if (sym) j_set(o, "symbol", j_str(sym->s));
+            j_set(o, "score", j_int(j_get(h, "score")->i));
+            j_set(o, "text", j_strn(text + from, to - from));
+            j_push(blocks, o);
+            used += to - from;
+        }
+        free(text);
+    }
+    J *o = j_obj();
+    j_set(o, "tokens", j_int((int64_t)(used / 4)));
+    j_set(o, "budget", j_int(budget));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "blocks", blocks);
+    const J *em = j_get(res, "embedding");
+    if (em && j_get(em, "error")) j_set(o, "embedding_error", j_str(j_get(em, "error")->s));
+    json_free(res);
+    *out = o;
+    return 0;
+}
+
 static int m_hybrid_search(Rpc *r, const J *p, J **out) {
     const char *query, *path;
     int64_t limit, budget;
@@ -830,7 +906,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -920,6 +996,8 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"word\":{\"type\":\"boolean\"},\"ignore_case\":{\"type\":\"boolean\"},\"context\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     j_push(arr, tool_def("hybrid_search", "Ranked code search for a natural-language or identifier query: BM25 over code words and symbol/path names plus exact phrase, fused. Returns the best functions/chunks, not lines.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"embed_budget\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("context", "Context pack for a question: the most relevant functions/chunks as ready-to-read code, ranked by hybrid_search and cut to a token budget (default 4000). Use this first instead of several searches and views.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"budget\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"}},\"required\":[\"query\"]}"));
     j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
                          "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",
