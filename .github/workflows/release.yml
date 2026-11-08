@@ -43,7 +43,10 @@ jobs:
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco upgrade llvm -y --no-progress; if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }; $env:Path = "C:\Program Files\LLVMin;$env:Path"; "C:\Program Files\LLVMin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH; clang --version
+        run: |
+          choco upgrade llvm -y --no-progress
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build and test
         run: python build.py test --target ${{ matrix.target }}
       - name: Parity
