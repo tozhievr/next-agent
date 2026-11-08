@@ -189,6 +189,7 @@ nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
 nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
 nextagent replace PATH --old S --new S [--all]           # literal replacement, unique match required
+nextagent replace PATH --lines 10-14 --new-file F        # swap whole lines (no old text needed; empty --new deletes)
 nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole function/type
 nextagent patch FILE|-                                   # [{path,old,new,all}] across files, ONE revision
 nextagent references NAME [--path P] | rename NAME NEW | add-param FUNC "int x" --default 0

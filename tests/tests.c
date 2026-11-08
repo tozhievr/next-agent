@@ -1702,6 +1702,21 @@ static void test_agent_tools(void) {
     CHECK(strstr(err_of(a), "ambiguous_text") != NULL);
     json_free(a);
     CHECK(store_head(st) == head + 1); /* a rejected patch changes nothing */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":2,\"end_line\":3,\"new\":\"  return 7;\\n}\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strncmp(va, "int f(void) {\r\n  return 7;\r\n}\r\nint g(void) {", 44) == 0); /* CRLF kept, trailing newline supplied */
+    free(va);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":4,\"end_line\":6,\"new\":\"\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strcmp(va, "int f(void) {\r\n  return 7;\r\n}\r\n") == 0); /* an empty replacement deletes the lines */
+    free(va);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":9,\"new\":\"x\"}}");
+    CHECK(strstr(err_of(a), "out of range") != NULL);
+    json_free(a);
     rpc_release(&r);
     store_close(st);
     free(ws);

@@ -112,6 +112,7 @@ view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
 locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)
 search QUERY [--word] [-i] [--context N]         grep over the workspace index
 replace PATH --old S --new S [--all]              literal replacement
+replace PATH --lines A-B --new-file F             replace whole lines
 replace-symbol PATH NAME --new-file F             rewrite one symbol
 patch [FILE|-]                    edits [{path,old,new,all}] across files, one revision
 references/rename/add-param/find semantic through language servers (serve --lsp)

@@ -296,8 +296,68 @@ static char *adapt_eol(const Snapshot *s, const char *in, size_t n, size_t *outl
     return buf_take(&b);
 }
 
-/* Replaces literal text; the match must be unique unless `all` is set (like a precise patch). */
+/* Replaces whole lines start_line..end_line (1-based, inclusive) of a document. The replacement keeps the
+ * file's line endings and a missing final newline is added when the replaced lines had one; an empty
+ * replacement deletes the lines. */
+static int replace_lines(Rpc *r, const J *p, J **out) {
+    const char *target, *repl, *label;
+    int64_t a_line, b_line, if_rev;
+    if (need_str(p, "target", &target) || need_str(p, "new", &repl) || opt_int(p, "start_line", 0, &a_line) ||
+        opt_int(p, "end_line", 0, &b_line) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev) || opt_str(p, "label", &label))
+        return -1;
+    if (b_line == 0) b_line = a_line;
+    Snapshot *s;
+    if (store_view(r->store, target, &s) != 0) return -1;
+    size_t nl = 0;
+    for (size_t i = 0; i < s->len; i++)
+        if (s->text[i] == '\n') nl++;
+    if (s->len > 0 && s->text[s->len - 1] != '\n') nl++;
+    if (a_line < 1 || b_line < a_line || (size_t)b_line > nl) {
+        snap_free(s);
+        return na_fail("invalid parameter: lines %lld-%lld out of range (%s has %zu lines)", (long long)a_line, (long long)b_line, target, nl);
+    }
+    size_t from = 0, to, line = 1;
+    for (; line < (size_t)a_line; line++) {
+        while (s->text[from] != '\n') from++;
+        from++;
+    }
+    to = from;
+    for (; line <= (size_t)b_line; line++) {
+        while (to < s->len && s->text[to] != '\n') to++;
+        if (to < s->len) to++;
+    }
+
+    bool had_eol = to > from && s->text[to - 1] == '\n', crlf = to - from >= 2 && s->text[to - 2] == '\r';
+    size_t rlen;
+    char *rep = adapt_eol(s, repl, strlen(repl), &rlen);
+    Buf nb;
+    buf_init(&nb);
+    buf_put(&nb, rep, rlen);
+    if (rlen > 0 && had_eol && rep[rlen - 1] != '\n') buf_puts(&nb, crlf ? "\r\n" : "\n");
+    free(rep);
+    if (if_rev == STORE_NO_REV) if_rev = store_head(r->store);
+    ChangeSet cs;
+    cs_init(&cs);
+    size_t cp_from = utf8_cp_count(s->text, from);
+    cs_add(&cs, cp_from, cp_from + utf8_cp_count(s->text + from, to - from), nb.p ? nb.p : "", nb.len);
+    EditResult res;
+    const char *names[1] = {target};
+    int rc = store_edit(r->store, names, &cs, 1, if_rev, label ? label : "replace_lines", r->session ? r->session : "jsonrpc",
+                        validator_of(r), &res);
+    cs_free(&cs);
+    buf_free(&nb);
+    snap_free(s);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "replacements", j_int(1));
+    edit_result_free(&res);
+    return 0;
+}
+
+/* Replaces literal text; the match must be unique unless `all` is set (like a precise patch).
+ * With start_line (and optionally end_line) it replaces those whole lines instead and `old` is not needed. */
 static int m_replace_text(Rpc *r, const J *p, J **out) {
+    if (j_get(p, "start_line")) return replace_lines(r, p, out);
     const char *target, *old, *repl, *label;
     bool all;
     int64_t if_rev;

@@ -8,7 +8,7 @@
 static void usage(void) {
     fputs("usage: nextagent [--root DIR] [--brief] [--no-sync] [--version] <command> [args]\n"
           "  view PATH [--lines A-B | --symbol NAME [--kind K] [--scope S]] [--raw]\n"
-          "  replace PATH (--old S|--old-file F) (--new S|--new-file F) [--all] [--if-rev N]\n"
+          "  replace PATH (--old S|--old-file F | --lines A-B) (--new S|--new-file F) [--all] [--if-rev N]\n"
           "  replace-symbol PATH NAME (--new S|--new-file F) [--kind K] [--scope S] [--if-rev N]\n"
           "  edit [--request FILE]          JSON request {ops:[{path,start,end,text}],if_rev,label}\n"
           "  outline PATH [--nested]\n"
@@ -289,7 +289,8 @@ int main(int argc, char **argv) {
         if (sym) j_set(p, "name", j_str(args[1]));
         const char *old = NULL, *neu = NULL;
         char *old_buf = NULL, *new_buf = NULL;
-        bool ok = true;
+        bool ok = true, by_lines = false;
+        int64_t ra = 0, rb = 0;
         for (int k = npos; k < nargs && ok; k++) {
             int64_t n;
             const char *a = args[k];
@@ -297,20 +298,25 @@ int main(int argc, char **argv) {
             else if (k + 1 < nargs && !sym && strcmp(a, "--old-file") == 0) ok = read_text(args[++k], &old_buf) == 0, old = old_buf;
             else if (k + 1 < nargs && strcmp(a, "--new") == 0) neu = args[++k];
             else if (k + 1 < nargs && strcmp(a, "--new-file") == 0) ok = read_text(args[++k], &new_buf) == 0, neu = new_buf;
-            else if (!sym && strcmp(a, "--all") == 0) j_set(p, "all", j_bool(true));
+            else if (k + 1 < nargs && !sym && strcmp(a, "--lines") == 0 && parse_range(args[k + 1], &ra, &rb) == 0) {
+                j_set(p, "start_line", j_int(ra));
+                j_set(p, "end_line", j_int(rb));
+                by_lines = true;
+                k++;
+            } else if (!sym && strcmp(a, "--all") == 0) j_set(p, "all", j_bool(true));
             else if (k + 1 < nargs && sym && strcmp(a, "--kind") == 0) j_set(p, "kind", j_str(args[++k]));
             else if (k + 1 < nargs && sym && strcmp(a, "--scope") == 0) j_set(p, "scope", j_str(args[++k]));
             else if (k + 1 < nargs && strcmp(a, "--label") == 0) j_set(p, "label", j_str(args[++k]));
             else if (k + 1 < nargs && strcmp(a, "--if-rev") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "if_rev", j_int(n)), k++;
             else ok = false;
         }
-        if (!ok || !neu || (!sym && !old)) {
+        if (!ok || !neu || (!sym && !old && !by_lines)) {
             free(old_buf);
             free(new_buf);
             json_free(p);
             goto bad;
         }
-        if (!sym) j_set(p, "old", j_str(old));
+        if (!sym && old) j_set(p, "old", j_str(old));
         j_set(p, sym ? "replacement" : "new", j_str(neu));
         if (sym && !j_get(p, "if_rev")) j_set(p, "if_rev", j_int(store_head(store)));
         free(old_buf);
