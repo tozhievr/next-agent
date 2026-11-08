@@ -682,6 +682,7 @@ static void emit_symbol(SymbolList *out, const CpMap *m, const BSym *b) {
     s->scope = na_strdup(b->scope);
     s->start = cpmap_cp(m, b->bs);
     s->end = cpmap_cp(m, b->be);
+    s->sel = (size_t)-1;
     size_t line = 1, col = 0;
     snap_position(m->snap, s->start, &line, &col);
     s->line = line;

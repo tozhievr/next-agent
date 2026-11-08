@@ -172,6 +172,8 @@ static LspClient *client_for(LspHub *h, const char *path, Server **srv_out) {
 
 bool lsp_hub_handles(LspHub *h, const char *path) { return client_for(h, path, NULL) != NULL; }
 
+bool lsp_hub_configured(LspHub *h, const char *path) { return match(h, path) != NULL; }
+
 /* ---------------------------------------------------------------- LspOps */
 static void remember(LspHub *h, const char *uri, Server *s) {
     for (size_t i = 0; i < h->nuris; i++)
@@ -262,7 +264,7 @@ static bool pos_to_offset(const Conv *cv, const J *pos, size_t *off) {
     return lsp_position_to_offset(cv->text, cv->len, (size_t)l->i, (size_t)ch->i, cv->enc, off) == 0;
 }
 
-static void add_symbol(Conv *cv, const J *item, const char *scope, const J *range) {
+static void add_symbol(Conv *cv, const J *item, const char *scope, const J *range, const J *sel) {
     const J *name = j_get(item, "name"), *kind = j_get(item, "kind");
     if (!j_is_str(name) || !range) return;
     size_t s, e;
@@ -279,6 +281,11 @@ static void add_symbol(Conv *cv, const J *item, const char *scope, const J *rang
     sym->scope = na_strdup(scope);
     sym->start = s;
     sym->end = e;
+    sym->sel = (size_t)-1;
+    {
+        size_t so;
+        if (sel && pos_to_offset(cv, j_get(sel, "start"), &so) && so >= s && so <= e) sym->sel = so;
+    }
     const J *sl = j_get(j_get(range, "start"), "line"), *sc = j_get(j_get(range, "start"), "character");
     sym->line = (size_t)sl->i + 1;
     sym->column = (size_t)sc->i;
@@ -296,7 +303,7 @@ static void walk(Conv *cv, const J *arr, const char *scope, int depth) {
         const char *sc = scope;
         if (!children && j_is_str(container)) sc = container->s;
         bool top_level = depth == 0 && !sc[0];
-        if (top_level || cv->nested) add_symbol(cv, it, sc, range);
+        if (top_level || cv->nested) add_symbol(cv, it, sc, range, j_get(it, "selectionRange"));
         if (children) {
             const J *name = j_get(it, "name");
             Buf b;
@@ -362,3 +369,190 @@ J *lsp_hub_status(LspHub *h) {
 }
 
 LspClient *lsp_hub_client(LspHub *h, const char *path) { return client_for(h, path, NULL); }
+
+/* ---------------------------------------------------------------- semantic requests */
+void lsp_locs_free(LspLocs *l) {
+    for (size_t i = 0; i < l->n; i++) {
+        free(l->v[i].path);
+        free(l->v[i].text);
+    }
+    free(l->v);
+    memset(l, 0, sizeof *l);
+}
+
+static int hexval(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+char *lsp_uri_to_path(const char *uri) {
+    if (strncmp(uri, "file://", 7) != 0) return NULL;
+    const char *p = uri + 7;
+    Buf b;
+    buf_init(&b);
+    for (; *p; p++) {
+        int hi, lo;
+        if (*p == '%' && (hi = hexval(p[1])) >= 0 && (lo = hexval(p[2])) >= 0) {
+            buf_putc(&b, (char)(hi * 16 + lo));
+            p += 2;
+        } else {
+            buf_putc(&b, *p);
+        }
+    }
+    char *raw = buf_take(&b);
+    const char *q = raw;
+    if (q[0] == '/' && ((q[1] >= 'a' && q[1] <= 'z') || (q[1] >= 'A' && q[1] <= 'Z')) && q[2] == ':') q++;
+    char *norm = path_normalize(q);
+    free(raw);
+    return norm;
+}
+
+PosEnc lsp_hub_encoding(LspHub *h, const char *abs_path) {
+    PosEnc enc = ENC_UTF16;
+    LspClient *c = client_for(h, abs_path, NULL);
+    if (c) pos_enc_parse(clangd_encoding(c), &enc);
+    return enc;
+}
+
+int lsp_hub_sync(LspHub *h, const char *abs_path, const char *text, size_t len) {
+    Server *s;
+    LspClient *c = client_for(h, abs_path, &s);
+    if (!c) return na_fail("no_language_server: %s (%s)", abs_path, s && s->error ? s->error : "no server configured");
+    char *uri = NULL;
+    if (lsp_client_sync(c, abs_path, text, len, &uri) != 0) return -1;
+    free(uri);
+    return 0;
+}
+
+static void loc_add(LspLocs *l, char *path, size_t sl, size_t sc, size_t el, size_t ec, const char *text, size_t tlen,
+                    bool has_text) {
+    if (l->n == l->cap) {
+        l->cap = l->cap ? l->cap * 2 : 16;
+        l->v = na_realloc(l->v, l->cap * sizeof *l->v);
+    }
+    LspLoc *x = &l->v[l->n++];
+    x->path = path;
+    x->sl = sl;
+    x->sc = sc;
+    x->el = el;
+    x->ec = ec;
+    x->text = has_text ? na_strndup(text, tlen) : NULL;
+}
+
+static bool range_of(const J *range, size_t *sl, size_t *sc, size_t *el, size_t *ec) {
+    const J *a = range ? j_get(range, "start") : NULL, *b = range ? j_get(range, "end") : NULL;
+    if (!a || !b) return false;
+    const J *al = j_get(a, "line"), *ac = j_get(a, "character"), *bl = j_get(b, "line"), *bc = j_get(b, "character");
+    if (!j_is_int(al) || !j_is_int(ac) || !j_is_int(bl) || !j_is_int(bc) || al->i < 0 || ac->i < 0 || bl->i < 0 || bc->i < 0)
+        return false;
+    *sl = (size_t)al->i;
+    *sc = (size_t)ac->i;
+    *el = (size_t)bl->i;
+    *ec = (size_t)bc->i;
+    return true;
+}
+
+static J *text_document_position(LspClient *c, const char *abs_path, const char *text, size_t len, size_t offset) {
+    char *uri = NULL;
+    if (lsp_client_sync(c, abs_path, text, len, &uri) != 0) return NULL;
+    PosEnc enc = ENC_UTF16;
+    pos_enc_parse(clangd_encoding(c), &enc);
+    size_t line, ch;
+    if (lsp_offset_to_position(text, len, offset, enc, &line, &ch) != 0) {
+        free(uri);
+        na_seterr("invalid position in %s", abs_path);
+        return NULL;
+    }
+    J *td = j_obj(), *pos = j_obj(), *params = j_obj();
+    j_set(td, "uri", j_str(uri));
+    free(uri);
+    j_set(pos, "line", j_int((int64_t)line));
+    j_set(pos, "character", j_int((int64_t)ch));
+    j_set(params, "textDocument", td);
+    j_set(params, "position", pos);
+    return params;
+}
+
+int lsp_hub_references(LspHub *h, const char *abs_path, const char *text, size_t len, size_t offset,
+                       bool include_declaration, LspLocs *out) {
+    memset(out, 0, sizeof *out);
+    Server *s;
+    LspClient *c = client_for(h, abs_path, &s);
+    if (!c) return na_fail("no_language_server: %s (%s)", abs_path, s && s->error ? s->error : "no server configured");
+    J *params = text_document_position(c, abs_path, text, len, offset);
+    if (!params) return -1;
+    J *ctx = j_obj();
+    j_set(ctx, "includeDeclaration", j_bool(include_declaration));
+    j_set(params, "context", ctx);
+    J *res = NULL;
+    if (clangd_request(c, "textDocument/references", params, &res) != 0) return -1;
+    if (res && res->k == J_ARR) {
+        for (size_t i = 0; i < res->n; i++) {
+            const J *it = res->items[i];
+            const J *uri = j_get(it, "uri");
+            if (!j_is_str(uri)) uri = j_get(it, "targetUri");
+            const J *range = j_get(it, "range");
+            if (!range) range = j_get(it, "targetSelectionRange");
+            size_t sl, sc, el, ec;
+            char *path = j_is_str(uri) ? lsp_uri_to_path(uri->s) : NULL;
+            if (!path || !range_of(range, &sl, &sc, &el, &ec)) {
+                free(path);
+                continue;
+            }
+            loc_add(out, path, sl, sc, el, ec, NULL, 0, false);
+        }
+    }
+    json_free(res);
+    return 0;
+}
+
+static void collect_edits(const J *edits, const char *uri, LspLocs *out) {
+    char *path = lsp_uri_to_path(uri);
+    if (!path || !edits || edits->k != J_ARR) {
+        free(path);
+        return;
+    }
+    for (size_t i = 0; i < edits->n; i++) {
+        const J *e = edits->items[i], *nt = j_get(e, "newText");
+        size_t sl, sc, el, ec;
+        if (!j_is_str(nt) || !range_of(j_get(e, "range"), &sl, &sc, &el, &ec)) continue;
+        loc_add(out, na_strdup(path), sl, sc, el, ec, nt->s, nt->slen, true);
+    }
+    free(path);
+}
+
+int lsp_hub_rename(LspHub *h, const char *abs_path, const char *text, size_t len, size_t offset,
+                   const char *new_name, LspLocs *out) {
+    memset(out, 0, sizeof *out);
+    Server *s;
+    LspClient *c = client_for(h, abs_path, &s);
+    if (!c) return na_fail("no_language_server: %s (%s)", abs_path, s && s->error ? s->error : "no server configured");
+    J *params = text_document_position(c, abs_path, text, len, offset);
+    if (!params) return -1;
+    j_set(params, "newName", j_str(new_name));
+    J *res = NULL;
+    if (clangd_request(c, "textDocument/rename", params, &res) != 0) return -1;
+    if (!res || res->k != J_OBJ) {
+        json_free(res);
+        return na_fail("rename_unsupported: the language server returned no edits");
+    }
+    const J *changes = j_get(res, "changes"), *docs = j_get(res, "documentChanges");
+    if (changes && changes->k == J_OBJ)
+        for (size_t i = 0; i < changes->n; i++) collect_edits(changes->items[i], changes->keys[i], out);
+    if (docs && docs->k == J_ARR) {
+        for (size_t i = 0; i < docs->n; i++) {
+            const J *d = docs->items[i], *td = j_get(d, "textDocument");
+            if (j_get(d, "kind")) { /* create / rename / delete file operations are not applied */
+                lsp_locs_free(out);
+                json_free(res);
+                return na_fail("rename_unsupported: the server asked for file operations");
+            }
+            const J *uri = td ? j_get(td, "uri") : NULL;
+            if (j_is_str(uri)) collect_edits(j_get(d, "edits"), uri->s, out);
+        }
+    }
+    json_free(res);
+    return 0;
+}

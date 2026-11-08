@@ -1,4 +1,5 @@
 #include "rpc.h"
+#include "semantic.h"
 #include "c23.h"
 #include "platform.h"
 #include "refactor.h"
@@ -153,6 +154,8 @@ void rpc_release(Rpc *r) {
         outline_cache_free(r->caches[i]);
     }
     r->ncaches = 0;
+    wsi_free(r->index);
+    r->index = NULL;
 }
 
 static bool is_c_family(const char *p) {
@@ -404,32 +407,72 @@ static int opt_paths(const J *p, const char *key, StrList *out) {
 
 static const char *session_of(Rpc *r) { return r->session ? r->session : "jsonrpc"; }
 
+static bool no_server(void) { return strncmp(na_errmsg(), "no_language_server", 18) == 0; }
+
+/* The semantic engine (workspace index + language servers). */
+static Sem sem_of(Rpc *r) {
+    if (!r->index) r->index = wsi_new(r->store, r->hub);
+    Sem s = {r->store, r->hub, r->index};
+    return s;
+}
+
 static int m_references(Rpc *r, const J *p, J **out) {
-    const char *name;
+    const char *name, *kind, *scope, *path;
     bool members;
     StrList only;
-    if (need_str(p, "name", &name) || opt_bool(p, "members", true, &members) || opt_paths(p, "paths", &only)) return -1;
-    int rc = rf_references(r->store, name, &only, members, out);
+    if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
+        opt_bool(p, "members", true, &members) || opt_paths(p, "paths", &only))
+        return -1;
+    int rc = -1;
+    if (r->hub) {
+        Sem s = sem_of(r);
+        rc = sem_references(&s, name, kind, scope, path ? path : (only.n == 1 ? only.v[0] : NULL), out);
+        if (rc != 0 && no_server()) rc = -2;
+    } else {
+        rc = -2;
+    }
+    if (rc == -2) { /* no server for these files: token-based search for C */
+        rc = rf_references(r->store, name, &only, members, out);
+        if (rc == 0) j_set(*out, "source", j_str("syntax"));
+    }
     sl_free(&only);
     return rc;
 }
 
 static int m_rename(Rpc *r, const J *p, J **out) {
-    const char *name, *new_name, *label;
+    const char *name, *new_name, *label, *kind, *scope, *path;
     bool members, allow;
     int64_t if_rev;
     StrList only;
     if (need_str(p, "name", &name) || need_str(p, "new_name", &new_name) || opt_str(p, "label", &label) ||
+        opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
         opt_bool(p, "members", true, &members) || opt_bool(p, "allow_existing", false, &allow) ||
         opt_int(p, "if_rev", STORE_NO_REV, &if_rev) || opt_paths(p, "paths", &only))
         return -1;
     EditResult res;
-    RfCounts c;
-    int rc = rf_rename(r->store, name, new_name, &only, members, allow, if_rev, label, session_of(r), validator_of(r), &res, &c);
+    size_t sites = 0;
+    int rc = -2;
+    const char *source = "lsp";
+    if (r->hub) {
+        Sem s = sem_of(r);
+        rc = sem_rename(&s, name, kind, scope, path ? path : (only.n == 1 ? only.v[0] : NULL), new_name, if_rev, label,
+                        session_of(r), validator_of(r), &res, &sites);
+        if (rc != 0 && !(no_server())) {
+            sl_free(&only);
+            return -1;
+        }
+    }
+    if (rc != 0) { /* no language server for these files: token-based rename for C */
+        RfCounts c;
+        source = "syntax";
+        rc = rf_rename(r->store, name, new_name, &only, members, allow, if_rev, label, session_of(r), validator_of(r), &res, &c);
+        sites = c.sites;
+    }
     sl_free(&only);
     if (rc != 0) return -1;
     *out = edit_result_json(&res);
-    j_set(*out, "sites", j_int((int64_t)c.sites));
+    j_set(*out, "sites", j_int((int64_t)sites));
+    j_set(*out, "source", j_str(source));
     edit_result_free(&res);
     return 0;
 }
@@ -476,7 +519,8 @@ static int m_find_symbols(Rpc *r, const J *p, J **out) {
     int64_t limit;
     if (need_str(p, "query", &query) || opt_str(p, "kind", &kind) || opt_int(p, "limit", 100, &limit)) return -1;
     if (limit < 0) return na_fail("invalid parameter: limit must be non-negative");
-    return rf_find_symbols(r->store, query, kind, (size_t)limit, out);
+    Sem s = sem_of(r);
+    return sem_find_symbols(&s, query, kind, (size_t)limit, out);
 }
 
 typedef struct {
@@ -585,17 +629,17 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\",\"enum\":[\"log\",\"undo\",\"redo\"]},\"n\":{\"type\":\"integer\"},\"rev\":{\"type\":\"integer\"}}}"));
     j_push(arr, tool_def("sync", "Flush committed revisions to disk.",
                          "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"));
-    j_push(arr, tool_def("references", "List identifier occurrences of a name across the workspace (syntactic).",
-                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"members\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\"]}"));
-    j_push(arr, tool_def("rename", "Rename an identifier across the workspace in one atomic revision (syntactic).",
-                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"new_name\":{\"type\":\"string\"},\"if_rev\":{\"type\":\"integer\"},\"members\":{\"type\":\"boolean\"},\"allow_existing\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"name\",\"new_name\"]}"));
+    j_push(arr, tool_def("references", "Find all references to one symbol across the workspace (language server; token search for C without a server).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"members\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("rename", "Rename one symbol across the workspace in one atomic revision (language server rename; token rename for C without a server).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"new_name\":{\"type\":\"string\"},\"if_rev\":{\"type\":\"integer\"},\"members\":{\"type\":\"boolean\"},\"allow_existing\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"name\",\"new_name\"]}"));
     j_push(arr, tool_def("add_param", "Add a parameter to a C function and an argument to every call site.",
                          "{\"type\":\"object\",\"properties\":{\"function\":{\"type\":\"string\"},\"param\":{\"type\":\"string\"},\"default\":{\"type\":\"string\"},\"position\":{\"type\":\"integer\"},\"if_rev\":{\"type\":\"integer\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"function\",\"param\"]}"));
     j_push(arr, tool_def("add_include", "Insert an #include after the last include (no-op if present).",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"header\":{\"type\":\"string\"},\"system\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"header\"]}"));
     j_push(arr, tool_def("lsp_servers", "List the configured language servers and whether they are installed/running.",
                          "{\"type\":\"object\",\"properties\":{}}"));
-    j_push(arr, tool_def("find_symbols", "Search top-level symbols across the workspace by name substring.",
+    j_push(arr, tool_def("find_symbols", "Search symbols of every indexed language across the workspace by name substring.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     return arr;
 }

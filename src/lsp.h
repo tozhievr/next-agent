@@ -122,11 +122,34 @@ LspHub *lsp_hub_new(const char *root, const char *clangd_exe, int timeout_ms);
 void lsp_hub_free(LspHub *h);
 LspOps lsp_hub_ops(LspHub *h);
 bool lsp_hub_handles(LspHub *h, const char *path); /* a configured, installable server exists */
+bool lsp_hub_configured(LspHub *h, const char *path); /* an entry for this extension exists (nothing is started) */
 LspClient *lsp_hub_client(LspHub *h, const char *path); /* the running client for a file, or NULL */
 /* Top-level (or all, with `nested`) symbols of a document from textDocument/documentSymbol. */
 int lsp_hub_outline(LspHub *h, const char *abs_path, const char *text, size_t len, bool nested, SymbolList *out);
 /* [{name, extensions, command, available, running}] */
 J *lsp_hub_status(LspHub *h);
+
+/* ---- semantic requests (any server that implements them) ---- */
+typedef struct {
+    char *path; /* absolute, normalized */
+    size_t sl, sc, el, ec; /* LSP line/character range in the server's position encoding */
+    char *text;            /* replacement text for edits; NULL for plain locations */
+} LspLoc;
+typedef struct {
+    LspLoc *v;
+    size_t n, cap;
+} LspLocs;
+void lsp_locs_free(LspLocs *l);
+char *lsp_uri_to_path(const char *uri); /* file:// URI -> normalized absolute path, malloc'd */
+PosEnc lsp_hub_encoding(LspHub *h, const char *abs_path);
+/* Opens or incrementally updates a document in the server that owns it. */
+int lsp_hub_sync(LspHub *h, const char *abs_path, const char *text, size_t len);
+/* textDocument/references at a codepoint offset of the (already synced) document. */
+int lsp_hub_references(LspHub *h, const char *abs_path, const char *text, size_t len, size_t offset,
+                       bool include_declaration, LspLocs *out);
+/* textDocument/rename: the resulting WorkspaceEdit flattened to text edits (path + range + text). */
+int lsp_hub_rename(LspHub *h, const char *abs_path, const char *text, size_t len, size_t offset,
+                   const char *new_name, LspLocs *out);
 
 /* ---- pre-commit diagnostic gate ---- */
 typedef struct DiagnosticGate DiagnosticGate;

@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.26.0 - 2026-11-08
+
+### Added
+- Workspace index (`src/index.c`): symbols of every file from the language servers (C-family files fall back to the built-in scanner) plus an identifier inverted index; files are re-extracted only when their content changed.
+- Semantic `references` and `rename` for any language with a language server: the symbol is resolved to one definition through the index (`kind`, `scope`, `path` disambiguate; otherwise `ambiguous_symbol`), the server answers `textDocument/references` / `rename`, and the WorkspaceEdit is applied as one atomic revision through the diagnostic gate. Servers without rename support fall back to replacing every reference.
+- `find_symbols` searches every indexed language and includes members.
+
+### Changed
+- Without a language server the C token-based `references` / `rename` still work (result field `source`: `syntax`); with one, `source` is `lsp`.
+
 ## 0.25.0 - 2026-11-08
 
 ### Added

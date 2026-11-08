@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include "c23.h"
 #include "lsp.h"
+#include "index.h"
 #include "json.h"
 #include "store.h"
 
@@ -12,6 +13,7 @@ typedef struct {
     Validator validator;
     bool has_validator;
     const char *session; /* "cli" or "jsonrpc" */
+    WsIndex *index; /* workspace index, created on first use */
     LspHub *hub; /* optional: language servers for non-C documents (outline, select, replace_symbol) */
     /* per-document incremental outline caches (long-lived servers re-lex only what changed) */
     char *cache_paths[32];

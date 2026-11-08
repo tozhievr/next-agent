@@ -9,10 +9,10 @@ exit=0
 {"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""}
 $ nextagent references calc
 exit=0
-{"count":4,"references":[{"path":"a.c","start":49,"end":53,"line":3,"column":4,"member":false,"call":true},{"path":"a.c","start":102,"end":106,"line":4,"column":23,"member":false,"call":true},{"path":"a.c","start":107,"end":111,"line":4,"column":28,"member":false,"call":true},{"path":"a.h","start":28,"end":32,"line":3,"column":4,"member":false,"call":true}]}
+{"count":4,"references":[{"path":"a.c","start":49,"end":53,"line":3,"column":4,"member":false,"call":true},{"path":"a.c","start":102,"end":106,"line":4,"column":23,"member":false,"call":true},{"path":"a.c","start":107,"end":111,"line":4,"column":28,"member":false,"call":true},{"path":"a.h","start":28,"end":32,"line":3,"column":4,"member":false,"call":true}],"source":"syntax"}
 $ nextagent rename calc area
 exit=0
-{"rev":1,"paths":["a.c","a.h"],"sites":4}
+{"rev":1,"paths":["a.c","a.h"],"sites":4,"source":"syntax"}
 $ nextagent view a.c
 exit=0
 {"rev":1,"path":"a.c","text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x) { return x * 2; }\nint run(void) { return area(area(3) + 1); }\nstruct P { int x; int y; };\n"}
