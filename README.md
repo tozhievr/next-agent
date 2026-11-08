@@ -114,6 +114,8 @@ callers NAME [--depth N] / callees NAME         call graph (callers via referenc
 context QUERY [--budget TOKENS]                   best code for a question as one pack
 locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)
 search QUERY [--word] [-i] [--context N]         grep over the workspace index
+apply [FILE|-]                                   many edits, one revision, plain-text script (@@@ replace/lines/insert/symbol/create)
+create PATH --new-file F / insert PATH --before-symbol NAME --new-file F
 replace PATH --old S --new S [--all]              literal replacement
 replace PATH --lines A-B --new-file F             replace whole lines
 replace-symbol PATH NAME --new-file F             rewrite one symbol

@@ -1773,6 +1773,48 @@ static void test_merge(void) {
     free(ws);
 }
 
+static void test_patch_ops(void) {
+    g_test = "patch_ops";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "/* adds */\r\nint add(int a, int b) {\r\n  return a + b;\r\n}\r\n\r\nint sub(int a, int b) {\r\n  return a - b;\r\n}\r\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    int64_t head = store_head(st);
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"patch\",\"params\":{\"edits\":["
+                    "{\"path\":\"a.c\",\"before_symbol\":\"add\",\"new\":\"#define K 1\\n\"},"
+                    "{\"path\":\"a.c\",\"after_symbol\":\"sub\",\"new\":\"\\nint mul(int a, int b) {\\n  return a * b;\\n}\"},"
+                    "{\"path\":\"a.c\",\"start_line\":3,\"new\":\"  return a + b + K;\"},"
+                    "{\"path\":\"n.txt\",\"create\":true,\"new\":\"hello\\n\"}]}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    if (!res) printf("patch_ops error: %s\n", err_of(a));
+    CHECK(res && j_get(res, "rev")->i == head + 1 && j_get(res, "replacements")->i == 4); /* two files, ONE revision */
+    json_free(a);
+    char *va = view_text(st, "a.c"), *vn = view_text(st, "n.txt");
+    /* the macro goes above the doc comment of add (it stays attached), CRLF is kept everywhere */
+    CHECK(strncmp(va, "#define K 1\r\n/* adds */\r\nint add(int a, int b) {\r\n  return a + b + K;\r\n}\r\n", 69) == 0);
+    CHECK(strstr(va, "}\r\n\r\nint mul(int a, int b) {\r\n  return a * b;\r\n}\r\n") != NULL);
+    CHECK(strcmp(vn, "hello\n") == 0);
+    free(va);
+    free(vn);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"n.txt\",\"create\":true,\"new\":\"x\"}]}}");
+    CHECK(strstr(err_of(a), "already_exists") != NULL);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"after_line\":99,\"new\":\"x\"}]}}");
+    CHECK(strstr(err_of(a), "out of range") != NULL);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"symbol\":\"sub\",\"new\":\"int sub(int a, int b) { return b - a; }\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strstr(va, "int sub(int a, int b) { return b - a; }") != NULL);
+    free(va);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
 
 
@@ -1879,6 +1921,7 @@ int main(int argc, char **argv) {
     RUN(test_embed);
     RUN(test_callgraph);
     RUN(test_merge);
+    RUN(test_patch_ops);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

@@ -1171,8 +1171,66 @@ static int m_hybrid_search(Rpc *r, const J *p, J **out) {
     return sem_hybrid(&s, query, path, (size_t)limit, (size_t)budget, out);
 }
 
-/* Several literal replacements in several files as one revision:
- * edits: [{path, old, new, all?}], each `old` must match exactly once unless `all`. */
+/* ---- helpers for patch: positions are computed against the original snapshot ---- */
+static size_t patch_lines(const Snapshot *s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s->len; i++)
+        if (s->text[i] == '\n') n++;
+    return n + (s->len > 0 && s->text[s->len - 1] != '\n');
+}
+
+/* byte offset of the start of 1-based `line`; the end of the text for lines past the last one */
+static size_t patch_line_off(const Snapshot *s, size_t line) {
+    size_t pos = 0, l = 1;
+    while (l < line && pos < s->len)
+        if (s->text[pos++] == '\n') l++;
+    return pos;
+}
+
+static const char *patch_eol(const Snapshot *s) {
+    for (size_t i = 0; i + 1 < s->len; i++)
+        if (s->text[i] == '\r' && s->text[i + 1] == '\n') return "\r\n";
+    return "\n";
+}
+
+/* text inserted at a line start: whole lines in the file's own line ending */
+static char *patch_insert_text(const Snapshot *s, size_t pos, const char *in, size_t n, size_t *outlen) {
+    size_t rlen;
+    char *rep = adapt_eol(s, in, n, &rlen);
+    Buf b;
+    buf_init(&b);
+    const char *eol = patch_eol(s);
+    if (pos == s->len && s->len > 0 && s->text[s->len - 1] != '\n') buf_puts(&b, eol);
+    buf_put(&b, rep, rlen);
+    if (rlen > 0 && rep[rlen - 1] != '\n') buf_puts(&b, eol);
+    free(rep);
+    *outlen = b.len;
+    return buf_take(&b);
+}
+
+/* a doc comment right above a symbol belongs to it: move `pos` (a line start) up over such lines */
+static size_t patch_comment_start(const Snapshot *s, size_t pos) {
+    while (pos > 0) {
+        size_t ps = pos - 1;
+        while (ps > 0 && s->text[ps - 1] != '\n') ps--;
+        const char *p = s->text + ps, *end = s->text + pos;
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+        bool cm = end - p >= 2 && ((p[0] == '/' && (p[1] == '/' || p[1] == '*')) ||
+                                   (p[0] == '*' && (p[1] == ' ' || p[1] == '/' || p[1] == '\r' || p[1] == '\n')));
+        if (!cm) break;
+        pos = ps;
+    }
+    return pos;
+}
+
+/* Many edits in several files as ONE revision. Every edit is {path, new, ...} plus one locator:
+ *   old (+all)                    literal text, must match once unless all
+ *   start_line (+end_line)        whole lines
+ *   before_line | after_line      insert whole lines
+ *   symbol (+kind, scope)         replace a whole symbol
+ *   before_symbol | after_symbol  insert whole lines next to a symbol (doc comment stays attached)
+ *   create                        a new file (must not exist)
+ * Positions refer to the files as they are before the patch, so edits cannot disturb each other. */
 static int m_patch(Rpc *r, const J *p, J **out) {
     const J *edits = j_get(p, "edits");
     const char *label;
@@ -1188,9 +1246,9 @@ static int m_patch(Rpc *r, const J *p, J **out) {
     size_t total = 0;
     for (size_t e = 0; e < edits->n && rc == 0; e++) {
         const J *ed = edits->items[e];
-        const J *jp = j_get(ed, "path"), *jo = j_get(ed, "old"), *jn = j_get(ed, "new"), *ja = j_get(ed, "all");
-        if (!j_is_str(jp) || !j_is_str(jo) || !j_is_str(jn) || jo->slen == 0) {
-            rc = na_fail("invalid parameter: edits[%zu] needs path, old (non-empty) and new", e);
+        const J *jp = j_get(ed, "path"), *jn = j_get(ed, "new"), *jo = j_get(ed, "old"), *ja = j_get(ed, "all");
+        if (!j_is_str(jp) || !j_is_str(jn)) {
+            rc = na_fail("invalid parameter: edits[%zu] needs path and new", e);
             break;
         }
         size_t slot = n;
@@ -1206,24 +1264,124 @@ static int m_patch(Rpc *r, const J *p, J **out) {
             n++;
         }
         const Snapshot *s = snaps[slot];
-        size_t olen, rlen;
-        char *old = adapt_eol(s, jo->s, jo->slen, &olen), *neu = adapt_eol(s, jn->s, jn->slen, &rlen);
-        bool all = ja && ja->k == J_BOOL && ja->b;
-        size_t count = 0;
-        for (size_t i = 0; i + olen <= s->len; i++) {
-            if (memcmp(s->text + i, old, olen) != 0) continue;
-            if (count == 0 || all) {
-                size_t a = utf8_cp_count(s->text, i);
-                cs_add(&sets[slot], a, a + utf8_cp_count(old, olen), neu, rlen);
+        const J *jsl = j_get(ed, "start_line"), *jel = j_get(ed, "end_line"), *jbl = j_get(ed, "before_line"),
+                *jal = j_get(ed, "after_line"), *jsy = j_get(ed, "symbol"), *jbs = j_get(ed, "before_symbol"),
+                *jas = j_get(ed, "after_symbol"), *jcr = j_get(ed, "create");
+        if (jo) {
+            if (!j_is_str(jo) || jo->slen == 0) {
+                rc = na_fail("invalid parameter: edits[%zu].old must be a non-empty string", e);
+                break;
+            }
+            size_t olen, rlen;
+            char *old = adapt_eol(s, jo->s, jo->slen, &olen), *neu = adapt_eol(s, jn->s, jn->slen, &rlen);
+            bool all = ja && ja->k == J_BOOL && ja->b;
+            size_t count = 0;
+            for (size_t i = 0; i + olen <= s->len; i++) {
+                if (memcmp(s->text + i, old, olen) != 0) continue;
+                if (count == 0 || all) {
+                    size_t a = utf8_cp_count(s->text, i);
+                    cs_add(&sets[slot], a, a + utf8_cp_count(old, olen), neu, rlen);
+                    total++;
+                }
+                count++;
+                i += olen - 1;
+            }
+            if (count == 0) rc = na_fail("text_not_found: edits[%zu]: %s does not contain the given text", e, jp->s);
+            else if (count > 1 && !all) rc = na_fail("ambiguous_text: edits[%zu]: %zu matches in %s (add context or set all)", e, count, jp->s);
+            free(old);
+            free(neu);
+            continue;
+        }
+        size_t from = 0, to = 0, rlen = 0;
+        char *rep = NULL;
+        if (jsl && j_is_int(jsl)) { /* whole lines */
+            size_t nl = patch_lines(s), a = (size_t)jsl->i, b = jel && j_is_int(jel) ? (size_t)jel->i : a;
+            if (jsl->i < 1 || b < a || b > nl) {
+                rc = na_fail("invalid parameter: edits[%zu]: lines %lld-%zu out of range (%s has %zu lines)", e, (long long)jsl->i, b, jp->s, nl);
+                break;
+            }
+            from = patch_line_off(s, a);
+            to = patch_line_off(s, b + 1);
+            bool had_eol = to > from && s->text[to - 1] == '\n';
+            rep = adapt_eol(s, jn->s, jn->slen, &rlen);
+            if (rlen > 0 && had_eol && rep[rlen - 1] != '\n') {
+                Buf b2;
+                buf_init(&b2);
+                buf_put(&b2, rep, rlen);
+                buf_puts(&b2, patch_eol(s));
+                free(rep);
+                rlen = b2.len;
+                rep = buf_take(&b2);
+            }
+        } else if ((jbl && j_is_int(jbl)) || (jal && j_is_int(jal))) { /* insert lines */
+            size_t nl = patch_lines(s);
+            int64_t line = jbl ? jbl->i : jal->i + 1;
+            if (line < 1 || (size_t)line > nl + 1) {
+                rc = na_fail("invalid parameter: edits[%zu]: line out of range (%s has %zu lines)", e, jp->s, nl);
+                break;
+            }
+            from = to = patch_line_off(s, (size_t)line);
+            rep = patch_insert_text(s, from, jn->s, jn->slen, &rlen);
+        } else if (j_is_str(jsy)) { /* replace a symbol */
+            ChangeSet one;
+            size_t sl;
+            char *adapted = adapt_eol(s, jn->s, jn->slen, &sl);
+            const J *jk = j_get(ed, "kind"), *jsc = j_get(ed, "scope");
+            rc = replace_any(r, jp->s, s, jsy->s, adapted, j_is_str(jk) ? jk->s : NULL, j_is_str(jsc) ? jsc->s : NULL, &one);
+            free(adapted);
+            if (rc == 0) {
+                for (size_t k = 0; k < one.n; k++) cs_add(&sets[slot], one.v[k].start, one.v[k].end, one.v[k].text, one.v[k].tlen);
+                cs_free(&one);
                 total++;
             }
-            count++;
-            i += olen - 1;
+            continue;
+        } else if (j_is_str(jbs) || j_is_str(jas)) { /* insert next to a symbol */
+            SymbolList list;
+            Symbol sym;
+            const J *jk = j_get(ed, "kind"), *jsc = j_get(ed, "scope");
+            const char *nm = j_is_str(jbs) ? jbs->s : jas->s;
+            rc = outline_any(r, jp->s, s, true, &list);
+            if (rc == 0) {
+                rc = symbols_select(&list, nm, j_is_str(jk) ? jk->s : NULL, j_is_str(jsc) ? jsc->s : NULL, &sym);
+                if (rc == 0) {
+                    if (j_is_str(jbs)) {
+                        size_t b = cg_cp_to_byte(s->text, s->len, sym.start);
+                        while (b > 0 && s->text[b - 1] != '\n') b--;
+                        from = patch_comment_start(s, b);
+                    } else {
+                        size_t b = cg_cp_to_byte(s->text, s->len, sym.end);
+                        if (b > 0 && s->text[b - 1] != '\n')
+                            while (b < s->len && s->text[b - 1] != '\n') b++;
+                        from = b;
+                    }
+                    to = from;
+                    rep = patch_insert_text(s, from, jn->s, jn->slen, &rlen);
+                }
+                symbols_free(&list);
+            }
+            if (rc != 0) break;
+        } else if (jcr && jcr->k == J_BOOL && jcr->b) { /* new file */
+            char *full = NULL;
+            Buf fb;
+            buf_init(&fb);
+            buf_printf(&fb, "%s/%s", store_root(r->store), jp->s);
+            full = buf_take(&fb);
+            bool exists = pf_is_file(full);
+            free(full);
+            if (s->len > 0 || exists) {
+                rc = na_fail("already_exists: edits[%zu]: %s exists; use old/lines/symbol to change it", e, jp->s);
+                break;
+            }
+            rep = na_strndup(jn->s, jn->slen);
+            rlen = jn->slen;
+        } else {
+            rc = na_fail("invalid parameter: edits[%zu] needs old, start_line, before_line/after_line, symbol, before_symbol/after_symbol or create", e);
+            break;
         }
-        if (count == 0) rc = na_fail("text_not_found: edits[%zu]: %s does not contain the given text", e, jp->s);
-        else if (count > 1 && !all) rc = na_fail("ambiguous_text: edits[%zu]: %zu matches in %s (add context or set all)", e, count, jp->s);
-        free(old);
-        free(neu);
+        size_t a = utf8_cp_count(s->text, from);
+        cs_add(&sets[slot], a, a + utf8_cp_count(s->text + from, to - from), rep ? rep : "", rlen);
+        total++;
+        free(rep);
     }
     for (size_t k = 0; rc == 0 && k < n; k++) {
         cs_sort(&sets[k]);

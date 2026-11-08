@@ -2,7 +2,20 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.37.0 - 2026-11-09
+
+### Added
+- `apply [FILE|-]`: many edits in several files as ONE revision from a plain-text script, no quoting or escaping (`@@@ replace PATH` / old / `@@@ with` / new, `@@@ lines PATH A-B`, `@@@ insert PATH before-symbol NAME`, `@@@ symbol PATH NAME`, `@@@ create PATH`). Write the script once, apply it once.
+- `create PATH` (a new file, refused when it exists) and `insert PATH --before-line/--after-line/--before-symbol/--after-symbol` (whole lines in the file's own line endings; a doc comment above a symbol stays attached to it).
+- The `patch` method/tool gained the same locators: `start_line`/`end_line`, `before_line`/`after_line`, `symbol`, `before_symbol`/`after_symbol`, `create`, next to `old`/`new`/`all`.
+- The CLI's automatic write to disk now merges transparently when a file changed outside NextAgent (`merge` semantics); only real conflicts stop it, with the command that resolves them.
+- `.clangd` points editors at the bundled libc23 headers, which removes the false "header not found" diagnostics.
+
+### Changed
+- A wrong command line prints one line and the synopsis of that command instead of the whole manual. `--brief` and `--no-sync` are accepted after the command as well.
+
 ## 0.36.0 - 2026-11-09
+
 
 ### Added
 - `merge [PATH...] [--ours|--theirs] [--dry-run]` (RPC/MCP `merge`): when a file was changed outside NextAgent (an editor, git, a formatter) and `sync` reports `disk_conflict`, the baseline, the journal text and the disk text are merged by a line-based three-way merge (diff3). Clean merges are committed as one revision and written; real conflicts are reported with both sides and never written; `--theirs` takes the disk text, `--ours` keeps the journal and lets the next flush overwrite the file. The `disk_conflict` message now names the command.

@@ -190,6 +190,12 @@ nextagent --brief find QUERY [--kind K]                  # symbols by name, all 
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
 nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
+nextagent apply script.txt                               # BEST for several edits: ONE call, ONE revision, no quoting. Script:
+#   @@@ replace PATH [all]   / old text / @@@ with / new text      @@@ lines PATH A-B   / new lines
+#   @@@ insert PATH before-symbol NAME|after-symbol NAME|before-line N|after-line N / text
+#   @@@ symbol PATH NAME / whole new symbol                         @@@ create PATH / file text
+nextagent create PATH --new-file F                       # new file (refused if it exists)
+nextagent insert PATH --before-symbol NAME --new-file F  # insert whole lines next to a symbol or line
 nextagent replace PATH --old S --new S [--all]           # literal replacement, unique match required
 nextagent replace PATH --lines 10-14 --new-file F        # swap whole lines (no old text needed; empty --new deletes)
 nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole function/type
