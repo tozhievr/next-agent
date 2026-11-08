@@ -4,6 +4,7 @@
 #include "../src/embed.h"
 #include "../src/index.h"
 #include "../src/json.h"
+#include "../src/merge.h"
 #include "../src/lsp.h"
 #include "../src/platform.h"
 #include "../src/refactor.h"
@@ -1017,7 +1018,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 20);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 21);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1696,6 +1697,82 @@ static void test_callgraph(void) {
     free(ws);
 }
 
+static void test_merge(void) {
+    g_test = "merge";
+    /* the merge itself */
+    Buf out;
+    MergeConflicts conf;
+    buf_init(&out);
+    const char *base = "a\nb\nc\nd\ne\n";
+    CHECK(merge3(base, strlen(base), "a\nB\nc\nd\ne\n", 10, "a\nb\nc\nD\ne\n", 10, &out, &conf) == 0 && out.len == 10 && memcmp(out.p, "a\nB\nc\nD\ne\n", 10) == 0);
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "a\nX\nc\nd\ne\n", 10, "a\nX\nc\nd\ne\n", 10, &out, &conf) == 0 && memcmp(out.p, "a\nX\nc\nd\ne\n", 10) == 0); /* same change */
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "a\nX\nc\nd\ne\n", 10, "a\nY\nc\nd\ne\n", 10, &out, &conf) == 1 && conf.n == 1 && conf.v[0].first == 2 &&
+          strcmp(conf.v[0].ours, "X\n") == 0 && strcmp(conf.v[0].theirs, "Y\n") == 0);
+    merge_conflicts_free(&conf);
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "top\na\nb\nc\nd\ne\n", 14, "a\nb\nc\nd\ne\nbottom\n", 17, &out, &conf) == 0 &&
+          strcmp(out.p ? out.p : "", "top\na\nb\nc\nd\ne\nbottom\n") == 0); /* insertions at both ends */
+    buf_free(&out);
+
+    /* through the store: journal edit + external edit in different places merge, same place conflicts */
+    char *ws = new_ws();
+    put_file(ws, "f.txt", "a\nb\nc\nd\ne\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"replace_text\",\"params\":{\"target\":\"f.txt\",\"old\":\"b\",\"new\":\"B\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    put_file(ws, "f.txt", "a\nb\nc\nd\nE\n"); /* an editor changed the file on disk */
+    CHECK_ERR(store_flush(st, NULL, 0, NULL), "disk_conflict");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"merge\",\"params\":{\"dry_run\":true}}");
+    const J *res = a ? j_get(a, "result") : NULL, *rs = res ? j_get(res, "results") : NULL;
+    CHECK(rs && rs->n == 1 && strcmp(j_get(rs->items[0], "status")->s, "merged") == 0);
+    json_free(a);
+    CHECK_ERR(store_flush(st, NULL, 0, NULL), "disk_conflict"); /* a dry run changes nothing */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"merge\",\"params\":{}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "conflicts")->i == 0 && j_get(res, "paths"));
+    json_free(a);
+    char *v = view_text(st, "f.txt");
+    CHECK(strcmp(v, "a\nB\nc\nd\nE\n") == 0);
+    free(v);
+    CHECK(store_flush(st, NULL, 0, NULL) == 0);
+    Buf disk;
+    buf_init(&disk);
+    char path[700];
+    snprintf(path, sizeof path, "%s/f.txt", ws);
+    CHECK(pf_read_file(path, &disk) == 0 && disk.len == 10 && memcmp(disk.p, "a\nB\nc\nd\nE\n", 10) == 0);
+    buf_free(&disk);
+
+    /* a real conflict is reported and nothing is written; theirs/ours resolve it */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"replace_text\",\"params\":{\"target\":\"f.txt\",\"old\":\"a\",\"new\":\"mine\"}}");
+    json_free(a);
+    put_file(ws, "f.txt", "theirs\nB\nc\nd\nE\n");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"merge\",\"params\":{\"paths\":[\"f.txt\"]}}");
+    res = a ? j_get(a, "result") : NULL;
+    rs = res ? j_get(res, "results") : NULL;
+    CHECK(res && j_get(res, "conflicts")->i == 1 && rs && strcmp(j_get(rs->items[0], "status")->s, "conflict") == 0);
+    CHECK(rs && strcmp(j_get(j_get(rs->items[0], "conflicts")->items[0], "ours")->s, "mine\n") == 0);
+    json_free(a);
+    v = view_text(st, "f.txt");
+    CHECK(strncmp(v, "mine\n", 5) == 0); /* the journal is untouched */
+    free(v);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"merge\",\"params\":{\"paths\":[\"f.txt\"],\"strategy\":\"theirs\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    v = view_text(st, "f.txt");
+    CHECK(strncmp(v, "theirs\n", 7) == 0);
+    free(v);
+    CHECK(store_flush(st, NULL, 0, NULL) == 0);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
 
 
@@ -1801,6 +1878,7 @@ int main(int argc, char **argv) {
     RUN(test_hybrid);
     RUN(test_embed);
     RUN(test_callgraph);
+    RUN(test_merge);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

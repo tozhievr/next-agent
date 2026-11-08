@@ -196,6 +196,7 @@ nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole funct
 nextagent patch FILE|-                                   # [{path,old,new,all}] across files, ONE revision
 nextagent references NAME [--path P] | rename NAME NEW | add-param FUNC "int x" --default 0
 echo '{"if_rev":N,"ops":[...]}' | nextagent edit         # codepoint-offset edits
+nextagent merge [PATH] [--theirs|--ours] [--dry-run]       # a human/git/formatter edited files: 3-way merge instead of disk_conflict
 nextagent history [--limit N] | undo [--rev N] | redo
 ```
 Every command that changes text writes the result to disk immediately (`--no-sync` keeps it in the journal only). `--brief` (or `NEXTAGENT_BRIEF=1`) prints compact text instead of JSON, which costs far fewer tokens. LF text passed to `replace`/`patch`/`replace-symbol` is converted to CRLF in CRLF files, so line endings never get mixed. Errors go to stderr with exit code 1 and name the fix (similar symbol names, the candidate list for an ambiguous one).

@@ -57,6 +57,9 @@ int store_redo(Store *st, const Validator *validator, EditResult *result);
 J *store_history(Store *st, int limit);
 /* `paths` NULL = all documents. */
 int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *written);
+/* Reconciles a document whose file changed outside NextAgent (what `sync` reports as disk_conflict) by a
+ * line-based three-way merge. strategy: auto | ours | theirs. *report: {path, status, conflicts?, rev?, paths?}. */
+int store_merge_external(Store *st, const char *name, const char *strategy, bool dry_run, J **report);
 void edit_result_free(EditResult *r);
 
 #endif

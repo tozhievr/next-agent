@@ -23,6 +23,7 @@ static void usage(void) {
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
           "  search QUERY [--word] [-i] [--context N] [--path SUBSTR] [--limit N]\n"
+          "  merge [PATH...] [--ours|--theirs] [--dry-run]   reconcile files changed outside nextagent (3-way merge)\n"
           "  callers NAME [--depth N] [--path P] [--kind K] [--scope S]   who calls it (transitive with depth)\n"
           "  callees NAME [--depth N] [--path P]    what it calls (syntactic, from the workspace index)\n"
           "  context QUERY [--budget TOKENS] [--path SUBSTR]   best code for a question, cut to a token budget\n"
@@ -53,6 +54,20 @@ static bool print_brief(const char *method, const J *res) {
             const J *p = j_get(syms->items[i], "path");
             brief_symbol(syms->items[i], j_is_str(p) ? p->s : NULL);
         }
+        return true;
+    }
+    const J *results = j_get(res, "results");
+    if (results && results->k == J_ARR) { /* merge report */
+        for (size_t i = 0; i < results->n; i++) {
+            const J *o = results->items[i], *conf = j_get(o, "conflicts");
+            printf("%s %s\n", j_get(o, "status")->s, j_get(o, "path")->s);
+            for (size_t k = 0; conf && k < conf->n; k++) {
+                const J *c = conf->items[k];
+                printf("  lines %lld-%lld\n<<<<<<< ours\n%s=======\n%s>>>>>>> theirs\n", (long long)j_get(c, "first_line")->i,
+                       (long long)j_get(c, "last_line")->i, j_get(c, "ours")->s, j_get(c, "theirs")->s);
+            }
+        }
+        if (results->n == 0) printf("nothing to merge\n");
         return true;
     }
     const J *nodes = j_get(res, "nodes");
@@ -462,6 +477,22 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "search", p);
+    } else if (strcmp(cmd, "merge") == 0) {
+        J *p = j_obj(), *paths = j_arr();
+        for (int k = 0; k < nargs; k++) {
+            if (strcmp(args[k], "--ours") == 0) j_set(p, "strategy", j_str("ours"));
+            else if (strcmp(args[k], "--theirs") == 0) j_set(p, "strategy", j_str("theirs"));
+            else if (strcmp(args[k], "--dry-run") == 0) j_set(p, "dry_run", j_bool(true));
+            else if (args[k][0] != '-') j_push(paths, j_str(args[k]));
+            else {
+                json_free(p);
+                json_free(paths);
+                goto bad;
+            }
+        }
+        if (paths->n) j_set(p, "paths", paths);
+        else json_free(paths);
+        code = run_method(&rpc, "merge", p);
     } else if (strcmp(cmd, "callers") == 0 || strcmp(cmd, "callees") == 0) {
         if (nargs < 1) goto bad;
         J *p = j_obj();

@@ -26,7 +26,7 @@ import sys
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 LIB = ["util", "json", "platform", "core", "store", "c23", "lsp_proto", "lsp_build", "lsp_client", "lsp_gate",
-       "lsp_hub", "refactor", "index", "semantic", "hybrid", "embed", "rpc"]
+       "lsp_hub", "refactor", "index", "semantic", "hybrid", "embed", "merge", "rpc"]
 
 
 def norm(p):

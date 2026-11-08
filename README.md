@@ -109,6 +109,7 @@ nextagent --root example sync            # writes demo.c to disk
 nextagent [--root DIR] [--version] <command>
 
 view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
+merge [PATH...] [--ours|--theirs] [--dry-run]   reconcile files changed outside nextagent (3-way merge)
 callers NAME [--depth N] / callees NAME         call graph (callers via references, callees from the index)
 context QUERY [--budget TOKENS]                   best code for a question as one pack
 locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)

@@ -2,7 +2,14 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.36.0 - 2026-11-09
+
+### Added
+- `merge [PATH...] [--ours|--theirs] [--dry-run]` (RPC/MCP `merge`): when a file was changed outside NextAgent (an editor, git, a formatter) and `sync` reports `disk_conflict`, the baseline, the journal text and the disk text are merged by a line-based three-way merge (diff3). Clean merges are committed as one revision and written; real conflicts are reported with both sides and never written; `--theirs` takes the disk text, `--ours` keeps the journal and lets the next flush overwrite the file. The `disk_conflict` message now names the command.
+- The store remembers the revision of each disk baseline and rebuilds the baseline text from the inverse deltas.
+
 ## 0.35.0 - 2026-11-09
+
 
 ### Added
 - Call graph: `callers NAME [--depth N]` (who calls it, transitively; call-site lines; uses the language server, tokens for C) and `callees NAME [--depth N]` (what a function body calls, matched to the function symbols of the workspace index; names shared by several functions are flagged `ambiguous`). Also RPC/MCP `callers` / `callees`; the definition itself is never listed as a caller.

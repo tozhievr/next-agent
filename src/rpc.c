@@ -687,6 +687,58 @@ static J *cg_node(const char *path, const Symbol *y, int depth, const char *via)
     return o;
 }
 
+/* Reconcile files changed outside NextAgent with the journal (three-way merge by lines). */
+static int m_merge(Rpc *r, const J *p, J **out) {
+    const char *strategy;
+    bool dry;
+    StrList only, all;
+    if (opt_str(p, "strategy", &strategy) || opt_bool(p, "dry_run", false, &dry) || opt_paths(p, "paths", &only)) return -1;
+    sl_init(&all);
+    if (only.n == 0) {
+        if (store_snapshot_paths(r->store, &all) != 0) {
+            sl_free(&only);
+            sl_free(&all);
+            return -1;
+        }
+    } else {
+        for (size_t i = 0; i < only.n; i++) sl_push(&all, only.v[i]);
+    }
+    J *results = j_arr(), *paths = j_arr();
+    int64_t conflicts = 0;
+    int rc = 0;
+    for (size_t i = 0; i < all.n && rc == 0; i++) {
+        J *rep;
+        if (store_merge_external(r->store, all.v[i], strategy, dry, &rep) != 0) {
+            rc = -1;
+            break;
+        }
+        const char *st = j_get(rep, "status")->s;
+        const J *pp = j_get(rep, "paths");
+        if (pp && pp->n == 1) j_push(paths, j_str(pp->items[0]->s));
+        if (strcmp(st, "conflict") == 0) conflicts++;
+        if (strcmp(st, "unchanged") != 0 || only.n > 0) j_push(results, rep);
+        else json_free(rep);
+    }
+    sl_free(&only);
+    sl_free(&all);
+    if (rc != 0) {
+        json_free(results);
+        json_free(paths);
+        return -1;
+    }
+    J *o = j_obj();
+    j_set(o, "conflicts", j_int(conflicts));
+    j_set(o, "results", results);
+    if (!dry && paths->n > 0) {
+        j_set(o, "paths", paths);
+        j_set(o, "rev", j_int(store_head(r->store)));
+    } else {
+        json_free(paths);
+    }
+    *out = o;
+    return 0;
+}
+
 static int m_callers(Rpc *r, const J *p, J **out) {
     const char *name, *kind, *scope, *path;
     int64_t depth, limit;
@@ -1221,7 +1273,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"callers", m_callers}, {"callees", m_callees}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"merge", m_merge}, {"callers", m_callers}, {"callees", m_callees}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -1317,6 +1369,8 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
     j_push(arr, tool_def("callees", "What a function calls (transitively with depth): identifiers of its body matched to function symbols of the workspace index. Syntactic; names shared by several functions are flagged ambiguous.",
                          "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("merge", "Reconcile files that were changed outside NextAgent (sync reports disk_conflict): line-based three-way merge of baseline, journal and disk. strategy auto|ours|theirs; conflicts are reported, never written.",
+                         "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"strategy\":{\"type\":\"string\",\"enum\":[\"auto\",\"ours\",\"theirs\"]},\"dry_run\":{\"type\":\"boolean\"}}}"));
     j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
                          "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",
