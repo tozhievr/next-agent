@@ -155,6 +155,67 @@ void rpc_release(Rpc *r) {
     r->ncaches = 0;
 }
 
+static bool is_c_family(const char *p) {
+    static const char *const exts[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"};
+    for (size_t i = 0; i < sizeof exts / sizeof *exts; i++)
+        if (path_has_suffix_ci(p, exts[i])) return true;
+    return false;
+}
+
+/* Non-C documents are outlined by a language server when one is available. */
+static bool use_lsp(Rpc *r, const char *target) {
+    return r->hub && !is_c_family(target) && lsp_hub_handles(r->hub, target);
+}
+
+static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
+    char *canon = store_canon(r->store, target);
+    if (!canon) return -1;
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "%s/%s", store_root(r->store), canon);
+    free(canon);
+    char *abs = buf_take(&b);
+    int rc = lsp_hub_outline(r->hub, abs, s->text, s->len, nested, out);
+    free(abs);
+    return rc;
+}
+
+static int outline_any(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
+    if (use_lsp(r, target)) return lsp_symbols(r, target, s, nested, out);
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_outline_cached(oc, s, nested, out) : c23_outline(s, nested, out);
+}
+
+static int select_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *kind,
+                      const char *scope, Symbol *out) {
+    if (use_lsp(r, target)) {
+        SymbolList all;
+        if (lsp_symbols(r, target, s, true, &all) != 0) return -1;
+        int rc = symbols_select(&all, name, kind, scope, out);
+        symbols_free(&all);
+        return rc;
+    }
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_select_cached(oc, s, name, kind, scope, out) : c23_select(s, name, kind, scope, out);
+}
+
+static int replace_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *replacement,
+                       const char *kind, const char *scope, ChangeSet *cs) {
+    if (use_lsp(r, target)) {
+        Symbol sym;
+        if (select_any(r, target, s, name, kind, scope, &sym) != 0) return -1;
+        cs_init(cs);
+        cs_add(cs, sym.start, sym.end, replacement, strlen(replacement));
+        free(sym.name);
+        free(sym.kind);
+        free(sym.scope);
+        return 0;
+    }
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, cs)
+              : c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, cs);
+}
+
 static int m_view(Rpc *r, const J *p, J **out) {
     const char *target;
     if (need_str(p, "target", &target)) return -1;
@@ -176,8 +237,7 @@ static int m_outline(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     SymbolList list;
-    OutlineCache *oc = outline_cache_of(r, target);
-    int rc = oc ? c23_outline_cached(oc, s, nested, &list) : c23_outline(s, nested, &list);
+    int rc = outline_any(r, target, s, nested, &list);
     if (rc == 0) {
         J *arr = j_arr();
         for (size_t i = 0; i < list.n; i++) j_push(arr, symbol_to_json(&list.v[i]));
@@ -198,8 +258,7 @@ static int m_select(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     Symbol sym;
-    OutlineCache *oc = outline_cache_of(r, target);
-    int rc = oc ? c23_select_cached(oc, s, name, kind, scope, &sym) : c23_select(s, name, kind, scope, &sym);
+    int rc = select_any(r, target, s, name, kind, scope, &sym);
     if (rc == 0) {
         *out = symbol_to_json(&sym);
         free(sym.name);
@@ -223,9 +282,7 @@ static int m_replace_symbol(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     ChangeSet cs;
-    OutlineCache *oc = outline_cache_of(r, target);
-    int rc = oc ? c23_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, &cs)
-                : c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, &cs);
+    int rc = replace_any(r, target, s, name, replacement, kind, scope, &cs);
     snap_free(s);
     if (rc != 0) return -1;
     EditResult res;
@@ -427,11 +484,21 @@ typedef struct {
     int (*fn)(Rpc *, const J *, J **);
 } Method;
 
+static int m_lsp_servers(Rpc *r, const J *p, J **out) {
+    (void)p;
+    J *o = j_obj();
+    j_set(o, "servers", r->hub ? lsp_hub_status(r->hub) : j_arr());
+    j_set(o, "enabled", j_bool(r->hub != NULL));
+    *out = o;
+    return 0;
+}
+
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
     {"replace_symbol", m_replace_symbol},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
+    {"lsp_servers", m_lsp_servers},
 };
 
 /* 0 ok, -1 failure (na_errmsg), -2 unknown method */
@@ -526,6 +593,8 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"function\":{\"type\":\"string\"},\"param\":{\"type\":\"string\"},\"default\":{\"type\":\"string\"},\"position\":{\"type\":\"integer\"},\"if_rev\":{\"type\":\"integer\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"function\",\"param\"]}"));
     j_push(arr, tool_def("add_include", "Insert an #include after the last include (no-op if present).",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"header\":{\"type\":\"string\"},\"system\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"header\"]}"));
+    j_push(arr, tool_def("lsp_servers", "List the configured language servers and whether they are installed/running.",
+                         "{\"type\":\"object\",\"properties\":{}}"));
     j_push(arr, tool_def("find_symbols", "Search top-level symbols across the workspace by name substring.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     return arr;

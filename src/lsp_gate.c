@@ -56,6 +56,16 @@ static char *abs_of(const DiagnosticGate *g, const char *rel) {
     return buf_take(&b);
 }
 
+/* Files the gate validates: the C family always, anything else when the language server hub serves it. */
+static bool gated(const DiagnosticGate *g, const char *rel) {
+    if (is_cxx_file(rel)) return true;
+    if (!g->ops.supports) return false;
+    char *abs = abs_of(g, rel);
+    bool ok = g->ops.supports(g->ops.ctx, abs);
+    free(abs);
+    return ok;
+}
+
 /* Discover dependents of the changed files. Returns dependents (workspace
  * relative) and loads the compilation database for include directories. */
 static int discover(DiagnosticGate *g, const StrList *changed, StrList *dependents, CompDb *db,
@@ -70,7 +80,14 @@ static int discover(DiagnosticGate *g, const StrList *changed, StrList *dependen
     opt.text_ctx = g->store;
     opt.snapshot_paths = snap_paths;
     opt.by_source = db->n ? db : NULL;
-    return dependent_sources(g->root, changed, &opt, dependents);
+    /* Include-closure discovery only makes sense for C-family changes. */
+    StrList cx;
+    sl_init(&cx);
+    for (size_t i = 0; i < changed->n; i++)
+        if (is_cxx_file(changed->v[i])) sl_push(&cx, changed->v[i]);
+    int rc = cx.n ? dependent_sources(g->root, &cx, &opt, dependents) : 0;
+    sl_free(&cx);
+    return rc;
 }
 
 /* Hash everything validation depended on besides the changed documents. */
@@ -149,7 +166,7 @@ static int gather(DiagnosticGate *g, const ValidateDoc *docs, size_t n, Target *
     size_t cnt = 0, cap = 0;
     int rc = -1;
     for (size_t i = 0; i < n; i++)
-        if (is_cxx_file(docs[i].path)) sl_push(&changed, docs[i].path);
+        if (gated(g, docs[i].path)) sl_push(&changed, docs[i].path);
     if (changed.n == 0) {
         *out = NULL;
         *nout = 0;
@@ -163,7 +180,7 @@ static int gather(DiagnosticGate *g, const ValidateDoc *docs, size_t n, Target *
     cap = n + deps.n + MAX_OVERLAY + 4;
     v = na_alloc(cap * sizeof *v);
     for (size_t i = 0; i < n; i++) {
-        if (!is_cxx_file(docs[i].path)) continue;
+        if (!gated(g, docs[i].path)) continue;
         Target *t = &v[cnt++];
         t->rel = na_strdup(docs[i].path);
         t->abs = abs_of(g, docs[i].path);

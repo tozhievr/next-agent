@@ -2,6 +2,18 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.24.0 — 2026-11-08
+
+### Added
+- Language server hub (`serve --lsp`, `mcp --lsp`): other languages through any LSP server — clangd, pyright/pylsp, rust-analyzer, gopls, typescript-language-server, zls, lua-language-server — chosen by file extension, started on demand, configurable in `.aed/lsp.json`.
+- `outline`, `select` and `replace_symbol` for non-C files via `textDocument/documentSymbol`; the diagnostic gate validates edits to those files too.
+- Incremental document sync: edits are sent as ranged `didChange` (common prefix/suffix trimmed) when the server advertises incremental sync.
+- `lsp_servers` method and MCP tool.
+- Tests run against a fake language server (`tests --fake-lsp`), including ranged-sync round trips.
+
+### Changed
+- `ClangdClient` is now the generic `LspClient` (old names remain as aliases); documents are tracked per client, reopening a document starts a fresh version space.
+
 ## 0.23.0 — 2026-11-08
 
 ### Added

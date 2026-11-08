@@ -1014,7 +1014,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 12);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 13);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1070,7 +1070,282 @@ static void test_live_clangd(void) {
         fflush(stdout);       \
     } while (0)
 
-int main(void) {
+/* ------------------------------------------------ fake language server (tests.exe --fake-lsp) */
+typedef struct {
+    char *uri, *text;
+} FakeDoc;
+
+static void fake_send(J *msg) {
+    Buf f;
+    buf_init(&f);
+    lsp_frame_message(msg, &f);
+    fwrite(f.p, 1, f.len, stdout);
+    fflush(stdout);
+    buf_free(&f);
+    json_free(msg);
+}
+
+static J *fake_reply(const J *id, J *result) {
+    J *r = j_obj();
+    j_set(r, "jsonrpc", j_str("2.0"));
+    char *d = json_dump(id);
+    j_set(r, "id", json_parse(d, strlen(d)));
+    free(d);
+    j_set(r, "result", result);
+    return r;
+}
+
+static void fake_publish(const FakeDoc *d, int64_t version) {
+    J *p = j_obj();
+    j_set(p, "uri", j_str(d->uri));
+    j_set(p, "version", j_int(version));
+    J *diags = j_arr();
+    if (strstr(d->text, "ERROR")) {
+        J *g = j_obj(), *rg = j_obj(), *a = j_obj(), *b = j_obj();
+        j_set(a, "line", j_int(0));
+        j_set(a, "character", j_int(0));
+        j_set(b, "line", j_int(0));
+        j_set(b, "character", j_int(1));
+        j_set(rg, "start", a);
+        j_set(rg, "end", b);
+        j_set(g, "range", rg);
+        j_set(g, "severity", j_int(1));
+        j_set(g, "code", j_str("E1"));
+        j_set(g, "message", j_str("boom"));
+        j_push(diags, g);
+    }
+    j_set(p, "diagnostics", diags);
+    J *m = j_obj();
+    j_set(m, "jsonrpc", j_str("2.0"));
+    j_set(m, "method", j_str("textDocument/publishDiagnostics"));
+    j_set(m, "params", p);
+    fake_send(m);
+}
+
+static J *fake_range(size_t l0, size_t c0, size_t l1, size_t c1) {
+    J *r = j_obj(), *a = j_obj(), *b = j_obj();
+    j_set(a, "line", j_int((int64_t)l0));
+    j_set(a, "character", j_int((int64_t)c0));
+    j_set(b, "line", j_int((int64_t)l1));
+    j_set(b, "character", j_int((int64_t)c1));
+    j_set(r, "start", a);
+    j_set(r, "end", b);
+    return r;
+}
+
+/* Python-ish: `def f` / `class C` at column 0 start a symbol that runs over the indented lines below. */
+static J *fake_symbols(const char *text) {
+    J *top = j_arr();
+    J *cur = NULL, *cur_children = NULL;
+    size_t line = 0;
+    const char *p = text;
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        bool is_def = strncmp(p, "def ", 4) == 0, is_class = strncmp(p, "class ", 6) == 0;
+        bool is_method = strncmp(p, "    def ", 8) == 0;
+        if (is_def || is_class) {
+            const char *name = p + (is_def ? 4 : 6);
+            size_t nl = 0;
+            while (name + nl < p + n && name[nl] != '(' && name[nl] != ':') nl++;
+            cur = j_obj();
+            j_set(cur, "name", j_strn(name, nl));
+            j_set(cur, "kind", j_int(is_def ? 12 : 5));
+            j_set(cur, "range", fake_range(line, 0, line, n));
+            cur_children = NULL;
+            if (is_class) {
+                cur_children = j_arr();
+                j_set(cur, "children", cur_children);
+            }
+            j_push(top, cur);
+        } else if (is_method && cur_children) {
+            const char *name = p + 8;
+            size_t nl = 0;
+            while (name + nl < p + n && name[nl] != '(') nl++;
+            J *m = j_obj();
+            j_set(m, "name", j_strn(name, nl));
+            j_set(m, "kind", j_int(6));
+            j_set(m, "range", fake_range(line, 4, line, n));
+            j_push(cur_children, m);
+        }
+        if (cur && n > 0 && (p[0] == ' ' || is_def || is_class)) {
+            /* extend the current symbol's range to this line */
+            J *end = (J *)j_get(j_get(cur, "range"), "end");
+            ((J *)j_get(end, "line"))->i = (int64_t)line;
+            ((J *)j_get(end, "character"))->i = (int64_t)n;
+        }
+        line++;
+        if (!e) break;
+        p = e + 1;
+    }
+    return top;
+}
+
+static int fake_lsp(void) {
+    FakeDoc docs[8];
+    size_t nd = 0;
+    char hdr[256];
+    for (;;) {
+        size_t clen = 0;
+        bool got = false;
+        while (fgets(hdr, sizeof hdr, stdin)) {
+            if (hdr[0] == '\r' || hdr[0] == '\n') {
+                got = true;
+                break;
+            }
+            if (strncmp(hdr, "Content-Length:", 15) == 0) clen = (size_t)atoi(hdr + 15);
+        }
+        if (!got || clen == 0) return 0;
+        char *body = na_alloc(clen + 1);
+        if (fread(body, 1, clen, stdin) != clen) return 0;
+        J *msg = json_parse(body, clen);
+        free(body);
+        if (!msg) return 1;
+        const J *method = j_get(msg, "method"), *id = j_get(msg, "id"), *params = j_get(msg, "params");
+        const char *m = j_is_str(method) ? method->s : "";
+        if (strcmp(m, "initialize") == 0) {
+            J *caps = j_obj(), *sync = j_obj(), *res = j_obj();
+            j_set(sync, "change", j_int(2));
+            j_set(sync, "openClose", j_bool(true));
+            j_set(caps, "textDocumentSync", sync);
+            j_set(caps, "positionEncoding", j_str("utf-16"));
+            j_set(res, "capabilities", caps);
+            fake_send(fake_reply(id, res));
+        } else if (strcmp(m, "shutdown") == 0) {
+            fake_send(fake_reply(id, j_null()));
+        } else if (strcmp(m, "exit") == 0) {
+            return 0;
+        } else if (strcmp(m, "textDocument/didOpen") == 0) {
+            const J *td = j_get(params, "textDocument");
+            if (nd < 8) {
+                docs[nd].uri = na_strdup(j_get(td, "uri")->s);
+                docs[nd].text = na_strndup(j_get(td, "text")->s, j_get(td, "text")->slen);
+                fake_publish(&docs[nd], j_get(td, "version")->i);
+                nd++;
+            }
+        } else if (strcmp(m, "textDocument/didChange") == 0) {
+            const J *td = j_get(params, "textDocument");
+            for (size_t i = 0; i < nd; i++) {
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) != 0) continue;
+                const J *ch = j_get(params, "contentChanges")->items[0];
+                const J *rg = j_get(ch, "range");
+                const J *t = j_get(ch, "text");
+                if (!rg) {
+                    free(docs[i].text);
+                    docs[i].text = na_strndup(t->s, t->slen);
+                } else {
+                    size_t len = strlen(docs[i].text), so = 0, eo = 0;
+                    const J *s0 = j_get(rg, "start"), *e0 = j_get(rg, "end");
+                    lsp_position_to_offset(docs[i].text, len, (size_t)j_get(s0, "line")->i, (size_t)j_get(s0, "character")->i,
+                                           ENC_UTF16, &so);
+                    lsp_position_to_offset(docs[i].text, len, (size_t)j_get(e0, "line")->i, (size_t)j_get(e0, "character")->i,
+                                           ENC_UTF16, &eo);
+                    size_t sb = cp_to_byte(docs[i].text, len, so), eb = cp_to_byte(docs[i].text, len, eo);
+                    Buf nb;
+                    buf_init(&nb);
+                    buf_put(&nb, docs[i].text, sb);
+                    buf_put(&nb, t->s, t->slen);
+                    buf_put(&nb, docs[i].text + eb, len - eb);
+                    free(docs[i].text);
+                    docs[i].text = buf_take(&nb);
+                }
+                fake_publish(&docs[i], j_get(td, "version")->i);
+            }
+        } else if (strcmp(m, "textDocument/didClose") == 0) {
+            const J *td = j_get(params, "textDocument");
+            for (size_t i = 0; i < nd; i++)
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) == 0) {
+                    free(docs[i].uri);
+                    free(docs[i].text);
+                    docs[i] = docs[--nd];
+                    break;
+                }
+        } else if (strcmp(m, "textDocument/documentSymbol") == 0) {
+            const J *td = j_get(params, "textDocument");
+            J *res = j_arr();
+            for (size_t i = 0; i < nd; i++)
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) == 0) {
+                    json_free(res);
+                    res = fake_symbols(docs[i].text);
+                }
+            fake_send(fake_reply(id, res));
+        } else if (id) {
+            fake_send(fake_reply(id, j_null()));
+        }
+        json_free(msg);
+    }
+}
+
+static char g_self[600];
+
+static void test_lsp_hub(void) {
+    g_test = "lsp_hub";
+    char *ws = new_ws();
+    char cfg[1500];
+    snprintf(cfg, sizeof cfg,
+             "{\"servers\":[{\"name\":\"fake\",\"command\":\"%s\",\"args\":\"--fake-lsp\",\"extensions\":[\".py\"],\"language\":\"python\"}]}",
+             g_self);
+    put_file(ws, ".aed/lsp.json", cfg);
+    put_file(ws, "m.py", "def alpha():\n    return 1\n\nclass Box:\n    def size(self):\n        return 2\n\ndef omega():\n    return 3\n");
+    Store *st = store_open(ws);
+    LspHub *hub = lsp_hub_new(ws, NULL, 5000);
+    CHECK(lsp_hub_handles(hub, "m.py"));
+    CHECK(!lsp_hub_handles(hub, "notes.txt"));
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.hub = hub;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"outline\",\"params\":{\"target\":\"m.py\"}}");
+    const J *syms = a ? j_get(j_get(a, "result"), "symbols") : NULL;
+    CHECK(syms && syms->n == 3);
+    if (syms && syms->n == 3) {
+        CHECK_STR(j_get(syms->items[0], "name")->s, "alpha");
+        CHECK_STR(j_get(syms->items[0], "kind")->s, "function");
+        CHECK_STR(j_get(syms->items[1], "kind")->s, "class");
+        CHECK(j_get(syms->items[2], "line")->i == 8);
+    }
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"outline\",\"params\":{\"target\":\"m.py\",\"nested\":true}}");
+    syms = a ? j_get(j_get(a, "result"), "symbols") : NULL;
+    CHECK(syms && syms->n == 4);
+    if (syms && syms->n == 4) {
+        CHECK_STR(j_get(syms->items[2], "name")->s, "size");
+        CHECK_STR(j_get(syms->items[2], "scope")->s, "Box");
+    }
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"replace_symbol\",\"params\":{\"target\":\"m.py\",\"name\":\"omega\",\"replacement\":\"def omega():\\n    return 33\",\"if_rev\":0}}");
+    CHECK(a && j_get(a, "result") != NULL);
+    json_free(a);
+    char *v = view_text(st, "m.py");
+    CHECK(strstr(v, "return 33") != NULL && strstr(v, "return 1") != NULL);
+    free(v);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"lsp_servers\"}");
+    CHECK(a && j_get(j_get(a, "result"), "servers")->n >= 2);
+    json_free(a);
+
+    /* the gate validates non-C documents through the hub and syncs edits incrementally */
+    DiagnosticGate *gate = gate_new(ws, lsp_hub_ops(hub), st, 2);
+    Validator val = gate_validator(gate);
+    CHECK(edit1(st, "m.py", 0, 0, "# header\n", STORE_NO_REV, &val, NULL) == 0);
+    CHECK_ERR(edit1(st, "m.py", 0, 0, "ERROR\n", STORE_NO_REV, &val, NULL), "diagnostics_regression");
+    CHECK(edit1(st, "m.py", 0, 0, "# second\n", STORE_NO_REV, &val, NULL) == 0);
+    LspClient *c = lsp_hub_client(hub, "m.py");
+    CHECK(c && lsp_client_incremental(c));
+    CHECK(c && lsp_client_ranged_changes(c) >= 2 && lsp_client_full_changes(c) == 0);
+    gate_free(gate);
+    lsp_hub_free(hub);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
+    {
+        char *self = pf_fullpath(argv[0]);
+        snprintf(g_self, sizeof g_self, "%s", self ? self : argv[0]);
+        free(self);
+    }
     const char *tmp = getenv("TEMP");
     snprintf(g_base, sizeof g_base, "%s/nextagent-tests", tmp ? tmp : ".");
     pf_mkdirs(g_base);
@@ -1090,6 +1365,7 @@ int main(void) {
     RUN(test_gate);
     RUN(test_gate_dependents);
     RUN(test_rpc);
+    RUN(test_lsp_hub);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

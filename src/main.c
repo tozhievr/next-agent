@@ -15,8 +15,8 @@ static void usage(void) {
           "  redo\n"
           "  history [--limit N]\n"
           "  sync [PATH...]\n"
-          "  serve [--clangd[=EXE]]         JSON-RPC 2.0, one object per line on stdio\n"
-          "  mcp [--clangd[=EXE]]           MCP stdio bridge\n",
+          "  serve [--clangd[=EXE]|--lsp]        JSON-RPC 2.0, one object per line on stdio\n"
+          "  mcp [--clangd[=EXE]|--lsp]         MCP stdio bridge\n",
           stderr);
 }
 
@@ -254,12 +254,17 @@ int main(int argc, char **argv) {
         }
         code = run_method(&rpc, "sync", p);
     } else if (strcmp(cmd, "serve") == 0 || strcmp(cmd, "mcp") == 0) {
-        const char *clangd = NULL;
+        const char *clangd = NULL, *lsp_clangd = NULL;
+        bool use_hub = false;
         for (int k = 0; k < nargs; k++) {
             if (strcmp(args[k], "--clangd") == 0) clangd = "clangd";
             else if (strncmp(args[k], "--clangd=", 9) == 0) clangd = args[k] + 9;
+            else if (strcmp(args[k], "--lsp") == 0) use_hub = true;
+            else if (strncmp(args[k], "--lsp=", 6) == 0) use_hub = true, lsp_clangd = args[k] + 6;
             else goto bad;
         }
+        if (use_hub && clangd) goto bad;
+        LspHub *hub = NULL;
         ClangdClient *client = NULL;
         DiagnosticGate *gate = NULL;
         if (clangd) {
@@ -273,12 +278,20 @@ int main(int argc, char **argv) {
             rpc.validator = gate_validator(gate);
             rpc.has_validator = true;
         }
+        if (use_hub) {
+            hub = lsp_hub_new(store_root(store), lsp_clangd && *lsp_clangd ? lsp_clangd : NULL, 20000);
+            gate = gate_new(store_root(store), lsp_hub_ops(hub), store, 2);
+            rpc.validator = gate_validator(gate);
+            rpc.has_validator = true;
+            rpc.hub = hub;
+        }
         rpc.session = "jsonrpc";
         if (rpc_serve(&rpc, stdin, stdout, strcmp(cmd, "mcp") == 0) != 0) {
             fprintf(stderr, "nextagent: %s\n", na_errmsg());
             code = 1;
         }
         gate_free(gate);
+        lsp_hub_free(hub);
         clangd_close(client);
     } else {
         goto bad;

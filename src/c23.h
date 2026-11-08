@@ -18,6 +18,8 @@ typedef struct {
 } SymbolList;
 
 void symbols_free(SymbolList *l);
+/* Unique match by name (and optional kind/scope) in an outline. Errors: symbol_not_found / ambiguous_symbol. */
+int symbols_select(const SymbolList *all, const char *name, const char *kind, const char *scope, Symbol *out);
 J *symbol_to_json(const Symbol *s);
 
 int c23_outline(const Snapshot *snap, bool nested, SymbolList *out);

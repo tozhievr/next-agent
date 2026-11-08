@@ -7,7 +7,7 @@ Agents edit by *symbol* or *codepoint range* instead of re-reading whole files, 
 
 Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Windows SDK, Visual Studio, Python or SQLite is required: the result is a single `nextagent.exe` (~170 KB) that talks only to kernel32.
 
-> **Status: 0.23.0, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
+> **Status: 0.24.0, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
 
 ## Contents
 
@@ -36,6 +36,7 @@ Typical agent edit loops are wasteful and fragile: read a file, guess line numbe
 | History | `log`, `undo` of the head or of any revision (rebased over later edits, `undo_conflict` on overlap), `redo`. |
 | C23 navigation | Built-in tolerant scanner: `outline`, `--nested` struct/union/enum fields, `select` by name/kind/scope, guarded `replace_symbol`. Syntax only, no name resolution. |
 | Interfaces | CLI, JSON-RPC 2.0 over newline-delimited stdio, MCP stdio bridge. |
+| Languages | `serve --lsp`: Python, Rust, Go, TypeScript, ... via language servers (symbols and diagnostic gate); incremental C23 outline cache. |
 | clangd gate | Pre-commit diagnostics comparison, literal-include dependent discovery, `compile_commands.json` include dirs, fail-closed freshness, build-state recheck inside the write lock. |
 | Sync | Explicit `sync` writes committed text to disk with baseline conflict checks. |
 
@@ -47,7 +48,7 @@ One line (PowerShell, Windows x64): downloads the latest release, verifies its S
 irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
 ```
 
-A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.23.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
+A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.24.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
 
 ## Build
 
@@ -70,7 +71,7 @@ Two compilers are supported; both produce the same `build/nextagent.exe`.
 
 If a compiler is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"` or `$env:CLANG = "C:\Program Files\LLVM\bin\clang.exe"`.
 The clang path is verified here only by a syntax/warnings check; the full link runs in CI.
-The suite has 280 checks; the live-clangd ones are skipped when `clangd` is missing.
+The suite has 298 checks; the live-clangd ones are skipped when `clangd` is missing.
 
 ## Quick start
 
@@ -145,6 +146,28 @@ Example client configuration:
 { "mcpServers": { "nextagent": { "command": "D:/next-agent/build/nextagent.exe",
                                   "args": ["--root", "D:/project", "mcp", "--clangd"] } } }
 ```
+
+## Other languages (language servers)
+
+`serve --lsp` / `mcp --lsp` start a *language server hub*. Files are routed by extension to a server that is started on first use:
+
+| Languages | Server (first one found on `PATH`) |
+| --- | --- |
+| C, C++ | `clangd` |
+| Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` |
+| Rust | `rust-analyzer` |
+| Go | `gopls` |
+| TypeScript, JavaScript | `typescript-language-server` |
+| Zig, Lua | `zls`, `lua-language-server` |
+
+With the hub, `outline`, `select` and `replace_symbol` work on non-C files through `textDocument/documentSymbol` (`nested` returns children with `scope`), and the pre-commit diagnostic gate also vets edits to those files. Edits reach the server as ranged `didChange` notifications when it supports incremental sync. `lsp_servers` lists what is configured, installed and running.
+Add or override servers in `<root>/.aed/lsp.json`:
+
+```json
+{"servers": [{"name": "mypy", "command": "pylsp", "args": "", "extensions": [".py"], "language": "python"}]}
+```
+
+Servers installed as `.cmd`/`.bat` shims (typical for npm packages on Windows) must be wrapped, e.g. `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
 
 ## clangd diagnostic gate
 

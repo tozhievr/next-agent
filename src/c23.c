@@ -714,7 +714,7 @@ int c23_outline(const Snapshot *snap, bool nested, SymbolList *out) {
     return rc;
 }
 
-static int select_from(const SymbolList *all, const char *name, const char *kind, const char *scope, Symbol *out) {
+int symbols_select(const SymbolList *all, const char *name, const char *kind, const char *scope, Symbol *out) {
     long found = -1;
     size_t count = 0;
     for (size_t i = 0; i < all->n; i++) {
@@ -739,7 +739,7 @@ int c23_select_cached(OutlineCache *c, const Snapshot *snap, const char *name, c
                       Symbol *out) {
     SymbolList all;
     c23_outline_cached(c, snap, true, &all);
-    int rc = select_from(&all, name, kind, scope, out);
+    int rc = symbols_select(&all, name, kind, scope, out);
     symbols_free(&all);
     return rc;
 }
