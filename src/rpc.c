@@ -3,6 +3,7 @@
 #include "c23.h"
 #include "platform.h"
 #include "refactor.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -154,6 +155,7 @@ void rpc_release(Rpc *r) {
         outline_cache_free(r->caches[i]);
     }
     r->ncaches = 0;
+    sem_cache_save(r->index);
     wsi_free(r->index);
     r->index = NULL;
 }
@@ -296,8 +298,68 @@ static char *adapt_eol(const Snapshot *s, const char *in, size_t n, size_t *outl
     return buf_take(&b);
 }
 
-/* Replaces literal text; the match must be unique unless `all` is set (like a precise patch). */
+/* Replaces whole lines start_line..end_line (1-based, inclusive) of a document. The replacement keeps the
+ * file's line endings and a missing final newline is added when the replaced lines had one; an empty
+ * replacement deletes the lines. */
+static int replace_lines(Rpc *r, const J *p, J **out) {
+    const char *target, *repl, *label;
+    int64_t a_line, b_line, if_rev;
+    if (need_str(p, "target", &target) || need_str(p, "new", &repl) || opt_int(p, "start_line", 0, &a_line) ||
+        opt_int(p, "end_line", 0, &b_line) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev) || opt_str(p, "label", &label))
+        return -1;
+    if (b_line == 0) b_line = a_line;
+    Snapshot *s;
+    if (store_view(r->store, target, &s) != 0) return -1;
+    size_t nl = 0;
+    for (size_t i = 0; i < s->len; i++)
+        if (s->text[i] == '\n') nl++;
+    if (s->len > 0 && s->text[s->len - 1] != '\n') nl++;
+    if (a_line < 1 || b_line < a_line || (size_t)b_line > nl) {
+        snap_free(s);
+        return na_fail("invalid parameter: lines %lld-%lld out of range (%s has %zu lines)", (long long)a_line, (long long)b_line, target, nl);
+    }
+    size_t from = 0, to, line = 1;
+    for (; line < (size_t)a_line; line++) {
+        while (s->text[from] != '\n') from++;
+        from++;
+    }
+    to = from;
+    for (; line <= (size_t)b_line; line++) {
+        while (to < s->len && s->text[to] != '\n') to++;
+        if (to < s->len) to++;
+    }
+
+    bool had_eol = to > from && s->text[to - 1] == '\n', crlf = to - from >= 2 && s->text[to - 2] == '\r';
+    size_t rlen;
+    char *rep = adapt_eol(s, repl, strlen(repl), &rlen);
+    Buf nb;
+    buf_init(&nb);
+    buf_put(&nb, rep, rlen);
+    if (rlen > 0 && had_eol && rep[rlen - 1] != '\n') buf_puts(&nb, crlf ? "\r\n" : "\n");
+    free(rep);
+    if (if_rev == STORE_NO_REV) if_rev = store_head(r->store);
+    ChangeSet cs;
+    cs_init(&cs);
+    size_t cp_from = utf8_cp_count(s->text, from);
+    cs_add(&cs, cp_from, cp_from + utf8_cp_count(s->text + from, to - from), nb.p ? nb.p : "", nb.len);
+    EditResult res;
+    const char *names[1] = {target};
+    int rc = store_edit(r->store, names, &cs, 1, if_rev, label ? label : "replace_lines", r->session ? r->session : "jsonrpc",
+                        validator_of(r), &res);
+    cs_free(&cs);
+    buf_free(&nb);
+    snap_free(s);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "replacements", j_int(1));
+    edit_result_free(&res);
+    return 0;
+}
+
+/* Replaces literal text; the match must be unique unless `all` is set (like a precise patch).
+ * With start_line (and optionally end_line) it replaces those whole lines instead and `old` is not needed. */
 static int m_replace_text(Rpc *r, const J *p, J **out) {
+    if (j_get(p, "start_line")) return replace_lines(r, p, out);
     const char *target, *old, *repl, *label;
     bool all;
     int64_t if_rev;
@@ -552,6 +614,372 @@ static int m_references(Rpc *r, const J *p, J **out) {
     return rc;
 }
 
+/* ---- call graph: callers through references (language server, or tokens for C), callees through the
+ * identifiers of a function body matched against the workspace's function symbols ---- */
+static bool callable_kind(const char *k) {
+    return strcmp(k, "function") == 0 || strcmp(k, "method") == 0 || strcmp(k, "constructor") == 0 || strcmp(k, "procedure") == 0;
+}
+
+static size_t cg_file_index(const WsIndex *ix, const char *path) {
+    for (size_t i = 0; i < wsi_nfiles(ix); i++)
+        if (strcmp(wsi_path(ix, i), path) == 0) return i;
+    return (size_t)-1;
+}
+
+/* innermost callable symbol of file fi that contains codepoint offset pos */
+static const Symbol *cg_enclosing(const WsIndex *ix, size_t fi, size_t pos) {
+    const SymbolList *l = wsi_symbols(ix, fi);
+    const Symbol *best = NULL;
+    for (size_t k = 0; k < l->n; k++) {
+        const Symbol *y = &l->v[k];
+        if (!callable_kind(y->kind) || pos < y->start || pos >= y->end) continue;
+        if (!best || y->end - y->start < best->end - best->start) best = y;
+    }
+    return best;
+}
+
+static size_t cg_cp_to_byte(const char *t, size_t len, size_t cp) {
+    size_t b = 0;
+    while (cp > 0 && b < len) {
+        b += utf8_seq_len((unsigned char)t[b]);
+        cp--;
+    }
+    return b < len ? b : len;
+}
+
+/* codepoint offset of the declared name inside symbol y (its first whole-word occurrence), or (size_t)-1 */
+static size_t cg_name_token(Rpc *r, const char *rel, const Symbol *y) {
+    if (y->sel != (size_t)-1) return y->sel;
+    char *text = NULL;
+    size_t len, found = (size_t)-1, nl = strlen(y->name);
+    if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+        free(text);
+        return found;
+    }
+    size_t a = cg_cp_to_byte(text, len, y->start), e = cg_cp_to_byte(text, len, y->end);
+    for (size_t i = a; i + nl <= e; i++) {
+        bool left = i == a || !(isalnum((unsigned char)text[i - 1]) || text[i - 1] == '_');
+        bool right = i + nl == len || !(isalnum((unsigned char)text[i + nl]) || text[i + nl] == '_');
+        if (left && right && memcmp(text + i, y->name, nl) == 0) {
+            found = utf8_cp_count(text, i);
+            break;
+        }
+    }
+    free(text);
+    return found;
+}
+
+static bool cg_seen(const J *nodes, const char *path, const char *name, int64_t line) {
+    for (size_t i = 0; i < nodes->n; i++) {
+        const J *n = nodes->items[i];
+        if (j_get(n, "line")->i == line && strcmp(j_get(n, "path")->s, path) == 0 && strcmp(j_get(n, "name")->s, name) == 0) return true;
+    }
+    return false;
+}
+
+static J *cg_node(const char *path, const Symbol *y, int depth, const char *via) {
+    J *o = j_obj();
+    j_set(o, "name", j_str(y->name));
+    j_set(o, "kind", j_str(y->kind));
+    j_set(o, "path", j_str(path));
+    j_set(o, "line", j_int((int64_t)y->line));
+    j_set(o, "depth", j_int(depth));
+    if (via) j_set(o, "via", j_str(via));
+    return o;
+}
+
+/* Reconcile files changed outside NextAgent with the journal (three-way merge by lines). */
+static int m_merge(Rpc *r, const J *p, J **out) {
+    const char *strategy;
+    bool dry;
+    StrList only, all;
+    if (opt_str(p, "strategy", &strategy) || opt_bool(p, "dry_run", false, &dry) || opt_paths(p, "paths", &only)) return -1;
+    sl_init(&all);
+    if (only.n == 0) {
+        if (store_snapshot_paths(r->store, &all) != 0) {
+            sl_free(&only);
+            sl_free(&all);
+            return -1;
+        }
+    } else {
+        for (size_t i = 0; i < only.n; i++) sl_push(&all, only.v[i]);
+    }
+    J *results = j_arr(), *paths = j_arr();
+    int64_t conflicts = 0;
+    int rc = 0;
+    for (size_t i = 0; i < all.n && rc == 0; i++) {
+        J *rep;
+        if (store_merge_external(r->store, all.v[i], strategy, dry, &rep) != 0) {
+            rc = -1;
+            break;
+        }
+        const char *st = j_get(rep, "status")->s;
+        const J *pp = j_get(rep, "paths");
+        if (pp && pp->n == 1) j_push(paths, j_str(pp->items[0]->s));
+        if (strcmp(st, "conflict") == 0) conflicts++;
+        if (strcmp(st, "unchanged") != 0 || only.n > 0) j_push(results, rep);
+        else json_free(rep);
+    }
+    sl_free(&only);
+    sl_free(&all);
+    if (rc != 0) {
+        json_free(results);
+        json_free(paths);
+        return -1;
+    }
+    J *o = j_obj();
+    j_set(o, "conflicts", j_int(conflicts));
+    j_set(o, "results", results);
+    if (!dry && paths->n > 0) {
+        j_set(o, "paths", paths);
+        j_set(o, "rev", j_int(store_head(r->store)));
+    } else {
+        json_free(paths);
+    }
+    *out = o;
+    return 0;
+}
+
+static int m_callers(Rpc *r, const J *p, J **out) {
+    const char *name, *kind, *scope, *path;
+    int64_t depth, limit;
+    if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
+        opt_int(p, "depth", 1, &depth) || opt_int(p, "limit", 100, &limit))
+        return -1;
+    if (depth < 1 || depth > 5 || limit < 1 || limit > 1000) return na_fail("invalid parameter: depth 1..5, limit 1..1000");
+    Sem s = sem_of(r);
+    if (wsi_refresh(s.ix) != 0) return -1;
+    J *nodes = j_arr();
+    /* frontier of (name, path) pairs to ask references for */
+    typedef struct {
+        char *name, *path, *scope, *kind;
+    } Target;
+    Target *cur = na_alloc(sizeof *cur), *next = NULL;
+    size_t ncur = 1, nnext = 0, cnext = 0;
+    cur[0] = (Target){na_strdup(name), path ? na_strdup(path) : NULL, scope ? na_strdup(scope) : NULL, kind ? na_strdup(kind) : NULL};
+    bool truncated = false;
+    int rc = 0;
+    for (int d = 1; d <= depth && ncur > 0 && rc == 0; d++) {
+        for (size_t t = 0; t < ncur && rc == 0; t++) {
+            J *rp = j_obj();
+            j_set(rp, "name", j_str(cur[t].name));
+            if (cur[t].path) j_set(rp, "path", j_str(cur[t].path));
+            if (cur[t].scope) j_set(rp, "scope", j_str(cur[t].scope));
+            if (cur[t].kind) j_set(rp, "kind", j_str(cur[t].kind));
+            J *refs = NULL;
+            int rr = m_references(r, rp, &refs);
+            json_free(rp);
+            if (rr != 0) {
+                if (d == 1) rc = -1; /* the requested symbol itself must resolve */
+                continue;            /* deeper levels: skip callers we cannot resolve */
+            }
+            const J *arr = j_get(refs, "references");
+            for (size_t i = 0; arr && i < arr->n; i++) {
+                const J *ref = arr->items[i], *def = j_get(ref, "definition"), *call = j_get(ref, "call");
+                if ((def && def->b) || (call && !call->b)) continue;
+                const char *rel = j_get(ref, "path")->s;
+                size_t fi = cg_file_index(s.ix, rel);
+                if (fi == (size_t)-1) continue;
+                const Symbol *y = cg_enclosing(s.ix, fi, (size_t)j_get(ref, "start")->i);
+                if (!y || (strcmp(y->name, cur[t].name) == 0 && cg_name_token(r, rel, y) == (size_t)j_get(ref, "start")->i)) continue; /* the definition itself */
+                int64_t line = (int64_t)y->line;
+                if (cg_seen(nodes, rel, y->name, line)) continue;
+                if (nodes->n >= (size_t)limit) {
+                    truncated = true;
+                    break;
+                }
+                J *n = cg_node(rel, y, d, cur[t].name);
+                J *sites = j_arr();
+                for (size_t k = 0; k < arr->n; k++) { /* every call site inside this caller */
+                    const J *o = arr->items[k];
+                    if (strcmp(j_get(o, "path")->s, rel) != 0) continue;
+                    size_t st = (size_t)j_get(o, "start")->i;
+                    if (st >= y->start && st < y->end && !(j_get(o, "definition") && j_get(o, "definition")->b))
+                        j_push(sites, j_int(j_get(o, "line")->i));
+                }
+                j_set(n, "sites", sites);
+                j_push(nodes, n);
+                if (d < depth) {
+                    if (nnext == cnext) {
+                        cnext = cnext ? cnext * 2 : 16;
+                        next = na_realloc(next, cnext * sizeof *next);
+                    }
+                    next[nnext++] = (Target){na_strdup(y->name), na_strdup(rel), y->scope && y->scope[0] ? na_strdup(y->scope) : NULL, NULL};
+                }
+            }
+            json_free(refs);
+        }
+        for (size_t t = 0; t < ncur; t++) {
+            free(cur[t].name);
+            free(cur[t].path);
+            free(cur[t].scope);
+            free(cur[t].kind);
+        }
+        free(cur);
+        cur = next;
+        ncur = nnext;
+        next = NULL;
+        nnext = cnext = 0;
+    }
+    for (size_t t = 0; t < ncur; t++) {
+        free(cur[t].name);
+        free(cur[t].path);
+        free(cur[t].scope);
+        free(cur[t].kind);
+    }
+    free(cur);
+    if (rc != 0) {
+        json_free(nodes);
+        return -1;
+    }
+    J *o = j_obj();
+    j_set(o, "of", j_str(name));
+    j_set(o, "count", j_int((int64_t)nodes->n));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "nodes", nodes);
+    *out = o;
+    return 0;
+}
+
+typedef struct {
+    const char *name;
+    uint32_t file, sym;
+} CgFn;
+
+static int cmp_cgfn(const void *a, const void *b) {
+    const CgFn *x = a, *y = b;
+    int c = strcmp(x->name, y->name);
+    if (c) return c;
+    return x->file != y->file ? (x->file < y->file ? -1 : 1) : (x->sym < y->sym ? -1 : x->sym > y->sym);
+}
+
+static int m_callees(Rpc *r, const J *p, J **out) {
+    const char *name, *kind, *scope, *path;
+    int64_t depth, limit;
+    if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
+        opt_int(p, "depth", 1, &depth) || opt_int(p, "limit", 100, &limit))
+        return -1;
+    if (depth < 1 || depth > 5 || limit < 1 || limit > 1000) return na_fail("invalid parameter: depth 1..5, limit 1..1000");
+    Sem s = sem_of(r);
+    if (wsi_refresh(s.ix) != 0) return -1;
+    size_t nf = wsi_nfiles(s.ix), nfn = 0, cfn = 0;
+    CgFn *fns = NULL;
+    for (size_t f = 0; f < nf; f++) {
+        const SymbolList *l = wsi_symbols(s.ix, f);
+        for (size_t k = 0; k < l->n; k++) {
+            if (!callable_kind(l->v[k].kind)) continue;
+            if (nfn == cfn) {
+                cfn = cfn ? cfn * 2 : 256;
+                fns = na_realloc(fns, cfn * sizeof *fns);
+            }
+            fns[nfn++] = (CgFn){l->v[k].name, (uint32_t)f, (uint32_t)k};
+        }
+    }
+    qsort(fns, nfn, sizeof *fns, cmp_cgfn);
+    /* the root: exactly one function of that name (narrowed by path / kind / scope) */
+    CgFn root = {0};
+    size_t matches = 0;
+    for (size_t i = 0; i < nfn; i++) {
+        const Symbol *y = &wsi_symbols(s.ix, fns[i].file)->v[fns[i].sym];
+        if (strcmp(y->name, name) != 0) continue;
+        if (path && strcmp(wsi_path(s.ix, fns[i].file), path) != 0) continue;
+        if (kind && strcmp(kind, y->kind) != 0) continue;
+        if (scope && strcmp(scope, y->scope ? y->scope : "") != 0) continue;
+        root = fns[i];
+        matches++;
+    }
+    if (matches != 1) {
+        free(fns);
+        if (matches == 0) return na_fail("symbol_not_found: no function named %s in the index", name);
+        return na_fail("ambiguous_symbol: %zu functions named %s (narrow with path, kind or scope)", matches, name);
+    }
+    J *nodes = j_arr();
+    CgFn *cur = na_alloc(sizeof *cur), *next = NULL;
+    size_t ncur = 1, nnext = 0, cnext = 0;
+    cur[0] = root;
+    bool truncated = false;
+    for (int d = 1; d <= depth && ncur > 0; d++) {
+        for (size_t t = 0; t < ncur; t++) {
+            const char *rel = wsi_path(s.ix, cur[t].file);
+            const Symbol *self = &wsi_symbols(s.ix, cur[t].file)->v[cur[t].sym];
+            char *text = NULL;
+            size_t len;
+            if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+                free(text);
+                continue;
+            }
+            size_t a = cg_cp_to_byte(text, len, self->start), e = cg_cp_to_byte(text, len, self->end);
+            for (size_t i = a; i < e;) {
+                unsigned char c = (unsigned char)text[i];
+                if (c == '/' && i + 1 < e && text[i + 1] == '/') {
+                    while (i < e && text[i] != '\n') i++;
+                } else if (c == '/' && i + 1 < e && text[i + 1] == '*') {
+                    i += 2;
+                    while (i + 1 < e && !(text[i] == '*' && text[i + 1] == '/')) i++;
+                    i += 2;
+                } else if (c == '"' || c == '\'') {
+                    i++;
+                    while (i < e && text[i] != (char)c && text[i] != '\n') i += text[i] == '\\' ? 2 : 1;
+                    i++;
+                } else if (isalpha(c) || c == '_' || c >= 0x80) {
+                    size_t b = i;
+                    while (i < e && (isalnum((unsigned char)text[i]) || text[i] == '_' || (unsigned char)text[i] >= 0x80)) i++;
+                    char word[128];
+                    size_t wl = i - b < sizeof word - 1 ? i - b : sizeof word - 1;
+                    memcpy(word, text + b, wl);
+                    word[wl] = 0;
+                    CgFn key = {word, 0, 0};
+                    size_t lo = 0, hi = nfn;
+                    while (lo < hi) {
+                        size_t mid = (lo + hi) / 2;
+                        if (strcmp(fns[mid].name, key.name) < 0) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    size_t same = 0;
+                    for (size_t k = lo; k < nfn && strcmp(fns[k].name, word) == 0; k++) same++;
+                    for (size_t k = lo; k < nfn && strcmp(fns[k].name, word) == 0; k++) {
+                        const Symbol *y = &wsi_symbols(s.ix, fns[k].file)->v[fns[k].sym];
+                        const char *drel = wsi_path(s.ix, fns[k].file);
+                        if (fns[k].file == cur[t].file && fns[k].sym == cur[t].sym) continue; /* recursion is not an edge */
+                        if (cg_seen(nodes, drel, y->name, (int64_t)y->line)) continue;
+                        if (nodes->n >= (size_t)limit) {
+                            truncated = true;
+                            break;
+                        }
+                        J *n = cg_node(drel, y, d, self->name);
+                        if (same > 1) j_set(n, "ambiguous", j_bool(true)); /* several functions share this name */
+                        j_push(nodes, n);
+                        if (d < depth) {
+                            if (nnext == cnext) {
+                                cnext = cnext ? cnext * 2 : 16;
+                                next = na_realloc(next, cnext * sizeof *next);
+                            }
+                            next[nnext++] = fns[k];
+                        }
+                    }
+                } else {
+                    i++;
+                }
+            }
+            free(text);
+        }
+        free(cur);
+        cur = next;
+        ncur = nnext;
+        next = NULL;
+        nnext = cnext = 0;
+    }
+    free(cur);
+    free(fns);
+    J *o = j_obj();
+    j_set(o, "of", j_str(name));
+    j_set(o, "count", j_int((int64_t)nodes->n));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "nodes", nodes);
+    *out = o;
+    return 0;
+}
+
 static int m_rename(Rpc *r, const J *p, J **out) {
     const char *name, *new_name, *label, *kind, *scope, *path;
     bool members, allow;
@@ -656,8 +1084,154 @@ static int m_search(Rpc *r, const J *p, J **out) {
     return sem_search(&s, query, word, icase, (size_t)context, path, (size_t)limit, out);
 }
 
-/* Several literal replacements in several files as one revision:
- * edits: [{path, old, new, all?}], each `old` must match exactly once unless `all`. */
+/* Context pack: the best code for a question, as text, within a token budget (about 4 bytes per token).
+ * Blocks are the ranked chunks of hybrid_search, overlapping ones are dropped, the last one is cut at a line. */
+static int m_context(Rpc *r, const J *p, J **out) {
+    const char *query, *path;
+    int64_t budget, embed;
+    if (need_str(p, "query", &query) || opt_str(p, "path", &path) || opt_int(p, "budget", 4000, &budget) ||
+        opt_int(p, "embed_budget", 256, &embed))
+        return -1;
+    if (budget < 100 || budget > 200000) return na_fail("invalid parameter: budget must be 100..200000 tokens");
+    Sem s = sem_of(r);
+    J *res;
+    if (sem_hybrid(&s, query, path, 40, (size_t)embed, &res) != 0) return -1;
+    const J *m = j_get(res, "matches");
+    J *blocks = j_arr();
+    size_t cap = (size_t)budget * 4, used = 0;
+    bool truncated = false;
+    for (size_t i = 0; m && i < m->n && !truncated; i++) {
+        const J *h = m->items[i];
+        const char *rel = j_get(h, "path")->s;
+        int64_t a = j_get(h, "start_line")->i, b = j_get(h, "end_line")->i;
+        bool overlap = false;
+        for (size_t k = 0; k < blocks->n && !overlap; k++) {
+            const J *o = blocks->items[k];
+            overlap = strcmp(j_get(o, "path")->s, rel) == 0 && a <= j_get(o, "end_line")->i && b >= j_get(o, "start_line")->i;
+        }
+        if (overlap) continue;
+        char *text = NULL;
+        size_t len;
+        if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+            free(text);
+            continue;
+        }
+        size_t from = 0, to = 0, line = 1;
+        while (line < (size_t)a && from < len) {
+            if (text[from++] == '\n') line++;
+        }
+        to = from;
+        int64_t last = a - 1;
+        while (line <= (size_t)b && to < len) {
+            size_t e = to;
+            while (e < len && text[e] != '\n') e++;
+            if (e < len) e++;
+            if (used + (e - from) > cap) {
+                truncated = true;
+                break;
+            }
+            to = e;
+            last = (int64_t)line;
+            line++;
+        }
+        if (last >= a && to > from) {
+            J *o = j_obj();
+            j_set(o, "path", j_str(rel));
+            j_set(o, "start_line", j_int(a));
+            j_set(o, "end_line", j_int(last));
+            const J *sym = j_get(h, "symbol");
+            if (sym) j_set(o, "symbol", j_str(sym->s));
+            j_set(o, "score", j_int(j_get(h, "score")->i));
+            j_set(o, "text", j_strn(text + from, to - from));
+            j_push(blocks, o);
+            used += to - from;
+        }
+        free(text);
+    }
+    J *o = j_obj();
+    j_set(o, "tokens", j_int((int64_t)(used / 4)));
+    j_set(o, "budget", j_int(budget));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "blocks", blocks);
+    const J *em = j_get(res, "embedding");
+    if (em && j_get(em, "error")) j_set(o, "embedding_error", j_str(j_get(em, "error")->s));
+    json_free(res);
+    *out = o;
+    return 0;
+}
+
+static int m_hybrid_search(Rpc *r, const J *p, J **out) {
+    const char *query, *path;
+    int64_t limit, budget;
+    if (need_str(p, "query", &query) || opt_str(p, "path", &path) || opt_int(p, "limit", 10, &limit) ||
+        opt_int(p, "embed_budget", 256, &budget))
+        return -1;
+    if (limit < 0 || budget < 0) return na_fail("invalid parameter: limit and embed_budget must be non-negative");
+    if (budget > 100000) budget = 100000;
+    Sem s = sem_of(r);
+    return sem_hybrid(&s, query, path, (size_t)limit, (size_t)budget, out);
+}
+
+/* ---- helpers for patch: positions are computed against the original snapshot ---- */
+static size_t patch_lines(const Snapshot *s) {
+    size_t n = 0;
+    for (size_t i = 0; i < s->len; i++)
+        if (s->text[i] == '\n') n++;
+    return n + (s->len > 0 && s->text[s->len - 1] != '\n');
+}
+
+/* byte offset of the start of 1-based `line`; the end of the text for lines past the last one */
+static size_t patch_line_off(const Snapshot *s, size_t line) {
+    size_t pos = 0, l = 1;
+    while (l < line && pos < s->len)
+        if (s->text[pos++] == '\n') l++;
+    return pos;
+}
+
+static const char *patch_eol(const Snapshot *s) {
+    for (size_t i = 0; i + 1 < s->len; i++)
+        if (s->text[i] == '\r' && s->text[i + 1] == '\n') return "\r\n";
+    return "\n";
+}
+
+/* text inserted at a line start: whole lines in the file's own line ending */
+static char *patch_insert_text(const Snapshot *s, size_t pos, const char *in, size_t n, size_t *outlen) {
+    size_t rlen;
+    char *rep = adapt_eol(s, in, n, &rlen);
+    Buf b;
+    buf_init(&b);
+    const char *eol = patch_eol(s);
+    if (pos == s->len && s->len > 0 && s->text[s->len - 1] != '\n') buf_puts(&b, eol);
+    buf_put(&b, rep, rlen);
+    if (rlen > 0 && rep[rlen - 1] != '\n') buf_puts(&b, eol);
+    free(rep);
+    *outlen = b.len;
+    return buf_take(&b);
+}
+
+/* a doc comment right above a symbol belongs to it: move `pos` (a line start) up over such lines */
+static size_t patch_comment_start(const Snapshot *s, size_t pos) {
+    while (pos > 0) {
+        size_t ps = pos - 1;
+        while (ps > 0 && s->text[ps - 1] != '\n') ps--;
+        const char *p = s->text + ps, *end = s->text + pos;
+        while (p < end && (*p == ' ' || *p == '\t')) p++;
+        bool cm = end - p >= 2 && ((p[0] == '/' && (p[1] == '/' || p[1] == '*')) ||
+                                   (p[0] == '*' && (p[1] == ' ' || p[1] == '/' || p[1] == '\r' || p[1] == '\n')));
+        if (!cm) break;
+        pos = ps;
+    }
+    return pos;
+}
+
+/* Many edits in several files as ONE revision. Every edit is {path, new, ...} plus one locator:
+ *   old (+all)                    literal text, must match once unless all
+ *   start_line (+end_line)        whole lines
+ *   before_line | after_line      insert whole lines
+ *   symbol (+kind, scope)         replace a whole symbol
+ *   before_symbol | after_symbol  insert whole lines next to a symbol (doc comment stays attached)
+ *   create                        a new file (must not exist)
+ * Positions refer to the files as they are before the patch, so edits cannot disturb each other. */
 static int m_patch(Rpc *r, const J *p, J **out) {
     const J *edits = j_get(p, "edits");
     const char *label;
@@ -673,9 +1247,9 @@ static int m_patch(Rpc *r, const J *p, J **out) {
     size_t total = 0;
     for (size_t e = 0; e < edits->n && rc == 0; e++) {
         const J *ed = edits->items[e];
-        const J *jp = j_get(ed, "path"), *jo = j_get(ed, "old"), *jn = j_get(ed, "new"), *ja = j_get(ed, "all");
-        if (!j_is_str(jp) || !j_is_str(jo) || !j_is_str(jn) || jo->slen == 0) {
-            rc = na_fail("invalid parameter: edits[%zu] needs path, old (non-empty) and new", e);
+        const J *jp = j_get(ed, "path"), *jn = j_get(ed, "new"), *jo = j_get(ed, "old"), *ja = j_get(ed, "all");
+        if (!j_is_str(jp) || !j_is_str(jn)) {
+            rc = na_fail("invalid parameter: edits[%zu] needs path and new", e);
             break;
         }
         size_t slot = n;
@@ -691,24 +1265,124 @@ static int m_patch(Rpc *r, const J *p, J **out) {
             n++;
         }
         const Snapshot *s = snaps[slot];
-        size_t olen, rlen;
-        char *old = adapt_eol(s, jo->s, jo->slen, &olen), *neu = adapt_eol(s, jn->s, jn->slen, &rlen);
-        bool all = ja && ja->k == J_BOOL && ja->b;
-        size_t count = 0;
-        for (size_t i = 0; i + olen <= s->len; i++) {
-            if (memcmp(s->text + i, old, olen) != 0) continue;
-            if (count == 0 || all) {
-                size_t a = utf8_cp_count(s->text, i);
-                cs_add(&sets[slot], a, a + utf8_cp_count(old, olen), neu, rlen);
+        const J *jsl = j_get(ed, "start_line"), *jel = j_get(ed, "end_line"), *jbl = j_get(ed, "before_line"),
+                *jal = j_get(ed, "after_line"), *jsy = j_get(ed, "symbol"), *jbs = j_get(ed, "before_symbol"),
+                *jas = j_get(ed, "after_symbol"), *jcr = j_get(ed, "create"), *jat = j_get(ed, "at_end");
+        if (jo) {
+            if (!j_is_str(jo) || jo->slen == 0) {
+                rc = na_fail("invalid parameter: edits[%zu].old must be a non-empty string", e);
+                break;
+            }
+            size_t olen, rlen;
+            char *old = adapt_eol(s, jo->s, jo->slen, &olen), *neu = adapt_eol(s, jn->s, jn->slen, &rlen);
+            bool all = ja && ja->k == J_BOOL && ja->b;
+            size_t count = 0;
+            for (size_t i = 0; i + olen <= s->len; i++) {
+                if (memcmp(s->text + i, old, olen) != 0) continue;
+                if (count == 0 || all) {
+                    size_t a = utf8_cp_count(s->text, i);
+                    cs_add(&sets[slot], a, a + utf8_cp_count(old, olen), neu, rlen);
+                    total++;
+                }
+                count++;
+                i += olen - 1;
+            }
+            if (count == 0) rc = na_fail("text_not_found: edits[%zu]: %s does not contain the given text", e, jp->s);
+            else if (count > 1 && !all) rc = na_fail("ambiguous_text: edits[%zu]: %zu matches in %s (add context or set all)", e, count, jp->s);
+            free(old);
+            free(neu);
+            continue;
+        }
+        size_t from = 0, to = 0, rlen = 0;
+        char *rep = NULL;
+        if (jsl && j_is_int(jsl)) { /* whole lines */
+            size_t nl = patch_lines(s), a = (size_t)jsl->i, b = jel && j_is_int(jel) ? (size_t)jel->i : a;
+            if (jsl->i < 1 || b < a || b > nl) {
+                rc = na_fail("invalid parameter: edits[%zu]: lines %lld-%zu out of range (%s has %zu lines)", e, (long long)jsl->i, b, jp->s, nl);
+                break;
+            }
+            from = patch_line_off(s, a);
+            to = patch_line_off(s, b + 1);
+            bool had_eol = to > from && s->text[to - 1] == '\n';
+            rep = adapt_eol(s, jn->s, jn->slen, &rlen);
+            if (rlen > 0 && had_eol && rep[rlen - 1] != '\n') {
+                Buf b2;
+                buf_init(&b2);
+                buf_put(&b2, rep, rlen);
+                buf_puts(&b2, patch_eol(s));
+                free(rep);
+                rlen = b2.len;
+                rep = buf_take(&b2);
+            }
+        } else if ((jbl && j_is_int(jbl)) || (jal && j_is_int(jal)) || (jat && jat->k == J_BOOL && jat->b)) { /* insert lines */
+            size_t nl = patch_lines(s);
+            int64_t line = jbl ? jbl->i : jal ? jal->i + 1 : (int64_t)nl + 1; /* at_end: after the last line */
+            if (line < 1 || (size_t)line > nl + 1) {
+                rc = na_fail("invalid parameter: edits[%zu]: line out of range (%s has %zu lines)", e, jp->s, nl);
+                break;
+            }
+            from = to = patch_line_off(s, (size_t)line);
+            rep = patch_insert_text(s, from, jn->s, jn->slen, &rlen);
+        } else if (j_is_str(jsy)) { /* replace a symbol */
+            ChangeSet one;
+            size_t sl;
+            char *adapted = adapt_eol(s, jn->s, jn->slen, &sl);
+            const J *jk = j_get(ed, "kind"), *jsc = j_get(ed, "scope");
+            rc = replace_any(r, jp->s, s, jsy->s, adapted, j_is_str(jk) ? jk->s : NULL, j_is_str(jsc) ? jsc->s : NULL, &one);
+            free(adapted);
+            if (rc == 0) {
+                for (size_t k = 0; k < one.n; k++) cs_add(&sets[slot], one.v[k].start, one.v[k].end, one.v[k].text, one.v[k].tlen);
+                cs_free(&one);
                 total++;
             }
-            count++;
-            i += olen - 1;
+            continue;
+        } else if (j_is_str(jbs) || j_is_str(jas)) { /* insert next to a symbol */
+            SymbolList list;
+            Symbol sym;
+            const J *jk = j_get(ed, "kind"), *jsc = j_get(ed, "scope");
+            const char *nm = j_is_str(jbs) ? jbs->s : jas->s;
+            rc = outline_any(r, jp->s, s, true, &list);
+            if (rc == 0) {
+                rc = symbols_select(&list, nm, j_is_str(jk) ? jk->s : NULL, j_is_str(jsc) ? jsc->s : NULL, &sym);
+                if (rc == 0) {
+                    if (j_is_str(jbs)) {
+                        size_t b = cg_cp_to_byte(s->text, s->len, sym.start);
+                        while (b > 0 && s->text[b - 1] != '\n') b--;
+                        from = patch_comment_start(s, b);
+                    } else {
+                        size_t b = cg_cp_to_byte(s->text, s->len, sym.end);
+                        if (b > 0 && s->text[b - 1] != '\n')
+                            while (b < s->len && s->text[b - 1] != '\n') b++;
+                        from = b;
+                    }
+                    to = from;
+                    rep = patch_insert_text(s, from, jn->s, jn->slen, &rlen);
+                }
+                symbols_free(&list);
+            }
+            if (rc != 0) break;
+        } else if (jcr && jcr->k == J_BOOL && jcr->b) { /* new file */
+            char *full = NULL;
+            Buf fb;
+            buf_init(&fb);
+            buf_printf(&fb, "%s/%s", store_root(r->store), jp->s);
+            full = buf_take(&fb);
+            bool exists = pf_is_file(full);
+            free(full);
+            if (s->len > 0 || exists) {
+                rc = na_fail("already_exists: edits[%zu]: %s exists; use old/lines/symbol to change it", e, jp->s);
+                break;
+            }
+            rep = na_strndup(jn->s, jn->slen);
+            rlen = jn->slen;
+        } else {
+            rc = na_fail("invalid parameter: edits[%zu] needs old, start_line, before_line/after_line, symbol, before_symbol/after_symbol or create", e);
+            break;
         }
-        if (count == 0) rc = na_fail("text_not_found: edits[%zu]: %s does not contain the given text", e, jp->s);
-        else if (count > 1 && !all) rc = na_fail("ambiguous_text: edits[%zu]: %zu matches in %s (add context or set all)", e, count, jp->s);
-        free(old);
-        free(neu);
+        size_t a = utf8_cp_count(s->text, from);
+        cs_add(&sets[slot], a, a + utf8_cp_count(s->text + from, to - from), rep ? rep : "", rlen);
+        total++;
+        free(rep);
     }
     for (size_t k = 0; rc == 0 && k < n; k++) {
         cs_sort(&sets[k]);
@@ -758,7 +1432,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"merge", m_merge}, {"callers", m_callers}, {"callees", m_callees}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -846,6 +1520,16 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"old\",\"new\"]}"));
     j_push(arr, tool_def("search", "Grep the workspace: one hit per line with optional context (query is literal text).",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"word\":{\"type\":\"boolean\"},\"ignore_case\":{\"type\":\"boolean\"},\"context\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("hybrid_search", "Ranked code search for a natural-language or identifier query: BM25 over code words and symbol/path names plus exact phrase, fused. Returns the best functions/chunks, not lines.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"embed_budget\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("context", "Context pack for a question: the most relevant functions/chunks as ready-to-read code, ranked by hybrid_search and cut to a token budget (default 4000). Use this first instead of several searches and views.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"budget\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("callers", "Who calls a function (transitively with depth): enclosing functions of its references, with call-site lines. Uses the language server when available, tokens for C otherwise.",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("callees", "What a function calls (transitively with depth): identifiers of its body matched to function symbols of the workspace index. Syntactic; names shared by several functions are flagged ambiguous.",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("merge", "Reconcile files that were changed outside NextAgent (sync reports disk_conflict): line-based three-way merge of baseline, journal and disk. strategy auto|ours|theirs; conflicts are reported, never written.",
+                         "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"strategy\":{\"type\":\"string\",\"enum\":[\"auto\",\"ours\",\"theirs\"]},\"dry_run\":{\"type\":\"boolean\"}}}"));
     j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
                          "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",

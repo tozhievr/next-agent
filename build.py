@@ -26,7 +26,7 @@ import sys
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
 LIB = ["util", "json", "platform", "core", "store", "c23", "lsp_proto", "lsp_build", "lsp_client", "lsp_gate",
-       "lsp_hub", "refactor", "index", "semantic", "rpc"]
+       "lsp_hub", "refactor", "index", "semantic", "hybrid", "embed", "merge", "rpc"]
 
 
 def norm(p):
@@ -116,15 +116,18 @@ def main():
     products = [("nextagent" + exe, main_o), ("tests" + exe, test_o)]
     resdir = subprocess.check_output([cc, "-print-resource-dir"], text=True).strip()
     implib = os.path.join(out, "kernel32_na.lib")
+    ws2lib = os.path.join(out, "ws2_32_na.lib")
     if a.target == "windows":  # the Win32 calls of src/platform_win.c that libc23's own kernel32.def lacks
         run([find_tool("llvm-dlltool", cc), "-m", "i386:x86-64", "-d", os.path.join(ROOT, "src", "win_imports.def"),
              "-l", implib])
+        run([find_tool("llvm-dlltool", cc), "-m", "i386:x86-64", "-d", os.path.join(ROOT, "src", "win_ws2.def"),
+             "-l", ws2lib])
     for name, entry in products:
         target = os.path.join(out, name)
         if a.target == "windows":
             lld = find_tool("lld-link", cc)
             libs = [os.path.join(libdir, x) for x in ("libc23.lib", "kernel32.lib", "synch.lib", "bcryptprimitives.lib")]
-            libs.append(implib)
+            libs += [implib, ws2lib]
             cmd = [lld, "/nologo", "/subsystem:console", "/entry:__libc_mainCRTStartup", "/nodefaultlib",
                    "/opt:ref", "/brepro", "/out:" + target] + lib_objs + [entry] + libs
         else:

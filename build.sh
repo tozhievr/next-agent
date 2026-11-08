@@ -6,7 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p build
 LIB="src/util.c src/json.c src/platform.c src/core.c src/store.c src/c23.c src/lsp_proto.c
-     src/lsp_build.c src/lsp_client.c src/lsp_gate.c src/lsp_hub.c src/refactor.c src/index.c src/semantic.c src/rpc.c"
+     src/lsp_build.c src/lsp_client.c src/lsp_gate.c src/lsp_hub.c src/refactor.c src/index.c src/semantic.c src/hybrid.c src/embed.c src/merge.c src/rpc.c"
 cc() { # cc <main-file> <output>
     case "${NA_COMPILER:-nextc}" in
         clang) "${CLANG:-clang}" -std=c2x -O2 -Wall -Isrc $LIB "$1" -o "$2" -lkernel32 ;;

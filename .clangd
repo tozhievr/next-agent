@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-xc, -std=c23, -isystem, vendor/libc23/include, -Isrc, -DNA_LIBC23]

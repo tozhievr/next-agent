@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define NA_VERSION "0.29.0"
+#define NA_VERSION "0.40.0"
 
 /* Last-error message, set by failing functions (which return -1 / NULL). */
 const char *na_errmsg(void);

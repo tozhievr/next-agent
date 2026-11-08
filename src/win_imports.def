@@ -30,3 +30,5 @@ EXPORTS
     SearchPathW
     MultiByteToWideChar
     WideCharToMultiByte
+    GetFileAttributesExW
+    GetSystemTimeAsFileTime

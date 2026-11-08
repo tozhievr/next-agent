@@ -1,4 +1,5 @@
 #include "store.h"
+#include "merge.h"
 #include "platform.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@ typedef struct {
     size_t len;
     bool base_set, base_exists;
     uint8_t base_hash[16];
+    int64_t base_rev; /* document revision whose text is the disk baseline (see store_merge_external) */
     size_t ckpt_bytes; /* delta bytes journaled since the last full-text record */
 } Doc;
 
@@ -137,7 +139,9 @@ static int apply_record(Store *st, const J *rec) {
         const J *p = j_get(rec, "path");
         if (!j_is_str(p)) return na_fail("corrupt journal: base path");
         size_t di = doc_index(st, p->s);
-        return base_from_json(rec, &st->docs[di]);
+        int brc = base_from_json(rec, &st->docs[di]);
+        if (brc == 0) st->docs[di].base_rev = st->docs[di].has_head ? st->docs[di].rev : 0;
+        return brc;
     }
     if (strcmp(t->s, "flush") == 0) {
         const J *docs = j_get(rec, "docs");
@@ -148,6 +152,7 @@ static int apply_record(Store *st, const J *rec) {
             size_t di = doc_index(st, p->s);
             const J *b = j_get(docs->items[i], "base");
             if (!b || base_from_json(b, &st->docs[di]) != 0) return -1;
+            st->docs[di].base_rev = st->docs[di].rev;
         }
         return 0;
     }
@@ -173,6 +178,7 @@ static int apply_record(Store *st, const J *rec) {
         Doc *d = &st->docs[di];
         const J *base = j_get(dj, "base");
         if (base && base_from_json(base, d) != 0) return -1;
+        if (base) d->base_rev = d->rev;
         Delta *dl = &r.d[r.nd++];
         dl->doc = di;
         if (edits_from_json(j_get(dj, "forward"), &dl->forward) != 0) return -1;
@@ -782,6 +788,182 @@ static bool disk_conflict(const Doc *d, bool exists, const uint8_t hash[16]) {
     return exists && memcmp(hash, d->base_hash, 16) != 0;
 }
 
+/* ------------------------------------------------- external changes --- */
+/* The text the document had when the disk baseline was taken: the head text with the inverse deltas of
+ * every later revision applied, newest first. */
+static int doc_base_text(Store *st, const Doc *d, char **out, size_t *outlen) {
+    char *text = na_strndup(d->text ? d->text : "", d->len);
+    size_t len = d->len, di = (size_t)(d - st->docs);
+    for (int64_t r = (int64_t)st->nrevs; r > d->base_rev; r--) {
+        const Rev *rv = &st->revs[r - 1];
+        for (size_t k = 0; k < rv->nd; k++) {
+            if (rv->d[k].doc != di) continue;
+            char *nt;
+            size_t nl;
+            if (cs_apply_text(&rv->d[k].inverse, text, len, &nt, &nl) != 0) {
+                free(text);
+                return -1;
+            }
+            free(text);
+            text = nt;
+            len = nl;
+        }
+    }
+    *out = text;
+    *outlen = len;
+    return 0;
+}
+
+static int record_baseline(Store *st, const char *canon, bool exists, const uint8_t hash[16]) {
+    PfLock *lock = begin_write(st);
+    if (!lock) return -1;
+    J *rec = j_obj(), *docs = j_arr(), *e = j_obj();
+    j_set(rec, "t", j_str("flush"));
+    j_set(e, "path", j_str(canon));
+    j_set(e, "base", base_to_json(exists, hash));
+    j_push(docs, e);
+    j_set(rec, "docs", docs);
+    int rc = append_record(st, rec);
+    json_free(rec);
+    pf_lock_release(lock);
+    return rc;
+}
+
+/* Three-way reconciliation of a document whose file was changed outside NextAgent (the situation in
+ * which `sync` reports disk_conflict). strategy: "auto" merges base/ours/disk by lines and reports the
+ * conflicts when it cannot; "theirs" takes the disk text; "ours" keeps the journal text and makes the
+ * next flush overwrite the disk. The report has `status`: unchanged | fast_forward | merged | conflict |
+ * took_theirs | kept_ours, plus `conflicts` and, when the journal changed, `rev`/`paths`. */
+int store_merge_external(Store *st, const char *name, const char *strategy, bool dry_run, J **report) {
+    if (!strategy) strategy = "auto";
+    if (strcmp(strategy, "auto") != 0 && strcmp(strategy, "ours") != 0 && strcmp(strategy, "theirs") != 0)
+        return na_fail("invalid parameter: strategy must be auto, ours or theirs");
+    char *canon = store_canon(st, name);
+    if (!canon) return -1;
+    if (refresh(st) != 0) {
+        free(canon);
+        return -1;
+    }
+    J *rep = j_obj();
+    j_set(rep, "path", j_str(canon));
+    Doc *d = doc_find(st, canon);
+    char *full = disk_path(st, canon);
+    bool exists = false;
+    uint8_t hash[16];
+    int rc = 0;
+    if (!d || !d->has_head || !d->base_set || disk_state(full, &exists, hash) != 0 || !disk_conflict(d, exists, hash)) {
+        j_set(rep, "status", j_str("unchanged"));
+        goto done;
+    }
+    if (strcmp(strategy, "ours") == 0 || !exists) {
+        if (!exists && strcmp(strategy, "ours") != 0) {
+            j_set(rep, "status", j_str("conflict"));
+            j_set(rep, "message", j_str("the file was deleted on disk; use strategy ours to recreate it"));
+            goto done;
+        }
+        if (!dry_run) rc = record_baseline(st, canon, exists, hash);
+        j_set(rep, "status", j_str("kept_ours"));
+        goto done_paths;
+    }
+    Buf disk;
+    buf_init(&disk);
+    if (pf_read_file(full, &disk) != 0) {
+        buf_free(&disk);
+        rc = na_fail("cannot read %s", canon);
+        goto done;
+    }
+    if (!utf8_valid(disk.p ? disk.p : "", disk.len)) {
+        buf_free(&disk);
+        rc = na_fail("invalid_utf8: %s on disk is not valid UTF-8", canon);
+        goto done;
+    }
+    char *base = NULL;
+    size_t blen = 0;
+    if (doc_base_text(st, d, &base, &blen) != 0) {
+        buf_free(&disk);
+        rc = -1;
+        goto done;
+    }
+    const char *status = "merged";
+    Buf merged;
+    buf_init(&merged);
+    const char *newtext = disk.p ? disk.p : "";
+    size_t newlen = disk.len;
+    if (strcmp(strategy, "theirs") == 0) {
+        status = "took_theirs";
+    } else if (blen == d->len && (blen == 0 || memcmp(base, d->text, blen) == 0)) {
+        status = "fast_forward"; /* nothing changed locally since the baseline */
+    } else {
+        MergeConflicts conf;
+        int mrc = merge3(base, blen, d->text ? d->text : "", d->len, newtext, newlen, &merged, &conf);
+        if (mrc < 0) {
+            rc = na_fail("merge failed");
+        } else if (mrc > 0) {
+            J *arr = j_arr();
+            for (size_t i = 0; i < conf.n; i++) {
+                J *c = j_obj();
+                j_set(c, "first_line", j_int((int64_t)conf.v[i].first));
+                j_set(c, "last_line", j_int((int64_t)conf.v[i].last));
+                j_set(c, "ours", j_str(conf.v[i].ours));
+                j_set(c, "theirs", j_str(conf.v[i].theirs));
+                j_push(arr, c);
+            }
+            j_set(rep, "status", j_str("conflict"));
+            j_set(rep, "conflicts", arr);
+            status = NULL;
+        } else {
+            newtext = merged.p ? merged.p : "";
+            newlen = merged.len;
+        }
+        merge_conflicts_free(&conf);
+    }
+    if (rc == 0 && status) {
+        j_set(rep, "status", j_str(status));
+        if (!dry_run) {
+            /* replace only the differing middle of the head text */
+            const char *head = d->text ? d->text : "";
+            size_t pre = 0, suf = 0, hl = d->len;
+            while (pre < hl && pre < newlen && head[pre] == newtext[pre]) pre++;
+            while (pre > 0 && pre < hl && ((unsigned char)head[pre] & 0xC0) == 0x80) pre--;
+            while (suf < hl - pre && suf < newlen - pre && head[hl - 1 - suf] == newtext[newlen - 1 - suf]) suf++;
+            while (suf > 0 && ((unsigned char)head[hl - suf] & 0xC0) == 0x80) suf--;
+            if (pre + suf < hl || pre + suf < newlen) {
+                ChangeSet cs;
+                cs_init(&cs);
+                size_t a = utf8_cp_count(head, pre);
+                cs_add(&cs, a, a + utf8_cp_count(head + pre, hl - pre - suf), newtext + pre, newlen - pre - suf);
+                const char *names[1] = {canon};
+                EditResult res;
+                rc = store_edit(st, names, &cs, 1, (int64_t)st->nrevs, "merge external changes", "merge", NULL, &res);
+                cs_free(&cs);
+                if (rc == 0) {
+                    j_set(rep, "rev", j_int(res.rev));
+                    edit_result_free(&res);
+                }
+            }
+            if (rc == 0) rc = record_baseline(st, canon, true, hash);
+        }
+    }
+    free(base);
+    buf_free(&merged);
+    buf_free(&disk);
+done_paths:
+    if (rc == 0 && !dry_run && j_get(rep, "status") && strcmp(j_get(rep, "status")->s, "conflict") != 0) {
+        J *paths = j_arr();
+        j_push(paths, j_str(canon));
+        j_set(rep, "paths", paths);
+    }
+done:
+    free(full);
+    free(canon);
+    if (rc != 0) {
+        json_free(rep);
+        return -1;
+    }
+    *report = rep;
+    return 0;
+}
+
 int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *written) {
     PfLock *lock = begin_write(st);
     if (!lock) return -1;
@@ -815,7 +997,7 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         free(full);
         if (drc != 0) goto out_sel;
         if (disk_conflict(d, exists, hash)) {
-            na_seterr("disk_conflict: external modification of %s", d->path);
+            na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
             goto out_sel;
         }
     }
@@ -829,7 +1011,7 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
             goto out_sel;
         }
         if (disk_conflict(d, exists, hash)) {
-            na_seterr("disk_conflict: external modification of %s", d->path);
+            na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
             free(full);
             goto out_sel;
         }

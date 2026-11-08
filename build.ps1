@@ -14,7 +14,7 @@ $root = $PSScriptRoot
 $out = Join-Path $root "build"
 New-Item -ItemType Directory -Force $out | Out-Null
 $lib = "util.c", "json.c", "platform.c", "core.c", "store.c", "c23.c", "lsp_proto.c",
-       "lsp_build.c", "lsp_client.c", "lsp_gate.c", "lsp_hub.c", "refactor.c", "index.c", "semantic.c", "rpc.c" | ForEach-Object { Join-Path $root "src/$_" }
+       "lsp_build.c", "lsp_client.c", "lsp_gate.c", "lsp_hub.c", "refactor.c", "index.c", "semantic.c", "hybrid.c", "embed.c", "merge.c", "rpc.c" | ForEach-Object { Join-Path $root "src/$_" }
 
 function Invoke-Cc([string[]]$files, [string]$exe) {
     if ($Compiler -eq "clang") {

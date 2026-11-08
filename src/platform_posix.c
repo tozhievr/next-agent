@@ -455,3 +455,99 @@ void pf_proc_close(PfProc *p, int graceful_ms) {
     if (p->out_r >= 0) sc1(SYS_close, p->out_r);
     free(p);
 }
+
+/* ---- TCP client (raw socket syscalls) ---- */
+struct PfSock {
+    int fd;
+};
+
+static bool parse_ipv4(const char *host, uint8_t out[4]) {
+    if (strcmp(host, "localhost") == 0) host = "127.0.0.1";
+    const char *p = host;
+    for (int i = 0; i < 4; i++) {
+        if (*p < '0' || *p > '9') return false;
+        unsigned v = 0;
+        while (*p >= '0' && *p <= '9') v = v * 10 + (unsigned)(*p++ - '0');
+        if (v > 255 || (i < 3 && *p++ != '.')) return false;
+        out[i] = (uint8_t)v;
+    }
+    return *p == 0;
+}
+
+PfSock *pf_tcp_connect(const char *host, int port, int timeout_ms) {
+    uint8_t ip[4];
+    if (!parse_ipv4(host, ip)) {
+        na_seterr("embedding url: host must be an IPv4 address or localhost (got %s)", host);
+        return NULL;
+    }
+    long fd = sc3(41 /* socket */, 2, 1 | 02000000 /* SOCK_STREAM | SOCK_CLOEXEC */, 6);
+    if (bad(fd)) {
+        na_seterr("cannot create socket");
+        return NULL;
+    }
+    long tv[2] = {timeout_ms / 1000, (long)(timeout_ms % 1000) * 1000};
+    sc6(54 /* setsockopt */, fd, 1 /* SOL_SOCKET */, 21 /* SO_SNDTIMEO */, (long)tv, sizeof tv, 0);
+    unsigned char sa[16] = {2, 0, (unsigned char)(port >> 8), (unsigned char)port, ip[0], ip[1], ip[2], ip[3]};
+    if (bad(sc3(42 /* connect */, fd, sa, sizeof sa))) {
+        sc1(SYS_close, fd);
+        na_seterr("cannot connect to %s:%d", host, port);
+        return NULL;
+    }
+    PfSock *k = na_alloc(sizeof *k);
+    k->fd = (int)fd;
+    return k;
+}
+
+int pf_sock_write(PfSock *k, const void *data, size_t n) {
+    const char *p = data;
+    while (n > 0) {
+        long w = sc6(44 /* sendto */, k->fd, (long)p, (long)n, 0x4000 /* MSG_NOSIGNAL */, 0, 0);
+        if (w == -E_INTR) continue;
+        if (bad(w) || w == 0) return -1;
+        p += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+int pf_sock_read(PfSock *k, void *buf, size_t cap, int timeout_ms) {
+    struct {
+        int fd;
+        short events, revents;
+    } pfd = {k->fd, 1 /* POLLIN */, 0};
+    long pr = sc3(SYS_poll, &pfd, 1, timeout_ms < 0 ? 0 : timeout_ms);
+    if (pr == -E_INTR) return 0;
+    if (bad(pr)) return -1;
+    if (pr == 0) return 0;
+    long r = sc6(45 /* recvfrom */, k->fd, (long)buf, (long)cap, 0, 0, 0);
+    if (r == -E_INTR || r == -E_AGAIN) return 0;
+    return bad(r) || r == 0 ? -1 : (int)r;
+}
+
+void pf_sock_close(PfSock *k) {
+    if (!k) return;
+    sc1(SYS_close, k->fd);
+    free(k);
+}
+
+/* ---- cheap change detection ---- */
+bool pf_stat(const char *path, PfStat *out) {
+    unsigned char st[144];
+    if (bad(sc4(SYS_newfstatat, AT_FDCWD, path, st, 0))) return false;
+    unsigned mode;
+    long size, sec, nsec;
+    memcpy(&mode, st + 24, 4);
+    memcpy(&size, st + 48, 8);
+    memcpy(&sec, st + 88, 8);
+    memcpy(&nsec, st + 96, 8);
+    if ((mode & 0170000) != 0100000) return false;
+    out->size = (uint64_t)size;
+    out->mtime_ms = (int64_t)sec * 1000 + nsec / 1000000;
+    return true;
+}
+
+int64_t pf_unix_ms(void) {
+    long ts[2];
+    sc2(SYS_clock_gettime, 0 /* REALTIME */, ts);
+    return (int64_t)ts[0] * 1000 + ts[1] / 1000000;
+}

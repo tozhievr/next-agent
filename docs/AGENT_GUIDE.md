@@ -183,22 +183,43 @@ Run the build. If it fails and you want to back out: `{"method":"history","param
 
 ```
 nextagent --brief search QUERY [--word] [-i] [--context N] [--path SUBSTR]   # grep: path:line: text
+nextagent context "how are edits flushed" --budget 3000      # START HERE: best code for a question, within a token budget
+nextagent --brief locate "how are edits flushed" [--limit N]   # ranked: best functions for a question
+nextagent --brief callers NAME [--depth 2]               # who calls it (call-site lines); callees NAME = what it calls
 nextagent --brief find QUERY [--kind K]                  # symbols by name, all indexed languages
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
 nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
+# (first `locate`/`search` on a big workspace builds .aed/index.cache; later calls reuse it. NEXTAGENT_TRACE=1 shows timings)
+nextagent sub OLD NEW a.c b.c [--all]                    # ONE-LINERS (one revision each) for small changes, any number of files
+nextagent line PATH 12 'text'   |   line PATH 12-14 'text'   # replace line(s)      nextagent del PATH 12-14
+nextagent ins PATH 12 'text'    |   append PATH 'text'       # insert before line / add at the end
+#   a backslash that your shell would halve: write \ (replaced in every argument and in apply scripts)
+nextagent apply script.txt                               # BEST for several edits: ONE call, ONE revision, no quoting. Script:
+#   @@@ replace PATH [all]   / old text / @@@ with / new text      @@@ lines PATH A-B   / new lines
+#   @@@ insert PATH before-symbol NAME|after-symbol NAME|before-line N|after-line N / text
+#   @@@ symbol PATH NAME / whole new symbol                         @@@ create PATH / file text
+nextagent create PATH --new-file F                       # new file (refused if it exists)
+nextagent insert PATH --before-symbol NAME --new-file F  # insert whole lines next to a symbol or line
 nextagent replace PATH --old S --new S [--all]           # literal replacement, unique match required
+nextagent replace PATH --lines 10-14 --new-file F        # swap whole lines (no old text needed; empty --new deletes)
 nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole function/type
 nextagent patch FILE|-                                   # [{path,old,new,all}] across files, ONE revision
+#   locators in a patch edit: old | start_line/end_line | before_line/after_line | at_end (EOF) | symbol | before_symbol/after_symbol | create
+#   PREFER symbol or text anchors over line numbers for insertions: a number taken from an earlier read or from memory
+#   drifts as soon as anything above it changes (a test inserted by `after-line 1811` once landed in the middle of another
+#   statement). Use before-symbol/after-symbol, `append PATH TEXT` for the end of a file, or `view PATH --lines A-B` right
+#   before a line-based edit to confirm the number.
 nextagent references NAME [--path P] | rename NAME NEW | add-param FUNC "int x" --default 0
 echo '{"if_rev":N,"ops":[...]}' | nextagent edit         # codepoint-offset edits
+nextagent merge [PATH] [--theirs|--ours] [--dry-run]       # a human/git/formatter edited files: 3-way merge instead of disk_conflict
 nextagent history [--limit N] | undo [--rev N] | redo
 ```
 Every command that changes text writes the result to disk immediately (`--no-sync` keeps it in the journal only). `--brief` (or `NEXTAGENT_BRIEF=1`) prints compact text instead of JSON, which costs far fewer tokens. LF text passed to `replace`/`patch`/`replace-symbol` is converted to CRLF in CRLF files, so line endings never get mixed. Errors go to stderr with exit code 1 and name the fix (similar symbol names, the candidate list for an ambiguous one).
 
 ## 13. What does not exist
 
-Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, embeddings/semantic-similarity search (`search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

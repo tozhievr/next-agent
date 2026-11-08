@@ -2,7 +2,90 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.40.0 - 2026-11-09
+
+### Added
+- The workspace index and the hybrid-search cache are saved to `.aed/index.cache` when a session ends and loaded by the next one, so the one-shot CLI no longer re-reads and re-indexes the workspace on every call. On a 1500-file C workspace (61k chunks) `locate` went from 5.5 s to 0.45 s; the answers are identical. The file is versioned by the program version and is discarded (and rebuilt) if it is truncated, damaged, from another version or built for another embedding model. Changed files are still detected by size + mtime and by content hash.
+- `NEXTAGENT_TRACE=1` prints where the time of a `locate` went (index, chunks, embeddings) to stderr.
+
+### Notes
+- The cache is large for big workspaces (about 120 MB for 61k chunks, mostly term lists and chunk vectors); it lives in `.aed`, which is not meant to be committed.
+
+## 0.39.0 - 2026-11-09
+
+### Added
+- One-line edit commands for small changes, all built on `patch` (one revision each): `sub OLD NEW PATH... [--all]`, `line PATH A[-B] TEXT`, `del PATH A[-B]`, `ins PATH N TEXT`, `append PATH TEXT`.
+- `\` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
+- `patch` locator `at_end` (insert after the last line).
+
+## 0.38.0 - 2026-11-09
+
+### Added
+- Cheap change detection for the workspace index: a file whose size and modification time are unchanged (and older than a 2 s racy window) is not read or hashed again, so a long-running `serve`/`mcp` notices outside edits on its next query at the price of one `stat` per file instead of reading the whole tree. New platform calls `pf_stat` / `pf_unix_ms`; the entry lookup is a binary search instead of a linear scan.
+
+## 0.37.0 - 2026-11-09
+
+### Added
+- `apply [FILE|-]`: many edits in several files as ONE revision from a plain-text script, no quoting or escaping (`@@@ replace PATH` / old / `@@@ with` / new, `@@@ lines PATH A-B`, `@@@ insert PATH before-symbol NAME`, `@@@ symbol PATH NAME`, `@@@ create PATH`). Write the script once, apply it once.
+- `create PATH` (a new file, refused when it exists) and `insert PATH --before-line/--after-line/--before-symbol/--after-symbol` (whole lines in the file's own line endings; a doc comment above a symbol stays attached to it).
+- The `patch` method/tool gained the same locators: `start_line`/`end_line`, `before_line`/`after_line`, `symbol`, `before_symbol`/`after_symbol`, `create`, next to `old`/`new`/`all`.
+- The CLI's automatic write to disk now merges transparently when a file changed outside NextAgent (`merge` semantics); only real conflicts stop it, with the command that resolves them.
+- `.clangd` points editors at the bundled libc23 headers, which removes the false "header not found" diagnostics.
+
+### Changed
+- A wrong command line prints one line and the synopsis of that command instead of the whole manual. `--brief` and `--no-sync` are accepted after the command as well.
+
+## 0.36.0 - 2026-11-09
+
+
+### Added
+- `merge [PATH...] [--ours|--theirs] [--dry-run]` (RPC/MCP `merge`): when a file was changed outside NextAgent (an editor, git, a formatter) and `sync` reports `disk_conflict`, the baseline, the journal text and the disk text are merged by a line-based three-way merge (diff3). Clean merges are committed as one revision and written; real conflicts are reported with both sides and never written; `--theirs` takes the disk text, `--ours` keeps the journal and lets the next flush overwrite the file. The `disk_conflict` message now names the command.
+- The store remembers the revision of each disk baseline and rebuilds the baseline text from the inverse deltas.
+
+## 0.35.0 - 2026-11-09
+
+
+### Added
+- Call graph: `callers NAME [--depth N]` (who calls it, transitively; call-site lines; uses the language server, tokens for C) and `callees NAME [--depth N]` (what a function body calls, matched to the function symbols of the workspace index; names shared by several functions are flagged `ambiguous`). Also RPC/MCP `callers` / `callees`; the definition itself is never listed as a caller.
+
+## 0.34.0 - 2026-11-09
+
+
+### Added
+- `context QUERY [--budget TOKENS]` (RPC/MCP `context`): a ready-to-read context pack for a question. The best chunks of `hybrid_search` as code with `## path:lines symbol` headers, overlapping blocks dropped, cut at a line to fit the token budget (default 4000, about 4 bytes per token). One call instead of search + several views.
+
+## 0.33.0 - 2026-11-09
+
+
+### Added
+- `replace PATH --lines A-B (--new S | --new-file F)` (RPC `replace_text` with `start_line`/`end_line`): replaces whole lines without quoting the old text. Line endings of the file are kept, the final newline is supplied, an empty replacement deletes the lines.
+
+## 0.32.0 - 2026-11-09
+
+
+### Added
+- External embedding model for `locate` / `hybrid_search`, configured in `.aed/embed.json`, with our own small caller and no heavy backend: `{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "..."}` (OpenAI-style or Ollama `/api/embed`, plain HTTP over a built-in TCP client: Winsock on Windows, raw syscalls on Linux, no DNS, no TLS) or `{"command": "exe", "args": "..."}` (JSON lines on stdin/stdout). Optional `api_key_env`, `batch`, `timeout_ms`, `max_chars`.
+- The model becomes a fourth ranking signal (kNN, cosine). Vectors are normalised and cached in `.aed/embed.cache` keyed by model and text, so each chunk is sent once; `locate --embed N` / `embed_budget` limits how many new chunks one query embeds (default 256, best candidates first), the result reports `embedding.pending`. A model whose vector size differs from the cache resets it. Backend errors never fail a search; they are reported in `embedding.error`.
+- Platform layer: `pf_tcp_connect/pf_sock_*` (IPv4 literal or `localhost`).
+
+## 0.31.0 - 2026-11-09
+
+
+### Added
+- `locate` / `hybrid_search` now has a third signal: kNN over local embeddings. "Random indexing" learns from the workspace itself which words occur in the same code (no model, no network, deterministic), chunk and query vectors are weighted sums of word vectors, similarity is the cosine; fused with BM25 over code words and BM25 over symbol/path names by weighted reciprocal rank fusion.
+- Persistent search cache (kept with the workspace index in `serve`/`mcp`): chunks are cached per file by content hash, so a query after an edit re-tokenizes only the changed files.
+
+### Changed
+- Ranking: doc comments belong to the symbol below them, light stemming (`flushing` ~ `flush`), one-liners and non-symbol chunks are down-weighted, exact symbol name and exact phrase get a bonus.
+
+## 0.30.0 - 2026-11-08
+
+
+### Added
+- Hybrid search: `locate QUERY` (RPC/MCP `hybrid_search`) ranks functions and code chunks for a natural-language or identifier query. BM25 over code words (camelCase and snake_case are split, so `drawButton` finds `draw_button`), BM25 over symbol and path names and an exact-phrase signal are fused with reciprocal rank fusion. Deterministic, no libm, identical on Windows and Linux. No embeddings or model needed.
+
 ## 0.29.0 - 2026-11-08
+
 
 ### Added
 - Agent ergonomics (fewer calls, fewer tokens): `search` (grep over the index with context), `patch` (many literal replacements across files as one revision), `view --symbol NAME`, `--brief` compact output (`NEXTAGENT_BRIEF=1`).

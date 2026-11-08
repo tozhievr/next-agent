@@ -25,6 +25,11 @@ int sem_add_param(Sem *s, const char *function, const char *param, const char *d
 /* Text search over every indexed file (one hit per line, optional context lines). */
 int sem_search(Sem *s, const char *query, bool word, bool ignore_case, size_t context, const char *path_filter,
                size_t limit, J **out);
+/* Hybrid ranked search: BM25 over code words + BM25 over symbol/path names + exact phrase, fused (RRF).
+ * Hits are chunks (a symbol, or a 40-line window): path, line of best match, start_line, end_line, symbol, kind, score. */
+int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit, size_t embed_budget, J **out);
+/* Writes .aed/index.cache (index + search cache) if either changed; called when the session ends. */
+void sem_cache_save(WsIndex *ix);
 /* Symbols of the whole workspace whose name contains `query` (case-insensitive). */
 int sem_find_symbols(Sem *s, const char *query, const char *kind, size_t limit, J **out);
 

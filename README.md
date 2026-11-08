@@ -109,8 +109,15 @@ nextagent --root example sync            # writes demo.c to disk
 nextagent [--root DIR] [--version] <command>
 
 view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
+merge [PATH...] [--ours|--theirs] [--dry-run]   reconcile files changed outside nextagent (3-way merge)
+callers NAME [--depth N] / callees NAME         call graph (callers via references, callees from the index)
+context QUERY [--budget TOKENS]                   best code for a question as one pack
+locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)
 search QUERY [--word] [-i] [--context N]         grep over the workspace index
+apply [FILE|-]                                   many edits, one revision, plain-text script (@@@ replace/lines/insert/symbol/create)
+create PATH --new-file F / insert PATH --before-symbol NAME --new-file F
 replace PATH --old S --new S [--all]              literal replacement
+replace PATH --lines A-B --new-file F             replace whole lines
 replace-symbol PATH NAME --new-file F             rewrite one symbol
 patch [FILE|-]                    edits [{path,old,new,all}] across files, one revision
 references/rename/add-param/find semantic through language servers (serve --lsp)
@@ -188,7 +195,22 @@ Add or override servers in `<root>/.aed/lsp.json`:
 
 Servers installed as `.cmd`/`.bat` shims (typical for npm packages on Windows) must be wrapped, e.g. `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
 
+### Embedding model (optional)
+
+`locate` works without any model (BM25 plus embeddings learned from your own code). To add a real
+model, create `.aed/embed.json`:
+
+```
+{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "nomic-embed-text"}   # Ollama, llama.cpp server, LM Studio, vLLM...
+{"command": "my-embedder", "args": "--fast"}                                    # any program: {"input":[...]} -> {"embeddings":[[...]]} per line
+```
+
+Plain HTTP only, no DNS and no TLS (put a local proxy in front of a remote or https service, or use
+`command`). Each chunk is sent once and cached in `.aed/embed.cache`; `locate --embed N` caps new chunks per query.
+
 ## clangd diagnostic gate
+
+
 
 With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` is validated **before** it is committed:
 

@@ -1,8 +1,10 @@
 /* NextAgent test suite (C23, built with nextc). Run: build.ps1 test */
 #include "../src/c23.h"
 #include "../src/core.h"
+#include "../src/embed.h"
 #include "../src/index.h"
 #include "../src/json.h"
+#include "../src/merge.h"
 #include "../src/lsp.h"
 #include "../src/platform.h"
 #include "../src/refactor.h"
@@ -1016,7 +1018,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 16);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 21);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1529,7 +1531,370 @@ static void test_live_semantic(void) {
     free(ws);
 }
 
+static void test_hybrid(void) {
+    g_test = "hybrid";
+    char *ws = new_ws();
+    put_file(ws, "net.c", "int open_socket(int port) {\n  return port + 1;\n}\nint parse_config_file(const char *path) {\n  /* read the settings from disk */\n  return path != 0;\n}\n");
+    put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 2;\n}\n");
+    put_file(ws, "notes.c", "int unrelated(void) { return 0; }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"where do we parse the config\"}}");
+    const J *res = a ? j_get(a, "result") : NULL, *m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n >= 1);
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "parse_config_file") == 0);
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "path")->s, "net.c") == 0 && j_get(m->items[0], "start_line")->i == 4);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"hybrid_search\",\"params\":{\"query\":\"drawButton\",\"limit\":1}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n == 1 && strcmp(j_get(m->items[0], "symbol")->s, "draw_button") == 0); /* camelCase finds snake_case */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"hybrid_search\",\"params\":{\"query\":\"zzz_nothing\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 0);
+    json_free(a);
+    /* the cache follows edits: a new function is found by the next query, a removed one is gone */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"replace_text\",\"params\":{\"target\":\"notes.c\",\"old\":\"int unrelated(void) { return 0; }\",\"new\":\"/* adds up the bytes of a buffer */\\nint compute_checksum(const char *buf, int n) {\\n  int s = 0;\\n  for (int i = 0; i < n; i++) s += buf[i];\\n  return s;\\n}\"}}");
+    if (!a || !j_get(a, "result")) printf("replace_text: %s\n", err_of(a));
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"hybrid_search\",\"params\":{\"query\":\"sum the bytes of a buffer\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "compute_checksum") == 0); /* the doc comment is part of the chunk */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"context\",\"params\":{\"query\":\"sum the bytes of a buffer\",\"budget\":200}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "blocks") : NULL;
+    CHECK(m && m->n >= 1 && strstr(j_get(m->items[0], "text")->s, "compute_checksum") && j_get(res, "tokens")->i <= 200);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"context\",\"params\":{\"query\":\"draw\",\"budget\":100}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "blocks")->n >= 1 && j_get(res, "tokens")->i <= 100); /* never over budget */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"hybrid_search\",\"params\":{\"query\":\"unrelated\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 0);
+    json_free(a);
+    store_close(st);
+    free(ws);
+}
+
+/* `tests --fake-embed`: an embedding model that speaks the JSON-lines protocol (words hashed into 16 dims) */
+static int fake_embed(void) {
+    char line[65536];
+    while (fgets(line, sizeof line, stdin)) {
+        J *req = json_parse(line, strlen(line));
+        const J *in = req ? j_get(req, "input") : NULL;
+        Buf out;
+        buf_init(&out);
+        buf_puts(&out, "{\"embeddings\":[");
+        for (size_t i = 0; in && i < in->n; i++) {
+            double v[16] = {0};
+            const char *s = in->items[i]->s;
+            for (size_t k = 0; s[k];) {
+                size_t a = k;
+                unsigned h = 7;
+                while (s[k] && isalnum((unsigned char)s[k])) h = h * 31 + (unsigned char)tolower((unsigned char)s[k++]);
+                if (k > a) v[h % 16] += 1;
+                else k++;
+            }
+            buf_printf(&out, "%s[", i ? "," : "");
+            for (int d = 0; d < 16; d++) buf_printf(&out, "%s%g", d ? "," : "", v[d]);
+            buf_puts(&out, "]");
+        }
+        buf_puts(&out, "]}\n");
+        fwrite(out.p, 1, out.len, stdout);
+        fflush(stdout);
+        buf_free(&out);
+        json_free(req);
+    }
+    return 0;
+}
+
+static void test_embed(void) {
+    g_test = "embed";
+    /* HTTP framing */
+    const char *ok = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    Buf body;
+    buf_init(&body);
+    int status = 0;
+    CHECK(embed_http_parse(ok, strlen(ok), &status, &body) == 1 && status == 200 && body.len == 5 && memcmp(body.p, "hello", 5) == 0);
+    CHECK(embed_http_parse(ok, strlen(ok) - 2, &status, &body) == 0); /* body not complete yet */
+    const char *ch = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n4\r\ndefg\r\n0\r\n\r\n";
+    CHECK(embed_http_parse(ch, strlen(ch), &status, &body) == 1 && body.len == 7 && memcmp(body.p, "abcdefg", 7) == 0);
+    CHECK(embed_http_parse(ch, strlen(ch) - 9, &status, &body) == 0);
+    CHECK(embed_http_parse("garbage\r\n\r\n", 11, &status, &body) == -1);
+    buf_free(&body);
+
+    /* config errors */
+    char *ws = new_ws(), *err = NULL;
+    CHECK(embed_open(ws, &err) == NULL && err == NULL); /* not configured */
+    char cfgpath[600];
+    snprintf(cfgpath, sizeof cfgpath, "%s/.aed/embed.json", ws);
+    put_file(ws, ".aed/embed.json", "{\"url\":\"https://example.com/v1/embeddings\"}");
+    CHECK(embed_open(ws, &err) == NULL && err && strstr(err, "http://"));
+    free(err);
+
+    /* command mode end to end through hybrid_search, with the cache surviving a restart */
+    char cfg[1200];
+    snprintf(cfg, sizeof cfg, "{\"command\":\"%s\",\"args\":\"--fake-embed\",\"model\":\"t16\",\"batch\":2}", g_self);
+    put_file(ws, ".aed/embed.json", cfg);
+    put_file(ws, "a.c", "/* writes everything to disk */\nint flush_all(void) { return 1; }\n");
+    put_file(ws, "b.c", "int draw_button(int x) { return x; }\nint draw_label(int x) { return x; }\n");
+    for (int round = 0; round < 2; round++) {
+        Store *st = store_open(ws);
+        Rpc r;
+        memset(&r, 0, sizeof r);
+        r.store = st;
+        J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"write to disk\"}}");
+        const J *res = a ? j_get(a, "result") : NULL, *em = res ? j_get(res, "embedding") : NULL;
+        CHECK(em && j_get(em, "used")->b && !j_get(em, "error"));
+        CHECK(em && j_get(em, "pending")->i == 0);
+        CHECK(em && (round == 0 ? j_get(em, "embedded_now")->i >= 3 : j_get(em, "embedded_now")->i == 0)); /* cached on disk */
+        const J *m = res ? j_get(res, "matches") : NULL;
+        CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "flush_all") == 0);
+        json_free(a);
+        rpc_release(&r);
+        store_close(st);
+    }
+    free(ws);
+}
+
+static void test_callgraph(void) {
+    g_test = "callgraph";
+    char *ws = new_ws();
+    put_file(ws, "g.c", "int leaf(int x) { return x + 1; }\nint mid(int x) { return leaf(x) * 2; }\nint top(int x) { return mid(x) + leaf(x); }\nint other(void) { return 0; }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"callers\",\"params\":{\"name\":\"leaf\",\"depth\":2}}");
+    const J *res = a ? j_get(a, "result") : NULL, *n = res ? j_get(res, "nodes") : NULL;
+    CHECK(n && n->n == 2); /* mid and top, each once (top reaches leaf directly and through mid) */
+    bool has_mid = false, has_top = false, has_leaf = false;
+    for (size_t i = 0; n && i < n->n; i++) {
+        const char *nm = j_get(n->items[i], "name")->s;
+        has_mid |= strcmp(nm, "mid") == 0 && j_get(n->items[i], "depth")->i == 1;
+        has_top |= strcmp(nm, "top") == 0;
+        has_leaf |= strcmp(nm, "leaf") == 0; /* the definition is not a caller */
+    }
+    CHECK(has_mid && has_top && !has_leaf);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"callees\",\"params\":{\"name\":\"top\",\"depth\":2}}");
+    res = a ? j_get(a, "result") : NULL;
+    n = res ? j_get(res, "nodes") : NULL;
+    CHECK(n && n->n == 2); /* mid and leaf; leaf reached directly AND through mid but listed once */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"callees\",\"params\":{\"name\":\"nothing_here\"}}");
+    CHECK(strstr(err_of(a), "symbol_not_found") != NULL);
+    json_free(a);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+static void test_merge(void) {
+    g_test = "merge";
+    /* the merge itself */
+    Buf out;
+    MergeConflicts conf;
+    buf_init(&out);
+    const char *base = "a\nb\nc\nd\ne\n";
+    CHECK(merge3(base, strlen(base), "a\nB\nc\nd\ne\n", 10, "a\nb\nc\nD\ne\n", 10, &out, &conf) == 0 && out.len == 10 && memcmp(out.p, "a\nB\nc\nD\ne\n", 10) == 0);
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "a\nX\nc\nd\ne\n", 10, "a\nX\nc\nd\ne\n", 10, &out, &conf) == 0 && memcmp(out.p, "a\nX\nc\nd\ne\n", 10) == 0); /* same change */
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "a\nX\nc\nd\ne\n", 10, "a\nY\nc\nd\ne\n", 10, &out, &conf) == 1 && conf.n == 1 && conf.v[0].first == 2 &&
+          strcmp(conf.v[0].ours, "X\n") == 0 && strcmp(conf.v[0].theirs, "Y\n") == 0);
+    merge_conflicts_free(&conf);
+    out.len = 0;
+    CHECK(merge3(base, strlen(base), "top\na\nb\nc\nd\ne\n", 14, "a\nb\nc\nd\ne\nbottom\n", 17, &out, &conf) == 0 &&
+          strcmp(out.p ? out.p : "", "top\na\nb\nc\nd\ne\nbottom\n") == 0); /* insertions at both ends */
+    buf_free(&out);
+
+    /* through the store: journal edit + external edit in different places merge, same place conflicts */
+    char *ws = new_ws();
+    put_file(ws, "f.txt", "a\nb\nc\nd\ne\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"replace_text\",\"params\":{\"target\":\"f.txt\",\"old\":\"b\",\"new\":\"B\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    put_file(ws, "f.txt", "a\nb\nc\nd\nE\n"); /* an editor changed the file on disk */
+    CHECK_ERR(store_flush(st, NULL, 0, NULL), "disk_conflict");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"merge\",\"params\":{\"dry_run\":true}}");
+    const J *res = a ? j_get(a, "result") : NULL, *rs = res ? j_get(res, "results") : NULL;
+    CHECK(rs && rs->n == 1 && strcmp(j_get(rs->items[0], "status")->s, "merged") == 0);
+    json_free(a);
+    CHECK_ERR(store_flush(st, NULL, 0, NULL), "disk_conflict"); /* a dry run changes nothing */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"merge\",\"params\":{}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "conflicts")->i == 0 && j_get(res, "paths"));
+    json_free(a);
+    char *v = view_text(st, "f.txt");
+    CHECK(strcmp(v, "a\nB\nc\nd\nE\n") == 0);
+    free(v);
+    CHECK(store_flush(st, NULL, 0, NULL) == 0);
+    Buf disk;
+    buf_init(&disk);
+    char path[700];
+    snprintf(path, sizeof path, "%s/f.txt", ws);
+    CHECK(pf_read_file(path, &disk) == 0 && disk.len == 10 && memcmp(disk.p, "a\nB\nc\nd\nE\n", 10) == 0);
+    buf_free(&disk);
+
+    /* a real conflict is reported and nothing is written; theirs/ours resolve it */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"replace_text\",\"params\":{\"target\":\"f.txt\",\"old\":\"a\",\"new\":\"mine\"}}");
+    json_free(a);
+    put_file(ws, "f.txt", "theirs\nB\nc\nd\nE\n");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"merge\",\"params\":{\"paths\":[\"f.txt\"]}}");
+    res = a ? j_get(a, "result") : NULL;
+    rs = res ? j_get(res, "results") : NULL;
+    CHECK(res && j_get(res, "conflicts")->i == 1 && rs && strcmp(j_get(rs->items[0], "status")->s, "conflict") == 0);
+    CHECK(rs && strcmp(j_get(j_get(rs->items[0], "conflicts")->items[0], "ours")->s, "mine\n") == 0);
+    json_free(a);
+    v = view_text(st, "f.txt");
+    CHECK(strncmp(v, "mine\n", 5) == 0); /* the journal is untouched */
+    free(v);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"merge\",\"params\":{\"paths\":[\"f.txt\"],\"strategy\":\"theirs\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    v = view_text(st, "f.txt");
+    CHECK(strncmp(v, "theirs\n", 7) == 0);
+    free(v);
+    CHECK(store_flush(st, NULL, 0, NULL) == 0);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+static void test_patch_ops(void) {
+    g_test = "patch_ops";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "/* adds */\r\nint add(int a, int b) {\r\n  return a + b;\r\n}\r\n\r\nint sub(int a, int b) {\r\n  return a - b;\r\n}\r\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    int64_t head = store_head(st);
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"patch\",\"params\":{\"edits\":["
+                    "{\"path\":\"a.c\",\"before_symbol\":\"add\",\"new\":\"#define K 1\\n\"},"
+                    "{\"path\":\"a.c\",\"after_symbol\":\"sub\",\"new\":\"\\nint mul(int a, int b) {\\n  return a * b;\\n}\"},"
+                    "{\"path\":\"a.c\",\"start_line\":3,\"new\":\"  return a + b + K;\"},"
+                    "{\"path\":\"n.txt\",\"create\":true,\"new\":\"hello\\n\"}]}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    if (!res) printf("patch_ops error: %s\n", err_of(a));
+    CHECK(res && j_get(res, "rev")->i == head + 1 && j_get(res, "replacements")->i == 4); /* two files, ONE revision */
+    json_free(a);
+    char *va = view_text(st, "a.c"), *vn = view_text(st, "n.txt");
+    /* the macro goes above the doc comment of add (it stays attached), CRLF is kept everywhere */
+    CHECK(strncmp(va, "#define K 1\r\n/* adds */\r\nint add(int a, int b) {\r\n  return a + b + K;\r\n}\r\n", 69) == 0);
+    CHECK(strstr(va, "}\r\n\r\nint mul(int a, int b) {\r\n  return a * b;\r\n}\r\n") != NULL);
+    CHECK(strcmp(vn, "hello\n") == 0);
+    free(va);
+    free(vn);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"n.txt\",\"create\":true,\"new\":\"x\"}]}}");
+    CHECK(strstr(err_of(a), "already_exists") != NULL);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"after_line\":99,\"new\":\"x\"}]}}");
+    CHECK(strstr(err_of(a), "out of range") != NULL);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"symbol\":\"sub\",\"new\":\"int sub(int a, int b) { return b - a; }\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strstr(va, "int sub(int a, int b) { return b - a; }") != NULL);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"at_end\":true,\"new\":\"/* end */\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    free(va);
+    va = view_text(st, "a.c");
+    CHECK(strstr(va, "}\r\n/* end */") != NULL);
+    free(va);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+/* The index and the search cache survive between processes (.aed/index.cache): a second session gives the
+ * same answer, picks up edits made in between, and a damaged cache file is simply rebuilt. */
+static void test_index_cache(void) {
+    g_test = "index_cache";
+    char *ws = new_ws();
+    put_file(ws, "net.c", "int open_socket(int port) {\n  return port + 1;\n}\nint parse_config_file(const char *path) {\n  /* read the settings from disk */\n  return path != 0;\n}\n");
+    put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 2;\n}\n");
+    const char *q = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"where do we parse the config\"}}";
+    char cache[600];
+    snprintf(cache, sizeof cache, "%s/.aed/index.cache", ws);
+    char *first = NULL;
+    for (int round = 0; round < 4; round++) {
+        if (round == 2) { /* damage the file: the next session must ignore it, not crash */
+            Buf b;
+            buf_init(&b);
+            CHECK(pf_read_file(cache, &b) == 0 && b.len > 100);
+            CHECK(pf_write_atomic(cache, b.p, b.len / 2) == 0);
+            buf_free(&b);
+        }
+        if (round == 3) { /* an edit between sessions is seen */
+            put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 3;\n}\nint parse_config_value(int v) { return v; }\n");
+        }
+        Store *st = store_open(ws);
+        Rpc r;
+        memset(&r, 0, sizeof r);
+        r.store = st;
+        J *a = call(&r, q);
+        const J *res = a ? j_get(a, "result") : NULL, *m = res ? j_get(res, "matches") : NULL;
+        CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "parse_config_file") == 0);
+        if (round == 3) {
+            bool saw = false;
+            for (size_t i = 0; m && i < m->n; i++)
+                if (strcmp(j_get(m->items[i], "symbol")->s, "parse_config_value") == 0) saw = true;
+            CHECK(saw);
+        } else {
+            char *s = a ? json_dump(res) : NULL;
+            if (!first) first = s;
+            else {
+                CHECK(s && strcmp(s, first) == 0); /* identical answer from the loaded cache */
+                free(s);
+            }
+        }
+        json_free(a);
+        rpc_release(&r); /* writes the cache */
+        store_close(st);
+        Buf b;
+        buf_init(&b);
+        CHECK(pf_read_file(cache, &b) == 0 && b.len > 100);
+        buf_free(&b);
+    }
+    free(first);
+    free(ws);
+}
+
+static void test_index_stat_shortcut(void) {
+    g_test = "index_stat";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "int a(void) { return 1; }\n");
+    put_file(ws, "b.c", "int b(void) { return 2; }\n");
+    Store *st = store_open(ws);
+    WsIndex *ix = wsi_new(st, NULL);
+    pf_sleep_ms(2300); /* the files must be older than the 2 s "racy" window to be trusted by size + mtime */
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 2 && wsi_skipped(ix) == 0);
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 0 && wsi_skipped(ix) == 2); /* nothing was read */
+    put_file(ws, "b.c", "int b(void) { return 22; }\n"); /* an outside edit: size and mtime change */
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 1 && wsi_skipped(ix) == 1);
+    wsi_free(ix);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
+
+
     g_test = "agent_tools";
     char *ws = new_ws();
     put_file(ws, "a.c", "int f(void) {\r\n  return 1;\r\n}\r\nint g(void) {\r\n  return 2;\r\n}\r\n");
@@ -1575,6 +1940,21 @@ static void test_agent_tools(void) {
     CHECK(strstr(err_of(a), "ambiguous_text") != NULL);
     json_free(a);
     CHECK(store_head(st) == head + 1); /* a rejected patch changes nothing */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":2,\"end_line\":3,\"new\":\"  return 7;\\n}\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strncmp(va, "int f(void) {\r\n  return 7;\r\n}\r\nint g(void) {", 44) == 0); /* CRLF kept, trailing newline supplied */
+    free(va);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":4,\"end_line\":6,\"new\":\"\"}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    va = view_text(st, "a.c");
+    CHECK(strcmp(va, "int f(void) {\r\n  return 7;\r\n}\r\n") == 0); /* an empty replacement deletes the lines */
+    free(va);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":9,\"new\":\"x\"}}");
+    CHECK(strstr(err_of(a), "out of range") != NULL);
+    json_free(a);
     rpc_release(&r);
     store_close(st);
     free(ws);
@@ -1582,6 +1962,7 @@ static void test_agent_tools(void) {
 
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
+    if (argc > 1 && strcmp(argv[1], "--fake-embed") == 0) return fake_embed();
     {
         char *self = pf_fullpath(argv[0]);
         snprintf(g_self, sizeof g_self, "%s", self ? self : argv[0]);
@@ -1613,6 +1994,13 @@ int main(int argc, char **argv) {
     RUN(test_lsp_hub);
     RUN(test_semantic);
     RUN(test_live_semantic);
+    RUN(test_hybrid);
+    RUN(test_embed);
+    RUN(test_callgraph);
+    RUN(test_merge);
+    RUN(test_patch_ops);
+    RUN(test_index_stat_shortcut);
+    RUN(test_index_cache);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
