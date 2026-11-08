@@ -2,6 +2,11 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.40.2 - 2026-11-09
+
+### Added
+- `tests/bench.py` and `docs/BENCHMARK.md`: a modelled comparison of generic Grep/Read/Edit tools and nextagent on six tasks (about 2.6x fewer tokens and 29 -> 6 calls overall; 88x on a 23-site rename, 19x on six batched edits, about 1x on `context`). The limits of the model are stated in the document.
+
 ## 0.40.1 - 2026-11-09
 
 ### Fixed
