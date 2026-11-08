@@ -55,6 +55,8 @@ int store_undo(Store *st, int64_t rev, const Validator *validator, EditResult *r
 /* Re-apply the most recently undone head revision. */
 int store_redo(Store *st, const Validator *validator, EditResult *result);
 J *store_history(Store *st, int limit);
+/* What a revision changed (rev 0 = head): {rev,label,files:[{path,hunks:[{line?,offset,removed,added}]}]}. */
+int store_rev_diff(Store *st, int64_t rev, J **out);
 /* `paths` NULL = all documents. */
 int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *written);
 /* Reconciles a document whose file changed outside NextAgent (what `sync` reports as disk_conflict) by a

@@ -84,11 +84,17 @@ syntax mode); for other languages the one-shot CLI starts the language server fo
    replaced in every argument and in `apply` scripts (not in files read with `--new-file`/`--old-file`). For long or
    awkward text put it in a file and use `--new-file F`.
 4. **Prefer `apply -` with a quoted heredoc (`<<'EOF'`)** over many separate commands: fewer calls, one undo step.
-5. **Every change is undoable:** `nextagent history --limit 5`, `nextagent undo`, `nextagent redo`.
-6. **Do not edit tracked files with `sed -i` or other tools between nextagent calls.** If a human, git or a formatter
+5. **Every change is undoable:** `nextagent history --limit 5`, `nextagent undo`, `nextagent redo`. `nextagent diff [REV]`
+   shows what a revision changed (default the last one) without re-reading the files.
+6. **PowerShell has no heredoc:** write the script to a file and run `nextagent apply script.txt`, or use a here-string
+   piped in: `@'...'@ | nextagent apply -`. In an MCP session the `patch` tool takes the same locators as `apply`
+   (`create`, `at_end`, `before_symbol`, ...).
+7. **nextagent does not delete files.** Delete them with the shell; `merge PATH --ours` would recreate a deleted file, so
+   do not run it on one.
+8. **Do not edit tracked files with `sed -i` or other tools between nextagent calls.** If a human, git or a formatter
    changed a file anyway, nextagent merges it automatically on the next call; to do it explicitly:
    `nextagent merge [PATH] [--dry-run]`.
-7. Errors are one short line naming the cause (`text_not_found`, `ambiguous_symbol`, `disk_conflict`, ...). A failed
+9. Errors are one short line naming the cause (`text_not_found`, `ambiguous_symbol`, `disk_conflict`, ...). A failed
    call changes nothing; fix the cause and repeat it.
 
 ## Other languages (language servers)

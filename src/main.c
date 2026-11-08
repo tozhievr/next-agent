@@ -27,6 +27,7 @@ static const char USAGE[] =
           "  undo [--rev N]\n"
           "  redo\n"
           "  history [--limit N]\n"
+          "  diff [REV]                     what a revision changed (default: the last one)\n"
           "  sync [PATH...]\n"
           "  references NAME [--no-members] [--path P]...\n"
           "  rename NAME NEW_NAME [--no-members] [--allow-existing] [--path P]... [--if-rev N]\n"
@@ -76,6 +77,23 @@ static void brief_symbol(const J *s, const char *path) {
 
 /* Compact rendering of the common results; false = fall back to JSON. */
 static bool print_brief(const char *method, const J *res) {
+    const J *dfiles = res->k == J_OBJ ? j_get(res, "files") : NULL;
+    if (dfiles && dfiles->k == J_ARR && strcmp(method, "history") == 0) { /* diff of one revision */
+        printf("rev %lld %s\n", (long long)j_get(res, "rev")->i, j_get(res, "label")->s);
+        for (size_t i = 0; i < dfiles->n; i++) {
+            const J *f = dfiles->items[i], *hs = j_get(f, "hunks");
+            printf("--- %s\n", j_get(f, "path")->s);
+            for (size_t k = 0; k < hs->n; k++) {
+                const J *h = hs->items[k], *ln = j_get(h, "line");
+                if (j_is_int(ln)) printf("@@ line %lld\n", (long long)ln->i);
+                else printf("@@ offset %lld\n", (long long)j_get(h, "offset")->i);
+                const J *rm = j_get(h, "removed"), *ad = j_get(h, "added");
+                if (rm->slen) printf("-%s%s", rm->s, rm->s[rm->slen - 1] == '\n' ? "" : "\n");
+                if (ad->slen) printf("+%s%s", ad->s, ad->s[ad->slen - 1] == '\n' ? "" : "\n");
+            }
+        }
+        return true;
+    }
     if (res->k == J_ARR && strcmp(method, "history") == 0) { /* revision log: one line per revision */
         for (size_t i = 0; i < res->n; i++) {
             const J *o = res->items[i], *par = j_get(o, "parent");
@@ -703,6 +721,20 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "history", p);
+    } else if (strcmp(cmd, "diff") == 0) {
+        J *p = j_obj();
+        j_set(p, "op", j_str("diff"));
+        if (nargs > 1) goto bad_p;
+        if (nargs == 1) {
+            int64_t n;
+            if (parse_int(args[0], &n) != 0) goto bad_p;
+            j_set(p, "rev", j_int(n));
+        }
+        code = run_method(&rpc, "history", p);
+        goto done;
+    bad_p:
+        json_free(p);
+        goto bad;
     } else if (strcmp(cmd, "history") == 0) {
         J *p = j_obj();
         j_set(p, "op", j_str("log"));

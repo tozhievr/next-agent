@@ -46,7 +46,7 @@ text; do not shift offsets for earlier operations in the same request.
 ## History and files changed outside
 
 ```
-nextagent history [--limit N]    nextagent undo [--rev N]    nextagent redo
+nextagent history [--limit N]    nextagent diff [REV]    nextagent undo [--rev N]    nextagent redo
 nextagent sync [PATH...]         # write unflushed revisions to disk (normally automatic)
 nextagent merge [PATH...] [--ours|--theirs] [--dry-run]    # three-way merge of files edited outside nextagent
 ```

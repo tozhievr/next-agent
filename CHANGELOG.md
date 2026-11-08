@@ -2,6 +2,21 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.44.0 - 2026-11-09
+
+### Added
+- **`diff [REV]`** (CLI) / `history` with `op: "diff"` (MCP, JSON-RPC): what a revision changed, per file as hunks with
+  the removed and added text (and the line, for the last revision). Default: the last revision.
+
+### Changed
+- The MCP `patch` tool now lists all its locators (`create`, `at_end`, `before_symbol`, line numbers, ...) in its schema;
+  models did not know that `patch` can create files and append, and asked for tools that already existed.
+- `references --path DIR` says that the path must be the defining file instead of `symbol_not_found`.
+- SKILL.md: PowerShell without heredoc, `diff`, deletion of files.
+
+### Tests
+- `flush_and_diff`: write on commit in long-lived servers, diff, partial `sync`, `.aed/lsp.json` editable (427 checks).
+
 ## 0.43.0 - 2026-11-09
 
 Fixes from a field report (DeepSeek V4.1 Flash building a 16-file Python project through `mcp --lsp`).
