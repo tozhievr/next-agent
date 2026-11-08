@@ -1821,6 +1821,60 @@ static void test_patch_ops(void) {
     free(ws);
 }
 
+/* The index and the search cache survive between processes (.aed/index.cache): a second session gives the
+ * same answer, picks up edits made in between, and a damaged cache file is simply rebuilt. */
+static void test_index_cache(void) {
+    g_test = "index_cache";
+    char *ws = new_ws();
+    put_file(ws, "net.c", "int open_socket(int port) {\n  return port + 1;\n}\nint parse_config_file(const char *path) {\n  /* read the settings from disk */\n  return path != 0;\n}\n");
+    put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 2;\n}\n");
+    const char *q = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"where do we parse the config\"}}";
+    char cache[600];
+    snprintf(cache, sizeof cache, "%s/.aed/index.cache", ws);
+    char *first = NULL;
+    for (int round = 0; round < 4; round++) {
+        if (round == 2) { /* damage the file: the next session must ignore it, not crash */
+            Buf b;
+            buf_init(&b);
+            CHECK(pf_read_file(cache, &b) == 0 && b.len > 100);
+            CHECK(pf_write_atomic(cache, b.p, b.len / 2) == 0);
+            buf_free(&b);
+        }
+        if (round == 3) { /* an edit between sessions is seen */
+            put_file(ws, "ui.c", "int draw_button(int x) {\n  return x * 3;\n}\nint parse_config_value(int v) { return v; }\n");
+        }
+        Store *st = store_open(ws);
+        Rpc r;
+        memset(&r, 0, sizeof r);
+        r.store = st;
+        J *a = call(&r, q);
+        const J *res = a ? j_get(a, "result") : NULL, *m = res ? j_get(res, "matches") : NULL;
+        CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "parse_config_file") == 0);
+        if (round == 3) {
+            bool saw = false;
+            for (size_t i = 0; m && i < m->n; i++)
+                if (strcmp(j_get(m->items[i], "symbol")->s, "parse_config_value") == 0) saw = true;
+            CHECK(saw);
+        } else {
+            char *s = a ? json_dump(res) : NULL;
+            if (!first) first = s;
+            else {
+                CHECK(s && strcmp(s, first) == 0); /* identical answer from the loaded cache */
+                free(s);
+            }
+        }
+        json_free(a);
+        rpc_release(&r); /* writes the cache */
+        store_close(st);
+        Buf b;
+        buf_init(&b);
+        CHECK(pf_read_file(cache, &b) == 0 && b.len > 100);
+        buf_free(&b);
+    }
+    free(first);
+    free(ws);
+}
+
 static void test_index_stat_shortcut(void) {
     g_test = "index_stat";
     char *ws = new_ws();
@@ -1946,6 +2000,7 @@ int main(int argc, char **argv) {
     RUN(test_merge);
     RUN(test_patch_ops);
     RUN(test_index_stat_shortcut);
+    RUN(test_index_cache);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

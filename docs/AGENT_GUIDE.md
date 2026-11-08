@@ -190,6 +190,7 @@ nextagent --brief find QUERY [--kind K]                  # symbols by name, all 
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
 nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
+# (first `locate`/`search` on a big workspace builds .aed/index.cache; later calls reuse it. NEXTAGENT_TRACE=1 shows timings)
 nextagent sub OLD NEW a.c b.c [--all]                    # ONE-LINERS (one revision each) for small changes, any number of files
 nextagent line PATH 12 'text'   |   line PATH 12-14 'text'   # replace line(s)      nextagent del PATH 12-14
 nextagent ins PATH 12 'text'    |   append PATH 'text'       # insert before line / add at the end

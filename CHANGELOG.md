@@ -2,6 +2,15 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.40.0 - 2026-11-09
+
+### Added
+- The workspace index and the hybrid-search cache are saved to `.aed/index.cache` when a session ends and loaded by the next one, so the one-shot CLI no longer re-reads and re-indexes the workspace on every call. On a 1500-file C workspace (61k chunks) `locate` went from 5.5 s to 0.45 s; the answers are identical. The file is versioned by the program version and is discarded (and rebuilt) if it is truncated, damaged, from another version or built for another embedding model. Changed files are still detected by size + mtime and by content hash.
+- `NEXTAGENT_TRACE=1` prints where the time of a `locate` went (index, chunks, embeddings) to stderr.
+
+### Notes
+- The cache is large for big workspaces (about 120 MB for 61k chunks, mostly term lists and chunk vectors); it lives in `.aed`, which is not meant to be committed.
+
 ## 0.39.0 - 2026-11-09
 
 ### Added

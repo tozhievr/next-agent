@@ -1,5 +1,6 @@
 #include "index.h"
 #include "platform.h"
+#include "bin.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,6 +37,9 @@ struct WsIndex {
     size_t extracted, skipped;
     void *user;
     void (*user_free)(void *);
+    bool cache_tried, dirty; /* .aed/index.cache was looked at / the in-memory index differs from it */
+    char *blob;              /* the hybrid-search section of the cache file, handed to the search on its first use */
+    size_t blob_n;
 };
 
 static uint64_t fnv(const char *p, size_t n) {
@@ -97,6 +101,7 @@ static void entry_free(Entry *e) {
 void wsi_free(WsIndex *ix) {
     if (!ix) return;
     if (ix->user && ix->user_free) ix->user_free(ix->user);
+    free(ix->blob);
     for (size_t i = 0; i < ix->n; i++) entry_free(&ix->v[i]);
     free(ix->v);
     for (size_t i = 0; i < ix->in.n; i++) free(ix->in.names[i]);
@@ -227,7 +232,185 @@ static void extract(WsIndex *ix, Entry *e, const char *t, size_t n) {
 
 static int cmp_entry(const void *a, const void *b) { return strcmp(((const Entry *)a)->path, ((const Entry *)b)->path); }
 
+/* ---- on-disk cache: .aed/index.cache ----
+ * Symbols, identifier sets and the hybrid-search state survive between runs of the one-shot CLI. The
+ * file starts with the format + program version; anything unexpected (truncated, other version, unsorted)
+ * discards the whole cache and the index is simply rebuilt. Stale entries are harmless: every file is
+ * still checked by size + mtime (and by content hash when it was read), exactly as in a running server. */
+#define CACHE_MAGIC "nextagent-index-cache/1 " NA_VERSION
+
+static char *cache_path(const WsIndex *ix) {
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "%s/.aed/index.cache", store_root(ix->st));
+    return buf_take(&b);
+}
+
+static void cache_reset(WsIndex *ix) {
+    for (size_t i = 0; i < ix->n; i++) entry_free(&ix->v[i]);
+    ix->n = 0;
+    for (size_t i = 0; i < ix->in.n; i++) free(ix->in.names[i]);
+    ix->in.n = 0;
+    if (ix->in.slots) memset(ix->in.slots, 0, ix->in.cap * sizeof *ix->in.slots);
+    free(ix->blob);
+    ix->blob = NULL;
+    ix->blob_n = 0;
+}
+
+static void cache_load(WsIndex *ix) {
+    char *path = cache_path(ix);
+    Buf f;
+    buf_init(&f);
+    if (pf_read_file(path, &f) != 0) {
+        buf_free(&f);
+        free(path);
+        return;
+    }
+    free(path);
+    BinR r = {(const unsigned char *)f.p, f.len, 0, false};
+    char *magic = binr_str(&r);
+    if (!magic || strcmp(magic, CACHE_MAGIC) != 0) r.bad = true;
+    free(magic);
+    uint32_t nn = r.bad ? 0 : binr_u32(&r);
+    if (binr_room(&r, nn, 4))
+        for (uint32_t i = 0; i < nn && !r.bad; i++) {
+            char *s = binr_str(&r);
+            if (!s || in_id(&ix->in, s, strlen(s), true) != i) r.bad = true;
+            free(s);
+        }
+    uint32_t ne = r.bad ? 0 : binr_u32(&r);
+    if (binr_room(&r, ne, 8))
+        for (uint32_t i = 0; i < ne && !r.bad; i++) {
+            if (ix->n == ix->cap) {
+                ix->cap = ix->cap ? ix->cap * 2 : 64;
+                ix->v = na_realloc(ix->v, ix->cap * sizeof *ix->v);
+            }
+            Entry *e = &ix->v[ix->n++];
+            memset(e, 0, sizeof *e);
+            e->path = binr_str(&r);
+            e->hash = binr_u64(&r);
+            e->len = (size_t)binr_u64(&r);
+            e->server = binr_u32(&r) != 0;
+            e->sig.size = binr_u64(&r);
+            e->sig.mtime_ms = (int64_t)binr_u64(&r);
+            e->sig_at = (int64_t)binr_u64(&r);
+            e->has_sig = binr_u32(&r) != 0;
+            uint32_t k = binr_u32(&r);
+            if (binr_room(&r, k, 4)) {
+                e->ids = na_alloc((k ? k : 1) * sizeof *e->ids);
+                e->nids = k;
+                for (uint32_t j = 0; j < k; j++)
+                    if ((e->ids[j] = binr_u32(&r)) >= nn) r.bad = true;
+            }
+            k = binr_u32(&r);
+            if (binr_room(&r, k, 8)) {
+                e->syms.v = na_alloc((k ? k : 1) * sizeof *e->syms.v);
+                e->syms.cap = k;
+                for (uint32_t j = 0; j < k && !r.bad; j++) {
+                    Symbol *y = &e->syms.v[e->syms.n++];
+                    y->name = binr_str(&r);
+                    y->kind = binr_str(&r);
+                    y->scope = binr_str(&r);
+                    y->start = (size_t)binr_u64(&r);
+                    y->end = (size_t)binr_u64(&r);
+                    y->sel = (size_t)binr_u64(&r);
+                    y->line = (size_t)binr_u64(&r);
+                    y->column = (size_t)binr_u64(&r);
+                }
+            }
+            if (!e->path || (i > 0 && strcmp(ix->v[ix->n - 2].path, e->path) >= 0)) r.bad = true;
+        }
+    uint64_t hn = r.bad ? 0 : binr_u64(&r);
+    if (!r.bad && binr_room(&r, (size_t)hn, 1) && hn) {
+        ix->blob = na_alloc((size_t)hn);
+        memcpy(ix->blob, r.p + r.i, (size_t)hn);
+        ix->blob_n = (size_t)hn;
+    }
+    buf_free(&f);
+    if (r.bad) {
+        cache_reset(ix);
+        return;
+    }
+    /* a file the language server would now outline was cached from the scanner: extract it again */
+    size_t k = 0;
+    for (size_t i = 0; i < ix->n; i++) {
+        if (ix->hub && !ix->v[i].server && lsp_hub_configured(ix->hub, ix->v[i].path)) entry_free(&ix->v[i]);
+        else ix->v[k++] = ix->v[i];
+    }
+    ix->n = k;
+}
+
+/* Writes .aed/index.cache. `hyb` is the search's own section; NULL keeps the one that was loaded. */
+void wsi_cache_save(WsIndex *ix, const Buf *hyb) {
+    Buf b;
+    buf_init(&b);
+    bin_str(&b, CACHE_MAGIC);
+    bin_u32(&b, (uint32_t)ix->in.n);
+    for (size_t i = 0; i < ix->in.n; i++) bin_str(&b, ix->in.names[i]);
+    bin_u32(&b, (uint32_t)ix->n);
+    for (size_t i = 0; i < ix->n; i++) {
+        const Entry *e = &ix->v[i];
+        bin_str(&b, e->path);
+        bin_u64(&b, e->hash);
+        bin_u64(&b, (uint64_t)e->len);
+        bin_u32(&b, e->server ? 1 : 0);
+        bin_u64(&b, (uint64_t)e->sig.size);
+        bin_u64(&b, (uint64_t)e->sig.mtime_ms);
+        bin_u64(&b, (uint64_t)e->sig_at);
+        bin_u32(&b, e->has_sig ? 1 : 0);
+        bin_u32(&b, (uint32_t)e->nids);
+        for (size_t j = 0; j < e->nids; j++) bin_u32(&b, e->ids[j]);
+        bin_u32(&b, (uint32_t)e->syms.n);
+        for (size_t j = 0; j < e->syms.n; j++) {
+            const Symbol *y = &e->syms.v[j];
+            bin_str(&b, y->name);
+            bin_str(&b, y->kind);
+            bin_str(&b, y->scope);
+            bin_u64(&b, (uint64_t)y->start);
+            bin_u64(&b, (uint64_t)y->end);
+            bin_u64(&b, (uint64_t)y->sel);
+            bin_u64(&b, (uint64_t)y->line);
+            bin_u64(&b, (uint64_t)y->column);
+        }
+    }
+    const char *hp = hyb ? hyb->p : ix->blob;
+    size_t hn = hyb ? hyb->len : ix->blob_n;
+    bin_u64(&b, (uint64_t)hn);
+    if (hn) buf_put(&b, hp, hn);
+    char *path = cache_path(ix);
+    Buf dir;
+    buf_init(&dir);
+    buf_printf(&dir, "%s/.aed", store_root(ix->st));
+    if (pf_mkdirs(dir.p) == 0 && pf_write_atomic(path, b.p, b.len) == 0) {
+        ix->dirty = false;
+        if (hyb) {
+            free(ix->blob);
+            ix->blob = hn ? na_alloc(hn) : NULL;
+            if (hn) memcpy(ix->blob, hp, hn);
+            ix->blob_n = hn;
+        }
+    }
+    buf_free(&dir);
+    free(path);
+    buf_free(&b);
+}
+
+bool wsi_dirty(const WsIndex *ix) { return ix->dirty; }
+
+/* the loaded hybrid-search section, once: the caller owns the returned memory */
+char *wsi_take_blob(WsIndex *ix, size_t *n) {
+    char *p = ix->blob;
+    *n = ix->blob_n;
+    ix->blob = NULL;
+    ix->blob_n = 0;
+    return p;
+}
+
 int wsi_refresh(WsIndex *ix) {
+    if (!ix->cache_tried) {
+        ix->cache_tried = true;
+        cache_load(ix);
+    }
     ix->extracted = 0;
     ix->skipped = 0;
     StrList files;
@@ -278,6 +461,7 @@ int wsi_refresh(WsIndex *ix) {
             e->len = (size_t)-1;
         }
         e->seen = true;
+        ix->dirty = true; /* read from disk: the cached signature is outdated */
         e->has_sig = have;
         if (have) {
             e->sig = sig;
@@ -299,7 +483,10 @@ int wsi_refresh(WsIndex *ix) {
     size_t k = 0;
     for (size_t i = 0; i < ix->n; i++) {
         if (ix->v[i].seen) ix->v[k++] = ix->v[i];
-        else entry_free(&ix->v[i]);
+        else {
+            entry_free(&ix->v[i]);
+            ix->dirty = true;
+        }
     }
     ix->n = k;
     qsort(ix->v, ix->n, sizeof *ix->v, cmp_entry);

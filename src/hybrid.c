@@ -13,7 +13,10 @@
  * IEEE with no libm and a fixed evaluation order, so results are identical on every platform. */
 #include "semantic.h"
 #include "embed.h"
+#include "platform.h"
+#include "bin.h"
 #include <ctype.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -106,6 +109,8 @@ typedef struct {
     size_t dfcap;
     Embedder *emb; /* external model from .aed/embed.json, or NULL */
     bool emb_tried;
+    bool loaded;        /* the section of .aed/index.cache was offered to this cache */
+    uint64_t saved_ver; /* corpus version that is on disk */
 } Hyb;
 
 static void hfile_free(HFile *f) {
@@ -589,11 +594,171 @@ typedef struct {
     uint32_t file, idx;
 } Ref;
 
+/* ---- on-disk section of .aed/index.cache ---- */
+static void hyb_save(const Hyb *h, Buf *b) {
+    bin_str(b, h->emb ? embed_model(h->emb) : "");
+    bin_u32(b, DIM);
+    bin_u64(b, h->version);
+    bin_u32(b, (uint32_t)h->terms.n);
+    for (size_t i = 0; i < h->terms.n; i++) bin_str(b, h->terms.k[i]);
+    bin_u32(b, (uint32_t)h->nf);
+    for (size_t f = 0; f < h->nf; f++) {
+        const HFile *hf = &h->f[f];
+        bin_str(b, hf->path);
+        bin_u64(b, hf->hash);
+        bin_u32(b, (uint32_t)hf->n);
+        for (size_t i = 0; i < hf->n; i++) {
+            const HChunk *c = &hf->c[i];
+            bin_u32(b, c->first);
+            bin_u32(b, c->last);
+            bin_str(b, c->sym);
+            bin_str(b, c->kind);
+            bin_u32(b, c->nbt);
+            bin_u32(b, c->nnt);
+            bin_u32(b, c->blen);
+            bin_u32(b, c->nlen);
+            for (uint32_t k = 0; k < c->nbt * 2; k++) bin_u32(b, c->bt[k]);
+            for (uint32_t k = 0; k < c->nnt * 2; k++) bin_u32(b, c->nt[k]);
+            bin_u64(b, c->ekey);
+            bin_str(b, c->etext);
+            bin_u32(b, c->vec ? 1 : 0);
+            if (c->vec) bin_f32s(b, c->vec, DIM);
+        }
+    }
+    bool emb = h->built == h->version && h->row;
+    bin_u32(b, emb ? 1 : 0);
+    if (emb) {
+        bin_u32(b, (uint32_t)h->nrow);
+        for (size_t t = 0; t < h->terms.n; t++) bin_u32(b, (uint32_t)h->row[t]);
+        for (size_t t = 0; t < h->terms.n; t++) bin_u32(b, h->df[t]);
+        bin_f32s(b, h->W, h->nrow * DIM);
+    }
+}
+
+static void hyb_clear(Hyb *h) {
+    for (size_t i = 0; i < h->nf; i++) hfile_free(&h->f[i]);
+    free(h->f);
+    for (size_t i = 0; i < h->terms.n; i++) free(h->terms.k[i]);
+    free(h->terms.k);
+    free(h->terms.slots);
+    free(h->W);
+    free(h->row);
+    free(h->df);
+    Embedder *emb = h->emb;
+    bool tried = h->emb_tried;
+    memset(h, 0, sizeof *h);
+    h->emb = emb;
+    h->emb_tried = tried;
+    h->loaded = true;
+}
+
+/* Restores a saved section; anything that does not fit (other model, other dimension, damage) is dropped. */
+static void hyb_load(Hyb *h, const char *blob, size_t n) {
+    BinR r = {(const unsigned char *)blob, n, 0, false};
+    char *model = binr_str(&r);
+    const char *mine = h->emb ? embed_model(h->emb) : "";
+    if (!model || strcmp(model, mine) != 0 || binr_u32(&r) != DIM) r.bad = true;
+    free(model);
+    uint64_t version = binr_u64(&r);
+    uint32_t nt = r.bad ? 0 : binr_u32(&r);
+    if (binr_room(&r, nt, 4))
+        for (uint32_t i = 0; i < nt && !r.bad; i++) {
+            char *s = binr_str(&r);
+            if (!s || dict_id(&h->terms, s, strlen(s), true) != i) r.bad = true;
+            free(s);
+        }
+    uint32_t nf = r.bad ? 0 : binr_u32(&r);
+    if (binr_room(&r, nf, 8)) {
+        h->f = na_alloc((nf ? nf : 1) * sizeof *h->f);
+        for (uint32_t f = 0; f < nf && !r.bad; f++) {
+            HFile *hf = &h->f[h->nf++];
+            hf->path = binr_str(&r);
+            hf->hash = binr_u64(&r);
+            uint32_t nc = binr_u32(&r);
+            if (!binr_room(&r, nc, 16)) break;
+            hf->c = na_alloc((nc ? nc : 1) * sizeof *hf->c);
+            for (uint32_t i = 0; i < nc && !r.bad; i++) {
+                HChunk *c = &hf->c[hf->n++];
+                c->first = binr_u32(&r);
+                c->last = binr_u32(&r);
+                c->sym = binr_str(&r);
+                c->kind = binr_str(&r);
+                c->nbt = binr_u32(&r);
+                c->nnt = binr_u32(&r);
+                c->blen = binr_u32(&r);
+                c->nlen = binr_u32(&r);
+                if (binr_room(&r, (size_t)c->nbt * 2, 4)) {
+                    c->bt = na_alloc((c->nbt ? c->nbt * 2 : 1) * sizeof *c->bt);
+                    for (uint32_t k = 0; k < c->nbt * 2; k++) c->bt[k] = binr_u32(&r);
+                    for (uint32_t k = 0; k < c->nbt; k++)
+                        if (c->bt[k * 2] >= nt) r.bad = true;
+                }
+                if (binr_room(&r, (size_t)c->nnt * 2, 4)) {
+                    c->nt = na_alloc((c->nnt ? c->nnt * 2 : 1) * sizeof *c->nt);
+                    for (uint32_t k = 0; k < c->nnt * 2; k++) c->nt[k] = binr_u32(&r);
+                    for (uint32_t k = 0; k < c->nnt; k++)
+                        if (c->nt[k * 2] >= nt) r.bad = true;
+                }
+                c->ekey = binr_u64(&r);
+                c->etext = binr_str(&r);
+                if (c->etext) c->elen = (uint32_t)strlen(c->etext);
+                if (binr_u32(&r)) {
+                    c->vec = na_alloc(DIM * sizeof *c->vec);
+                    binr_f32s(&r, c->vec, DIM);
+                }
+            }
+        }
+    }
+    bool emb = !r.bad && binr_u32(&r) != 0;
+    if (emb) {
+        uint32_t nrow = binr_u32(&r);
+        if (binr_room(&r, nt, 8) && binr_room(&r, (size_t)nrow * DIM, 4)) {
+            h->row = na_alloc((nt ? nt : 1) * sizeof *h->row);
+            for (uint32_t t = 0; t < nt; t++) {
+                h->row[t] = (int32_t)binr_u32(&r);
+                if (h->row[t] >= (int32_t)nrow || h->row[t] < -1) r.bad = true;
+            }
+            h->df = na_alloc((nt ? nt : 1) * sizeof *h->df);
+            h->dfcap = nt;
+            for (uint32_t t = 0; t < nt; t++) h->df[t] = binr_u32(&r);
+            h->W = na_alloc((nrow ? (size_t)nrow * DIM : 1) * sizeof *h->W);
+            binr_f32s(&r, h->W, (size_t)nrow * DIM);
+            h->nrow = nrow;
+        }
+    }
+    if (r.bad) {
+        hyb_clear(h);
+        return;
+    }
+    h->version = version;
+    h->built = emb ? version : 0;
+    h->saved_ver = version;
+}
+
+/* Persists the index and the search cache when something changed since they were loaded. */
+void sem_cache_save(WsIndex *ix) {
+    if (!ix) return;
+    Hyb *h = wsi_user(ix);
+    if (!h) {
+        if (wsi_dirty(ix)) wsi_cache_save(ix, NULL);
+        return;
+    }
+    if (!wsi_dirty(ix) && h->version == h->saved_ver) return;
+    Buf b;
+    buf_init(&b);
+    hyb_save(h, &b);
+    wsi_cache_save(ix, &b);
+    h->saved_ver = h->version;
+    buf_free(&b);
+}
+
 int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit, size_t embed_budget, J **out) {
     size_t qn = strlen(query);
     if (qn == 0) return na_fail("invalid parameter: query must not be empty");
     if (limit == 0 || limit > 100) limit = 10;
+    int64_t t0 = pf_unix_ms();
     if (wsi_refresh(s->ix) != 0) return -1;
+    int64_t t1 = pf_unix_ms();
     Hyb *h = wsi_user(s->ix);
     if (!h) {
         h = na_alloc(sizeof *h);
@@ -605,8 +770,22 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         h->emb_tried = true;
         h->emb = embed_open(store_root(s->st), &cfg_err);
     }
+    if (!h->loaded) {
+        h->loaded = true;
+        size_t bn;
+        char *bp = wsi_take_blob(s->ix, &bn);
+        if (bp) {
+            hyb_load(h, bp, bn);
+            free(bp);
+        }
+    }
     refresh_cache(h, s);
+    int64_t t2 = pf_unix_ms();
     if (h->built != h->version || !h->row) build_embeddings(h);
+    if (getenv("NEXTAGENT_TRACE"))
+        fprintf(stderr, "trace: index %lld ms (%zu files, %zu read, %zu stat-skipped), chunks %lld ms, embeddings %lld ms\n",
+                (long long)(t1 - t0), wsi_nfiles(s->ix), wsi_extracted(s->ix), wsi_skipped(s->ix), (long long)(t2 - t1),
+                (long long)(pf_unix_ms() - t2));
 
     /* flat view of the chunks that pass the path filter */
     size_t total = 0;

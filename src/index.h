@@ -13,6 +13,10 @@ void wsi_free(WsIndex *ix);
 /* Walks the workspace (plus unflushed store documents) and re-extracts the files that changed. */
 int wsi_refresh(WsIndex *ix);
 size_t wsi_extracted(const WsIndex *ix); /* files re-extracted by the last refresh */
+/* On-disk cache (.aed/index.cache): the first refresh loads it; the one-shot CLI saves it when it changed. */
+bool wsi_dirty(const WsIndex *ix);
+void wsi_cache_save(WsIndex *ix, const Buf *hyb); /* hyb: the hybrid-search section, NULL keeps the loaded one */
+char *wsi_take_blob(WsIndex *ix, size_t *n);      /* the loaded hybrid-search section (caller frees), or NULL */
 size_t wsi_skipped(const WsIndex *ix);   /* files recognised as unchanged by size + mtime, without being read */
 uint64_t wsi_hash(const WsIndex *ix, size_t i); /* content hash of file i (changes when the text changes) */
 /* One caller-owned attachment (the hybrid search cache), freed with the index. */

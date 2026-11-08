@@ -155,6 +155,7 @@ void rpc_release(Rpc *r) {
         outline_cache_free(r->caches[i]);
     }
     r->ncaches = 0;
+    sem_cache_save(r->index);
     wsi_free(r->index);
     r->index = NULL;
 }
