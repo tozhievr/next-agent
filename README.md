@@ -52,6 +52,14 @@ Linux x86-64: `curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/
 
 A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.24.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
 
+## Skill for Claude Code
+
+The release also carries `nextagent-skill-<version>.zip`: a Claude Code skill (`SKILL.md` plus a command reference)
+that teaches the model to edit through `nextagent` (one `apply` script instead of many Edit calls, one function
+instead of a whole file, `locate` for questions) and a one-command installer. Unpack it and run `install-skill.sh`
+or `install-skill.ps1` (user-wide, or `--project` / `-Project` for one repository); see `skill/README.md`. The
+numbers behind the claim are in [docs/BENCHMARK.md](docs/BENCHMARK.md), with the limits of the method.
+
 ## Build
 
 **Recommended (Windows and Linux, identical behaviour):** clang + the vendored libc23, no system libc or SDK:
@@ -256,7 +264,7 @@ tests/tests.c   test suite
 
 ## Limitations and not implemented
 
-- **Not implemented:** branches, offline brain, three-way merge and file watcher, async writer, socket transport, M5b.
+- **Not implemented:** branches, offline brain, a file-watcher thread (outside changes are found by stat on the next query), async writer, socket transport, M5b.
 - The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
 - clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
 - `references` / `rename` / `find_symbols` are semantic through language servers (`serve --lsp`); `add_param` and `add_include` are still C-only and token-based. Without a server, C falls back to token search; other languages need a server.

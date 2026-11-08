@@ -2,6 +2,28 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.41.0 - 2026-11-09
+
+### Added
+- **Claude Code skill package.** `skill/` holds `nextagent/SKILL.md` (when and how to use the tool, with a checked
+  `apply` example and the rules that saved the most time), `nextagent/reference.md` (every command, errors, `.aed/`
+  files), `install-skill.sh` / `install-skill.ps1` (user-wide or per project) and `package.py`, which builds the
+  reproducible `nextagent-skill-<version>.zip` (+ `.sha256`) after validating the front matter. CI builds it on every
+  push; the release workflow publishes it next to the binaries.
+- `locate` quality evaluation: `tests/locate_eval.py` (28 questions with known answers on QuickJS) and the results in
+  `docs/BENCHMARK.md`.
+- `.aed/embed.json` keys `doc_prefix` / `query_prefix`; for models whose name contains `nomic-embed` they default to
+  `search_document: ` / `search_query: `, as the model was trained.
+
+### Changed
+- `locate` searches files up to 8 MB (was 2 MB; a larger file was skipped without a word, and `quickjs.c`, 2.2 MB, holds
+  most of QuickJS). Top-10 hits of the evaluation went from 4/28 to 13/28 without a model and 18/28 with one.
+- The external embedding model weighs 3.0 in the rank fusion (was 1.6).
+
+### Fixed
+- Documentation: the guide and README no longer say that three-way merge does not exist, and the backslash-token line
+  of the cheat sheet and of 0.39.0 is correct again.
+
 ## 0.40.2 - 2026-11-09
 
 ### Added
@@ -29,7 +51,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 - One-line edit commands for small changes, all built on `patch` (one revision each): `sub OLD NEW PATH... [--all]`, `line PATH A[-B] TEXT`, `del PATH A[-B]`, `ins PATH N TEXT`, `append PATH TEXT`.
-- `\` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
+- `@BS@` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
 - `patch` locator `at_end` (insert after the last line).
 
 ## 0.38.0 - 2026-11-09

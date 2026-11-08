@@ -21,7 +21,7 @@
 #include <string.h>
 
 #define WINDOW 40
-#define MAX_FILE_BYTES (2u << 20)
+#define MAX_FILE_BYTES (8u << 20) /* larger files are not searched (quickjs.c alone is 2.2 MB) */
 #define DIM 128
 #define MIN_DL 48
 
@@ -353,6 +353,7 @@ static void build_file(Hyb *h, Sem *s, HFile *hf, size_t fi) {
         if (h->emb) { /* what the external model will see: the label, then the chunk, cut at max_chars */
             Buf et;
             buf_init(&et);
+            buf_puts(&et, embed_doc_prefix(h->emb));
             if (cur) buf_printf(&et, "%s %s\n", cur->kind, cur->name);
             size_t room = embed_max_chars(h->emb), take = e - a < room ? e - a : room;
             while (take > 0 && take < e - a && ((unsigned char)text[a + take] & 0xC0) == 0x80) take--;
@@ -891,7 +892,7 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
             if (rb[i] > 0) v += 1.0 / (60.0 + rb[i]);
             if (rn[i] > 0) v += 1.5 / (60.0 + rn[i]);
             if (re[i] > 0) v += (use_ext ? 0.4 : 0.8) / (60.0 + re[i]);
-            if (rx[i] > 0) v += 1.6 / (60.0 + rx[i]);
+            if (rx[i] > 0) v += 3.0 / (60.0 + rx[i]); /* a real model is the best signal for descriptions (tuned on tests/locate_eval.py) */
             if (v <= 0) continue;
             const HChunk *c = CH(i);
             v *= kind_factor(c);
@@ -907,8 +908,11 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         size_t *tl = na_alloc(cap * sizeof *tl);
         HChunk **todo = na_alloc(cap * sizeof *todo);
         size_t k = 0;
-        tx[0] = query;
-        tl[0] = qn;
+        Buf qb;
+        buf_init(&qb);
+        buf_printf(&qb, "%s%s", embed_query_prefix(h->emb), query);
+        tx[0] = qb.p;
+        tl[0] = qb.len;
         bool *taken = na_alloc((nch + 1) * sizeof *taken);
         for (size_t r = 0; r < nfin && k < embed_budget; r++) {
             HChunk *c = &h->f[ref[fin[r].id].file].c[ref[fin[r].id].idx];
@@ -942,7 +946,8 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         free(tx);
         free(tl);
         free(todo);
-        const float *qv = embed_dim(h->emb) ? embed_get(h->emb, embed_key(h->emb, query, qn)) : NULL;
+        const float *qv = embed_dim(h->emb) ? embed_get(h->emb, embed_key(h->emb, qb.p, qb.len)) : NULL;
+        buf_free(&qb);
         if (!qv) continue;
         size_t dim = embed_dim(h->emb);
         for (size_t i = 0; i < nch; i++) {

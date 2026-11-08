@@ -5,7 +5,9 @@
  *   {"command": "my-embedder", "args": "--fast"}                                    JSON lines on stdin/stdout
  *
  * Optional: "api_key_env" (name of an environment variable holding a bearer token), "batch" (texts per
- * request, default 16), "timeout_ms" (default 30000), "max_chars" (text cut-off, default 1500).
+ * request, default 16), "timeout_ms" (default 30000), "max_chars" (text cut-off, default 1500),
+ * "doc_prefix" / "query_prefix" (put before every chunk / query; "search_document: " / "search_query: " by
+ * default for nomic-embed models, which are trained with them).
  * Request  : {"model": M, "input": ["text", ...]}
  * Response : {"data":[{"embedding":[...]}, ...]}  or  {"embeddings":[[...], ...]}  (one object per line for `command`)
  * There is no TLS and no DNS: for a remote or https backend run a local proxy, or use `command`.
@@ -22,6 +24,8 @@ Embedder *embed_open(const char *root, char **error);
 void embed_close(Embedder *e);
 const char *embed_model(const Embedder *e);
 size_t embed_max_chars(const Embedder *e);
+const char *embed_doc_prefix(const Embedder *e);   /* "" unless configured (default for nomic-embed models) */
+const char *embed_query_prefix(const Embedder *e);
 size_t embed_dim(const Embedder *e); /* 0 until the first vector is known */
 
 uint64_t embed_key(const Embedder *e, const char *text, size_t n);

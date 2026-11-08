@@ -39,3 +39,24 @@ With whole-file reads before each edit the generic total is 100000 tokens (x19).
   (T1 uses one query; ranking quality is checked separately with a real embedding model).
 
 Run it: `python tests/bench.py <nextagent> <quickjs-dir> <scratch-dir>`.
+
+
+## Ranking quality of `locate`
+
+`tests/locate_eval.py` asks 28 questions about QuickJS (for example "list the entries of a directory", answer
+`js_os_readdir`) and checks at which rank the one function that defines the answer appears. The ground truth is strict:
+a reasonable alternative (`js_evalScript` for "evaluate a script string", which calls the expected `JS_Eval`) counts as a
+miss. Embedding model: `nomic-embed-text` through Ollama (5340 chunks embedded in about 110 s, once; later queries
+answer in 0.2-0.5 s).
+
+| mode | top 1 | top 3 | top 10 | MRR |
+|---|---|---|---|---|
+| local embeddings only (no setup) | 2/28 | 9/28 | 13/28 | 0.19 |
+| + `nomic-embed-text` | 5/28 | 9/28 | 18/28 | 0.30 |
+
+Read it as "usable for narrowing down, not for blind trust": the right function is in the first ten in about two of
+three cases with the model and in under half without, and it is first in one case of five. The weight of the external
+model in the fusion was tuned on these same questions (16 -> 18 in the top ten), so the table flatters the model slightly;
+other weightings and the `doc_prefix`/`query_prefix` setting changed the result by one or two questions, which is noise
+at this sample size. A file larger than 2 MB used to be skipped silently (QuickJS's `quickjs.c` is 2.2 MB, and most of
+the answers live in it): the first run of this evaluation scored 4/28 in the top ten for that reason; the limit is now 8 MB.
