@@ -1266,7 +1266,7 @@ static int m_patch(Rpc *r, const J *p, J **out) {
         const Snapshot *s = snaps[slot];
         const J *jsl = j_get(ed, "start_line"), *jel = j_get(ed, "end_line"), *jbl = j_get(ed, "before_line"),
                 *jal = j_get(ed, "after_line"), *jsy = j_get(ed, "symbol"), *jbs = j_get(ed, "before_symbol"),
-                *jas = j_get(ed, "after_symbol"), *jcr = j_get(ed, "create");
+                *jas = j_get(ed, "after_symbol"), *jcr = j_get(ed, "create"), *jat = j_get(ed, "at_end");
         if (jo) {
             if (!j_is_str(jo) || jo->slen == 0) {
                 rc = na_fail("invalid parameter: edits[%zu].old must be a non-empty string", e);
@@ -1313,9 +1313,9 @@ static int m_patch(Rpc *r, const J *p, J **out) {
                 rlen = b2.len;
                 rep = buf_take(&b2);
             }
-        } else if ((jbl && j_is_int(jbl)) || (jal && j_is_int(jal))) { /* insert lines */
+        } else if ((jbl && j_is_int(jbl)) || (jal && j_is_int(jal)) || (jat && jat->k == J_BOOL && jat->b)) { /* insert lines */
             size_t nl = patch_lines(s);
-            int64_t line = jbl ? jbl->i : jal->i + 1;
+            int64_t line = jbl ? jbl->i : jal ? jal->i + 1 : (int64_t)nl + 1; /* at_end: after the last line */
             if (line < 1 || (size_t)line > nl + 1) {
                 rc = na_fail("invalid parameter: edits[%zu]: line out of range (%s has %zu lines)", e, jp->s, nl);
                 break;

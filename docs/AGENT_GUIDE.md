@@ -190,6 +190,10 @@ nextagent --brief find QUERY [--kind K]                  # symbols by name, all 
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
 nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
+nextagent sub OLD NEW a.c b.c [--all]                    # ONE-LINERS (one revision each) for small changes, any number of files
+nextagent line PATH 12 'text'   |   line PATH 12-14 'text'   # replace line(s)      nextagent del PATH 12-14
+nextagent ins PATH 12 'text'    |   append PATH 'text'       # insert before line / add at the end
+#   a backslash that your shell would halve: write \ (replaced in every argument and in apply scripts)
 nextagent apply script.txt                               # BEST for several edits: ONE call, ONE revision, no quoting. Script:
 #   @@@ replace PATH [all]   / old text / @@@ with / new text      @@@ lines PATH A-B   / new lines
 #   @@@ insert PATH before-symbol NAME|after-symbol NAME|before-line N|after-line N / text

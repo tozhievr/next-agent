@@ -13,6 +13,10 @@ static const char USAGE[] =
     "                                   @@@ insert PATH before-line N|after-line N|before-symbol NAME|after-symbol NAME / text\n"
     "                                   @@@ create PATH / file text\n"
     "  create PATH (--new S|--new-file F)\n"
+    "  sub OLD NEW PATH... [--all]    one-liners (one revision): literal replacement in one or more files\n"
+    "  line PATH A[-B] TEXT           replace line(s) A..B with TEXT        del PATH A[-B]    delete line(s)\n"
+    "  ins PATH N TEXT                insert TEXT before line N             append PATH TEXT  add after the last line\n"
+    "                                 (write @BS@ for a backslash that must survive your shell)\n"
     "  insert PATH (--before-line N|--after-line N|--before-symbol NAME|--after-symbol NAME) (--new S|--new-file F) [--kind K] [--scope S]\n"
           "  view PATH [--lines A-B | --symbol NAME [--kind K] [--scope S]] [--raw]\n"
           "  replace PATH (--old S|--old-file F | --lines A-B) (--new S|--new-file F) [--all] [--if-rev N]\n"
@@ -409,6 +413,23 @@ static J *parse_apply(const char *text, size_t len, char *err, size_t cap) {
     return req;
 }
 
+/* Some agent shells halve doubled backslashes before a program sees them, so `\\n` (a backslash and an n
+ * inside a C string, say) cannot be typed. `@BS@` is a backslash that survives: it is replaced in every
+ * command-line argument and in `apply` scripts. Text read from files (--new-file, --old-file) is verbatim. */
+static size_t unbs_n(char *s, size_t n) {
+    size_t w = 0;
+    for (size_t i = 0; i < n;) {
+        if (i + 4 <= n && memcmp(s + i, "@BS@", 4) == 0) {
+            s[w++] = '\\';
+            i += 4;
+        } else {
+            s[w++] = s[i++];
+        }
+    }
+    if (w < n) s[w] = 0;
+    return w;
+}
+
 /* flush with a transparent three-way merge of files that changed on disk since the baseline */
 static int flush_with_merge(Store *st, const char *const *names, size_t n) {
     if (store_flush(st, names, n, NULL) == 0) return 0;
@@ -475,6 +496,7 @@ static J *cli_params(const char *const *pos_names, int npos, char **args, int na
 int main(int argc, char **argv) {
     stdio_binary();
     if (getenv("NEXTAGENT_BRIEF")) g_brief = true;
+    for (int a = 1; a < argc; a++) unbs_n(argv[a], strlen(argv[a])); /* @BS@ -> backslash, see unbs_n */
     const char *root = ".";
     int i = 1;
     for (; i < argc; i++) {
@@ -786,6 +808,7 @@ int main(int argc, char **argv) {
             while ((n = fread(chunk, 1, sizeof chunk, stdin)) > 0) buf_put(&data, chunk, n);
         }
         char perr[200];
+        if (data.p) data.len = unbs_n(data.p, data.len);
         J *req = parse_apply(data.p ? data.p : "", data.len, perr, sizeof perr);
         buf_free(&data);
         if (!req) {
@@ -828,6 +851,71 @@ int main(int argc, char **argv) {
         free(new_buf);
         J *req = j_obj(), *edits = j_arr();
         j_push(edits, e);
+        j_set(req, "edits", edits);
+        j_set(req, "label", j_str(cmd));
+        code = run_method(&rpc, "patch", req);
+    } else if (strcmp(cmd, "sub") == 0 || strcmp(cmd, "line") == 0 || strcmp(cmd, "del") == 0 || strcmp(cmd, "ins") == 0 ||
+               strcmp(cmd, "append") == 0) {
+        /* one-line edits for small changes (all go through `patch`, so they are one revision):
+         *   sub OLD NEW PATH... [--all]   literal replacement in one or more files (every file must contain OLD)
+         *   line PATH A[-B] TEXT          replace lines A..B (or just A) with TEXT
+         *   del PATH A[-B]                delete lines
+         *   ins PATH N TEXT               insert TEXT before line N
+         *   append PATH TEXT              add TEXT after the last line */
+        J *edits = j_arr();
+        int64_t a = 0, b = 0, n = 0;
+        bool good = true;
+        if (cmd[0] == 's') {
+            bool all = false;
+            int paths = 0;
+            for (int k = 2; k < nargs; k++) {
+                if (strcmp(args[k], "--all") == 0) {
+                    all = true;
+                    continue;
+                }
+                J *e = j_obj();
+                j_set(e, "path", j_str(args[k]));
+                j_set(e, "old", j_str(args[0]));
+                j_set(e, "new", j_str(args[1]));
+                j_push(edits, e);
+                paths++;
+            }
+            if (nargs < 3 || paths == 0) good = false;
+            for (size_t k = 0; good && all && k < edits->n; k++) j_set(edits->items[k], "all", j_bool(true));
+        } else if (cmd[0] == 'l' && nargs == 3 && parse_range(args[1], &a, &b) == 0) {
+            J *e = j_obj();
+            j_set(e, "path", j_str(args[0]));
+            j_set(e, "start_line", j_int(a));
+            j_set(e, "end_line", j_int(b));
+            j_set(e, "new", j_str(args[2]));
+            j_push(edits, e);
+        } else if (cmd[0] == 'd' && nargs == 2 && parse_range(args[1], &a, &b) == 0) {
+            J *e = j_obj();
+            j_set(e, "path", j_str(args[0]));
+            j_set(e, "start_line", j_int(a));
+            j_set(e, "end_line", j_int(b));
+            j_set(e, "new", j_str(""));
+            j_push(edits, e);
+        } else if (cmd[0] == 'i' && nargs == 3 && parse_int(args[1], &n) == 0) {
+            J *e = j_obj();
+            j_set(e, "path", j_str(args[0]));
+            j_set(e, "before_line", j_int(n));
+            j_set(e, "new", j_str(args[2]));
+            j_push(edits, e);
+        } else if (cmd[0] == 'a' && nargs == 2) {
+            J *e = j_obj();
+            j_set(e, "path", j_str(args[0]));
+            j_set(e, "at_end", j_bool(true));
+            j_set(e, "new", j_str(args[1]));
+            j_push(edits, e);
+        } else {
+            good = false;
+        }
+        if (!good || edits->n == 0) {
+            json_free(edits);
+            goto bad;
+        }
+        J *req = j_obj();
         j_set(req, "edits", edits);
         j_set(req, "label", j_str(cmd));
         code = run_method(&rpc, "patch", req);

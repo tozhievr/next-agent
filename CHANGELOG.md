@@ -2,6 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.39.0 - 2026-11-09
+
+### Added
+- One-line edit commands for small changes, all built on `patch` (one revision each): `sub OLD NEW PATH... [--all]`, `line PATH A[-B] TEXT`, `del PATH A[-B]`, `ins PATH N TEXT`, `append PATH TEXT`.
+- `\` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
+- `patch` locator `at_end` (insert after the last line).
+
 ## 0.38.0 - 2026-11-09
 
 ### Added

@@ -1809,6 +1809,12 @@ static void test_patch_ops(void) {
     json_free(a);
     va = view_text(st, "a.c");
     CHECK(strstr(va, "int sub(int a, int b) { return b - a; }") != NULL);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"at_end\":true,\"new\":\"/* end */\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    free(va);
+    va = view_text(st, "a.c");
+    CHECK(strstr(va, "}\r\n/* end */") != NULL);
     free(va);
     rpc_release(&r);
     store_close(st);
