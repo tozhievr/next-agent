@@ -16,7 +16,7 @@ A coding agent normally reads whole files, counts line numbers and sends one edi
 
 It works from a shell tool (CLI), as an MCP server, or as a JSON-RPC server, and ships a Claude Code skill.
 
-> **Version 0.42.0.** Written in C23 (clang + a vendored libc23). 407 checks on Windows, 395 on Linux, plus a
+> **Version 0.43.0.** Written in C23 (clang + a vendored libc23). 407 checks on Windows, 395 on Linux, plus a
 > byte-for-byte cross-platform parity test. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents

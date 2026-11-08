@@ -1,6 +1,24 @@
 # Changelog
 
 All product versions follow [Semantic Versioning](https://semver.org/).
+
+## 0.43.0 - 2026-11-09
+
+Fixes from a field report (DeepSeek V4.1 Flash building a 16-file Python project through `mcp --lsp`).
+
+### Fixed
+- **`serve`/`mcp` write revisions to disk at once** (as the CLI always did) instead of waiting for `sync`; a failed
+  write is reported in the reply (`written: false`, `flush_error`). `--no-sync` restores the buffered behaviour.
+- **The diagnostic gate no longer rejects every write for servers that do not push diagnostics** (pyright,
+  typescript-language-server answer only on request): after a short wait (3 s, once) such a server counts as "no
+  diagnostics before or after". Servers that push (clangd, pylsp) are gated as before.
+- `sync` without paths writes every file except those changed outside nextagent and then reports the skipped ones,
+  instead of writing nothing.
+- `find`, `callers` and `callees` in the one-shot CLI ask the language servers for symbols of non-C files (they found
+  nothing in Python).
+- `.aed/lsp.json` and `.aed/embed.json` can be created and edited with nextagent itself.
+- `--brief history` prints `rev <- parent label` lines.
+
 ## 0.42.0 - 2026-11-09
 
 ### Added

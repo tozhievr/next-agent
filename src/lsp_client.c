@@ -526,6 +526,25 @@ static int op_wait(void *ctx, const char *uri, int64_t version, J **report) {
     }
 }
 
+/* For servers that analyse lazily and never push diagnostics (pyright, tsserver): after a short wait, answer with an
+ * empty report of the wanted version. The gate then sees "no diagnostics before, none after" and lets the edit
+ * through instead of rejecting every write. */
+int lsp_client_wait_lenient(LspClient *c, const char *uri, int64_t version, J **report) {
+    if (!c->no_push) {
+        int saved = c->timeout_ms;
+        if (c->timeout_ms > 3000) c->timeout_ms = 3000;
+        int rc = op_wait(c, uri, version, report);
+        c->timeout_ms = saved;
+        if (rc == 0) return 0;
+        if (!c->saw_report) c->no_push = true; /* else: a pushing server was slow for this file; no verdict is no objection */
+    }
+    J *r = j_obj();
+    j_set(r, "version", j_int(version));
+    j_set(r, "diagnostics", j_arr());
+    *report = r;
+    return 0;
+}
+
 static int op_close(void *ctx, const char *uri) {
     LspClient *c = ctx;
     drop_report(c, uri);

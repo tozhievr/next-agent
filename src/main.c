@@ -76,6 +76,13 @@ static void brief_symbol(const J *s, const char *path) {
 
 /* Compact rendering of the common results; false = fall back to JSON. */
 static bool print_brief(const char *method, const J *res) {
+    if (res->k == J_ARR && strcmp(method, "history") == 0) { /* revision log: one line per revision */
+        for (size_t i = 0; i < res->n; i++) {
+            const J *o = res->items[i], *par = j_get(o, "parent");
+            printf("%lld <- %lld %s\n", (long long)j_get(o, "rev")->i, j_is_int(par) ? (long long)par->i : 0LL, j_get(o, "label")->s);
+        }
+        return true;
+    }
     const J *syms = j_get(res, "symbols"), *refs = j_get(res, "references"), *paths = j_get(res, "paths");
     if (syms && syms->k == J_ARR) {
         for (size_t i = 0; i < syms->n; i++) {
@@ -548,12 +555,12 @@ int main(int argc, char **argv) {
     rpc.session = "cli";
     int code = 0;
     /* One-shot commands that address symbols or refactor use the language servers of non-C languages (started on
-     * first use). Index-wide commands (find, locate, context, callers, callees) stay on the cheap scanner path: a
-     * server would have to outline every file first. NEXTAGENT_NO_LSP=1 turns this off. */
+     * first use). `locate` and `context` stay on the cheap path (they would outline every file); find, callers and
+     * callees ask the servers for the symbols of their languages. NEXTAGENT_NO_LSP=1 turns this off. */
     LspHub *cli_hub = NULL;
     {
         static const char *const lsp_cmds[] = {"outline", "select",     "view",   "replace-symbol", "insert", "apply",
-                                               "patch",   "replace",    "rename", "references",     "add-param", NULL};
+                                               "patch",   "replace",    "rename", "references",     "add-param", "find", "callers", "callees", NULL};
         bool want = !getenv("NEXTAGENT_NO_LSP");
         bool listed = false;
         for (int k = 0; lsp_cmds[k]; k++)
@@ -1009,6 +1016,7 @@ int main(int argc, char **argv) {
             rpc.hub = hub;
         }
         rpc.session = "jsonrpc";
+        rpc.autoflush = g_autosync;
         if (rpc_serve(&rpc, stdin, stdout, strcmp(cmd, "mcp") == 0) != 0) {
             fprintf(stderr, "nextagent: %s\n", na_errmsg());
             code = 1;

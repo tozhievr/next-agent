@@ -1442,7 +1442,21 @@ static const Method METHODS[] = {
 static int call_method(Rpc *r, const char *method, const J *params, J **out) {
     *out = NULL;
     for (size_t i = 0; i < sizeof METHODS / sizeof METHODS[0]; i++)
-        if (strcmp(METHODS[i].name, method) == 0) return METHODS[i].fn(r, params, out);
+        if (strcmp(METHODS[i].name, method) == 0) {
+            int rc = METHODS[i].fn(r, params, out);
+            /* long-lived servers put every committed revision on disk at once (the CLI does it itself, with merge) */
+            const J *paths = rc == 0 && r->autoflush && *out ? j_get(*out, "paths") : NULL;
+            if (paths && paths->k == J_ARR && paths->n && strcmp(method, "sync") != 0) {
+                const char *names[64];
+                size_t n = paths->n < 64 ? paths->n : 64;
+                for (size_t k = 0; k < n; k++) names[k] = paths->items[k]->s;
+                if (store_flush(r->store, names, n, NULL) != 0) {
+                    j_set(*out, "written", j_bool(false));
+                    j_set(*out, "flush_error", j_str(na_errmsg()));
+                }
+            }
+            return rc;
+        }
     return -2;
 }
 

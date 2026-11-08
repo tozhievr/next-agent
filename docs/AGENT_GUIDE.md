@@ -4,7 +4,7 @@ This document tells an AI model (or an agent harness) how to use NextAgent corre
 
 ## 1. What it is, in one paragraph
 
-NextAgent is a transactional editor that sits between you and the files of one workspace (`--root`). You read documents, make edits addressed by **Unicode codepoint offsets** or by **C symbol name**, and each edit becomes an atomic, numbered **revision**. Revisions live in a journal (`.aed/journal.aedj`), *not* in your files. Your files on disk change only when you call **`sync`**. Because of this you can edit, check, undo and redo freely, and nothing is half-applied.
+NextAgent is a transactional editor that sits between you and the files of one workspace (`--root`). You read documents, make edits addressed by **Unicode codepoint offsets** or by **C symbol name**, and each edit becomes an atomic, numbered **revision**. Revisions live in a journal (`.aed/journal.aedj`), *not* in your files. Since 0.43 `serve`/`mcp` write each revision to disk at once (the reply says `"written": false` plus `flush_error` if that failed); start them with `--no-sync` for the older behaviour where your files change only when you call **`sync`**. Because of this you can edit, check, undo and redo freely, and nothing is half-applied.
 
 ## 2. Mental model (read this first)
 
