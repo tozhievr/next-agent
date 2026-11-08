@@ -2,7 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.35.0 - 2026-11-09
+
+### Added
+- Call graph: `callers NAME [--depth N]` (who calls it, transitively; call-site lines; uses the language server, tokens for C) and `callees NAME [--depth N]` (what a function body calls, matched to the function symbols of the workspace index; names shared by several functions are flagged `ambiguous`). Also RPC/MCP `callers` / `callees`; the definition itself is never listed as a caller.
+
 ## 0.34.0 - 2026-11-09
+
 
 ### Added
 - `context QUERY [--budget TOKENS]` (RPC/MCP `context`): a ready-to-read context pack for a question. The best chunks of `hybrid_search` as code with `## path:lines symbol` headers, overlapping blocks dropped, cut at a line to fit the token budget (default 4000, about 4 bytes per token). One call instead of search + several views.

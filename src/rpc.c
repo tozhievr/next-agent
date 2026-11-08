@@ -3,6 +3,7 @@
 #include "c23.h"
 #include "platform.h"
 #include "refactor.h"
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -612,6 +613,320 @@ static int m_references(Rpc *r, const J *p, J **out) {
     return rc;
 }
 
+/* ---- call graph: callers through references (language server, or tokens for C), callees through the
+ * identifiers of a function body matched against the workspace's function symbols ---- */
+static bool callable_kind(const char *k) {
+    return strcmp(k, "function") == 0 || strcmp(k, "method") == 0 || strcmp(k, "constructor") == 0 || strcmp(k, "procedure") == 0;
+}
+
+static size_t cg_file_index(const WsIndex *ix, const char *path) {
+    for (size_t i = 0; i < wsi_nfiles(ix); i++)
+        if (strcmp(wsi_path(ix, i), path) == 0) return i;
+    return (size_t)-1;
+}
+
+/* innermost callable symbol of file fi that contains codepoint offset pos */
+static const Symbol *cg_enclosing(const WsIndex *ix, size_t fi, size_t pos) {
+    const SymbolList *l = wsi_symbols(ix, fi);
+    const Symbol *best = NULL;
+    for (size_t k = 0; k < l->n; k++) {
+        const Symbol *y = &l->v[k];
+        if (!callable_kind(y->kind) || pos < y->start || pos >= y->end) continue;
+        if (!best || y->end - y->start < best->end - best->start) best = y;
+    }
+    return best;
+}
+
+static size_t cg_cp_to_byte(const char *t, size_t len, size_t cp) {
+    size_t b = 0;
+    while (cp > 0 && b < len) {
+        b += utf8_seq_len((unsigned char)t[b]);
+        cp--;
+    }
+    return b < len ? b : len;
+}
+
+/* codepoint offset of the declared name inside symbol y (its first whole-word occurrence), or (size_t)-1 */
+static size_t cg_name_token(Rpc *r, const char *rel, const Symbol *y) {
+    if (y->sel != (size_t)-1) return y->sel;
+    char *text = NULL;
+    size_t len, found = (size_t)-1, nl = strlen(y->name);
+    if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+        free(text);
+        return found;
+    }
+    size_t a = cg_cp_to_byte(text, len, y->start), e = cg_cp_to_byte(text, len, y->end);
+    for (size_t i = a; i + nl <= e; i++) {
+        bool left = i == a || !(isalnum((unsigned char)text[i - 1]) || text[i - 1] == '_');
+        bool right = i + nl == len || !(isalnum((unsigned char)text[i + nl]) || text[i + nl] == '_');
+        if (left && right && memcmp(text + i, y->name, nl) == 0) {
+            found = utf8_cp_count(text, i);
+            break;
+        }
+    }
+    free(text);
+    return found;
+}
+
+static bool cg_seen(const J *nodes, const char *path, const char *name, int64_t line) {
+    for (size_t i = 0; i < nodes->n; i++) {
+        const J *n = nodes->items[i];
+        if (j_get(n, "line")->i == line && strcmp(j_get(n, "path")->s, path) == 0 && strcmp(j_get(n, "name")->s, name) == 0) return true;
+    }
+    return false;
+}
+
+static J *cg_node(const char *path, const Symbol *y, int depth, const char *via) {
+    J *o = j_obj();
+    j_set(o, "name", j_str(y->name));
+    j_set(o, "kind", j_str(y->kind));
+    j_set(o, "path", j_str(path));
+    j_set(o, "line", j_int((int64_t)y->line));
+    j_set(o, "depth", j_int(depth));
+    if (via) j_set(o, "via", j_str(via));
+    return o;
+}
+
+static int m_callers(Rpc *r, const J *p, J **out) {
+    const char *name, *kind, *scope, *path;
+    int64_t depth, limit;
+    if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
+        opt_int(p, "depth", 1, &depth) || opt_int(p, "limit", 100, &limit))
+        return -1;
+    if (depth < 1 || depth > 5 || limit < 1 || limit > 1000) return na_fail("invalid parameter: depth 1..5, limit 1..1000");
+    Sem s = sem_of(r);
+    if (wsi_refresh(s.ix) != 0) return -1;
+    J *nodes = j_arr();
+    /* frontier of (name, path) pairs to ask references for */
+    typedef struct {
+        char *name, *path, *scope, *kind;
+    } Target;
+    Target *cur = na_alloc(sizeof *cur), *next = NULL;
+    size_t ncur = 1, nnext = 0, cnext = 0;
+    cur[0] = (Target){na_strdup(name), path ? na_strdup(path) : NULL, scope ? na_strdup(scope) : NULL, kind ? na_strdup(kind) : NULL};
+    bool truncated = false;
+    int rc = 0;
+    for (int d = 1; d <= depth && ncur > 0 && rc == 0; d++) {
+        for (size_t t = 0; t < ncur && rc == 0; t++) {
+            J *rp = j_obj();
+            j_set(rp, "name", j_str(cur[t].name));
+            if (cur[t].path) j_set(rp, "path", j_str(cur[t].path));
+            if (cur[t].scope) j_set(rp, "scope", j_str(cur[t].scope));
+            if (cur[t].kind) j_set(rp, "kind", j_str(cur[t].kind));
+            J *refs = NULL;
+            int rr = m_references(r, rp, &refs);
+            json_free(rp);
+            if (rr != 0) {
+                if (d == 1) rc = -1; /* the requested symbol itself must resolve */
+                continue;            /* deeper levels: skip callers we cannot resolve */
+            }
+            const J *arr = j_get(refs, "references");
+            for (size_t i = 0; arr && i < arr->n; i++) {
+                const J *ref = arr->items[i], *def = j_get(ref, "definition"), *call = j_get(ref, "call");
+                if ((def && def->b) || (call && !call->b)) continue;
+                const char *rel = j_get(ref, "path")->s;
+                size_t fi = cg_file_index(s.ix, rel);
+                if (fi == (size_t)-1) continue;
+                const Symbol *y = cg_enclosing(s.ix, fi, (size_t)j_get(ref, "start")->i);
+                if (!y || (strcmp(y->name, cur[t].name) == 0 && cg_name_token(r, rel, y) == (size_t)j_get(ref, "start")->i)) continue; /* the definition itself */
+                int64_t line = (int64_t)y->line;
+                if (cg_seen(nodes, rel, y->name, line)) continue;
+                if (nodes->n >= (size_t)limit) {
+                    truncated = true;
+                    break;
+                }
+                J *n = cg_node(rel, y, d, cur[t].name);
+                J *sites = j_arr();
+                for (size_t k = 0; k < arr->n; k++) { /* every call site inside this caller */
+                    const J *o = arr->items[k];
+                    if (strcmp(j_get(o, "path")->s, rel) != 0) continue;
+                    size_t st = (size_t)j_get(o, "start")->i;
+                    if (st >= y->start && st < y->end && !(j_get(o, "definition") && j_get(o, "definition")->b))
+                        j_push(sites, j_int(j_get(o, "line")->i));
+                }
+                j_set(n, "sites", sites);
+                j_push(nodes, n);
+                if (d < depth) {
+                    if (nnext == cnext) {
+                        cnext = cnext ? cnext * 2 : 16;
+                        next = na_realloc(next, cnext * sizeof *next);
+                    }
+                    next[nnext++] = (Target){na_strdup(y->name), na_strdup(rel), y->scope && y->scope[0] ? na_strdup(y->scope) : NULL, NULL};
+                }
+            }
+            json_free(refs);
+        }
+        for (size_t t = 0; t < ncur; t++) {
+            free(cur[t].name);
+            free(cur[t].path);
+            free(cur[t].scope);
+            free(cur[t].kind);
+        }
+        free(cur);
+        cur = next;
+        ncur = nnext;
+        next = NULL;
+        nnext = cnext = 0;
+    }
+    for (size_t t = 0; t < ncur; t++) {
+        free(cur[t].name);
+        free(cur[t].path);
+        free(cur[t].scope);
+        free(cur[t].kind);
+    }
+    free(cur);
+    if (rc != 0) {
+        json_free(nodes);
+        return -1;
+    }
+    J *o = j_obj();
+    j_set(o, "of", j_str(name));
+    j_set(o, "count", j_int((int64_t)nodes->n));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "nodes", nodes);
+    *out = o;
+    return 0;
+}
+
+typedef struct {
+    const char *name;
+    uint32_t file, sym;
+} CgFn;
+
+static int cmp_cgfn(const void *a, const void *b) {
+    const CgFn *x = a, *y = b;
+    int c = strcmp(x->name, y->name);
+    if (c) return c;
+    return x->file != y->file ? (x->file < y->file ? -1 : 1) : (x->sym < y->sym ? -1 : x->sym > y->sym);
+}
+
+static int m_callees(Rpc *r, const J *p, J **out) {
+    const char *name, *kind, *scope, *path;
+    int64_t depth, limit;
+    if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
+        opt_int(p, "depth", 1, &depth) || opt_int(p, "limit", 100, &limit))
+        return -1;
+    if (depth < 1 || depth > 5 || limit < 1 || limit > 1000) return na_fail("invalid parameter: depth 1..5, limit 1..1000");
+    Sem s = sem_of(r);
+    if (wsi_refresh(s.ix) != 0) return -1;
+    size_t nf = wsi_nfiles(s.ix), nfn = 0, cfn = 0;
+    CgFn *fns = NULL;
+    for (size_t f = 0; f < nf; f++) {
+        const SymbolList *l = wsi_symbols(s.ix, f);
+        for (size_t k = 0; k < l->n; k++) {
+            if (!callable_kind(l->v[k].kind)) continue;
+            if (nfn == cfn) {
+                cfn = cfn ? cfn * 2 : 256;
+                fns = na_realloc(fns, cfn * sizeof *fns);
+            }
+            fns[nfn++] = (CgFn){l->v[k].name, (uint32_t)f, (uint32_t)k};
+        }
+    }
+    qsort(fns, nfn, sizeof *fns, cmp_cgfn);
+    /* the root: exactly one function of that name (narrowed by path / kind / scope) */
+    CgFn root = {0};
+    size_t matches = 0;
+    for (size_t i = 0; i < nfn; i++) {
+        const Symbol *y = &wsi_symbols(s.ix, fns[i].file)->v[fns[i].sym];
+        if (strcmp(y->name, name) != 0) continue;
+        if (path && strcmp(wsi_path(s.ix, fns[i].file), path) != 0) continue;
+        if (kind && strcmp(kind, y->kind) != 0) continue;
+        if (scope && strcmp(scope, y->scope ? y->scope : "") != 0) continue;
+        root = fns[i];
+        matches++;
+    }
+    if (matches != 1) {
+        free(fns);
+        if (matches == 0) return na_fail("symbol_not_found: no function named %s in the index", name);
+        return na_fail("ambiguous_symbol: %zu functions named %s (narrow with path, kind or scope)", matches, name);
+    }
+    J *nodes = j_arr();
+    CgFn *cur = na_alloc(sizeof *cur), *next = NULL;
+    size_t ncur = 1, nnext = 0, cnext = 0;
+    cur[0] = root;
+    bool truncated = false;
+    for (int d = 1; d <= depth && ncur > 0; d++) {
+        for (size_t t = 0; t < ncur; t++) {
+            const char *rel = wsi_path(s.ix, cur[t].file);
+            const Symbol *self = &wsi_symbols(s.ix, cur[t].file)->v[cur[t].sym];
+            char *text = NULL;
+            size_t len;
+            if (store_snapshot_text(r->store, rel, &text, &len) != 0) {
+                free(text);
+                continue;
+            }
+            size_t a = cg_cp_to_byte(text, len, self->start), e = cg_cp_to_byte(text, len, self->end);
+            for (size_t i = a; i < e;) {
+                unsigned char c = (unsigned char)text[i];
+                if (c == '/' && i + 1 < e && text[i + 1] == '/') {
+                    while (i < e && text[i] != '\n') i++;
+                } else if (c == '/' && i + 1 < e && text[i + 1] == '*') {
+                    i += 2;
+                    while (i + 1 < e && !(text[i] == '*' && text[i + 1] == '/')) i++;
+                    i += 2;
+                } else if (c == '"' || c == '\'') {
+                    i++;
+                    while (i < e && text[i] != (char)c && text[i] != '\n') i += text[i] == '\\' ? 2 : 1;
+                    i++;
+                } else if (isalpha(c) || c == '_' || c >= 0x80) {
+                    size_t b = i;
+                    while (i < e && (isalnum((unsigned char)text[i]) || text[i] == '_' || (unsigned char)text[i] >= 0x80)) i++;
+                    char word[128];
+                    size_t wl = i - b < sizeof word - 1 ? i - b : sizeof word - 1;
+                    memcpy(word, text + b, wl);
+                    word[wl] = 0;
+                    CgFn key = {word, 0, 0};
+                    size_t lo = 0, hi = nfn;
+                    while (lo < hi) {
+                        size_t mid = (lo + hi) / 2;
+                        if (strcmp(fns[mid].name, key.name) < 0) lo = mid + 1;
+                        else hi = mid;
+                    }
+                    size_t same = 0;
+                    for (size_t k = lo; k < nfn && strcmp(fns[k].name, word) == 0; k++) same++;
+                    for (size_t k = lo; k < nfn && strcmp(fns[k].name, word) == 0; k++) {
+                        const Symbol *y = &wsi_symbols(s.ix, fns[k].file)->v[fns[k].sym];
+                        const char *drel = wsi_path(s.ix, fns[k].file);
+                        if (fns[k].file == cur[t].file && fns[k].sym == cur[t].sym) continue; /* recursion is not an edge */
+                        if (cg_seen(nodes, drel, y->name, (int64_t)y->line)) continue;
+                        if (nodes->n >= (size_t)limit) {
+                            truncated = true;
+                            break;
+                        }
+                        J *n = cg_node(drel, y, d, self->name);
+                        if (same > 1) j_set(n, "ambiguous", j_bool(true)); /* several functions share this name */
+                        j_push(nodes, n);
+                        if (d < depth) {
+                            if (nnext == cnext) {
+                                cnext = cnext ? cnext * 2 : 16;
+                                next = na_realloc(next, cnext * sizeof *next);
+                            }
+                            next[nnext++] = fns[k];
+                        }
+                    }
+                } else {
+                    i++;
+                }
+            }
+            free(text);
+        }
+        free(cur);
+        cur = next;
+        ncur = nnext;
+        next = NULL;
+        nnext = cnext = 0;
+    }
+    free(cur);
+    free(fns);
+    J *o = j_obj();
+    j_set(o, "of", j_str(name));
+    j_set(o, "count", j_int((int64_t)nodes->n));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "nodes", nodes);
+    *out = o;
+    return 0;
+}
+
 static int m_rename(Rpc *r, const J *p, J **out) {
     const char *name, *new_name, *label, *kind, *scope, *path;
     bool members, allow;
@@ -906,7 +1221,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"callers", m_callers}, {"callees", m_callees}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -998,6 +1313,10 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"},\"embed_budget\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     j_push(arr, tool_def("context", "Context pack for a question: the most relevant functions/chunks as ready-to-read code, ranked by hybrid_search and cut to a token budget (default 4000). Use this first instead of several searches and views.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"budget\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("callers", "Who calls a function (transitively with depth): enclosing functions of its references, with call-site lines. Uses the language server when available, tokens for C otherwise.",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("callees", "What a function calls (transitively with depth): identifiers of its body matched to function symbols of the workspace index. Syntactic; names shared by several functions are flagged ambiguous.",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
     j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
                          "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",

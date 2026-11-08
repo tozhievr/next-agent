@@ -185,6 +185,7 @@ Run the build. If it fails and you want to back out: `{"method":"history","param
 nextagent --brief search QUERY [--word] [-i] [--context N] [--path SUBSTR]   # grep: path:line: text
 nextagent context "how are edits flushed" --budget 3000      # START HERE: best code for a question, within a token budget
 nextagent --brief locate "how are edits flushed" [--limit N]   # ranked: best functions for a question
+nextagent --brief callers NAME [--depth 2]               # who calls it (call-site lines); callees NAME = what it calls
 nextagent --brief find QUERY [--kind K]                  # symbols by name, all indexed languages
 nextagent --brief outline PATH [--nested]                # line kind scope::name
 nextagent view PATH --symbol NAME [--raw]                # only that symbol's text

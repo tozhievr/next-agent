@@ -1017,7 +1017,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 18);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 20);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1663,6 +1663,39 @@ static void test_embed(void) {
     free(ws);
 }
 
+static void test_callgraph(void) {
+    g_test = "callgraph";
+    char *ws = new_ws();
+    put_file(ws, "g.c", "int leaf(int x) { return x + 1; }\nint mid(int x) { return leaf(x) * 2; }\nint top(int x) { return mid(x) + leaf(x); }\nint other(void) { return 0; }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"callers\",\"params\":{\"name\":\"leaf\",\"depth\":2}}");
+    const J *res = a ? j_get(a, "result") : NULL, *n = res ? j_get(res, "nodes") : NULL;
+    CHECK(n && n->n == 2); /* mid and top, each once (top reaches leaf directly and through mid) */
+    bool has_mid = false, has_top = false, has_leaf = false;
+    for (size_t i = 0; n && i < n->n; i++) {
+        const char *nm = j_get(n->items[i], "name")->s;
+        has_mid |= strcmp(nm, "mid") == 0 && j_get(n->items[i], "depth")->i == 1;
+        has_top |= strcmp(nm, "top") == 0;
+        has_leaf |= strcmp(nm, "leaf") == 0; /* the definition is not a caller */
+    }
+    CHECK(has_mid && has_top && !has_leaf);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"callees\",\"params\":{\"name\":\"top\",\"depth\":2}}");
+    res = a ? j_get(a, "result") : NULL;
+    n = res ? j_get(res, "nodes") : NULL;
+    CHECK(n && n->n == 2); /* mid and leaf; leaf reached directly AND through mid but listed once */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"callees\",\"params\":{\"name\":\"nothing_here\"}}");
+    CHECK(strstr(err_of(a), "symbol_not_found") != NULL);
+    json_free(a);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
 
 
@@ -1767,6 +1800,7 @@ int main(int argc, char **argv) {
     RUN(test_live_semantic);
     RUN(test_hybrid);
     RUN(test_embed);
+    RUN(test_callgraph);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

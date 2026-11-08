@@ -23,6 +23,8 @@ static void usage(void) {
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
           "  search QUERY [--word] [-i] [--context N] [--path SUBSTR] [--limit N]\n"
+          "  callers NAME [--depth N] [--path P] [--kind K] [--scope S]   who calls it (transitive with depth)\n"
+          "  callees NAME [--depth N] [--path P]    what it calls (syntactic, from the workspace index)\n"
           "  context QUERY [--budget TOKENS] [--path SUBSTR]   best code for a question, cut to a token budget\n"
           "  locate QUERY [--path SUBSTR] [--limit N] [--embed N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
@@ -51,6 +53,18 @@ static bool print_brief(const char *method, const J *res) {
             const J *p = j_get(syms->items[i], "path");
             brief_symbol(syms->items[i], j_is_str(p) ? p->s : NULL);
         }
+        return true;
+    }
+    const J *nodes = j_get(res, "nodes");
+    if (nodes && nodes->k == J_ARR) { /* call graph: indent by depth */
+        for (size_t i = 0; i < nodes->n; i++) {
+            const J *n = nodes->items[i], *sites = j_get(n, "sites"), *amb = j_get(n, "ambiguous");
+            printf("%*s%s %s:%lld", (int)(j_get(n, "depth")->i - 1) * 2, "", j_get(n, "name")->s, j_get(n, "path")->s, (long long)j_get(n, "line")->i);
+            for (size_t k = 0; sites && k < sites->n; k++) printf("%s%lld", k ? "," : " @", (long long)sites->items[k]->i);
+            if (amb && amb->b) printf(" (ambiguous)");
+            printf("\n");
+        }
+        if (j_get(res, "truncated")->b) printf("-- truncated\n");
         return true;
     }
     const J *blocks = j_get(res, "blocks");
@@ -448,6 +462,23 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "search", p);
+    } else if (strcmp(cmd, "callers") == 0 || strcmp(cmd, "callees") == 0) {
+        if (nargs < 1) goto bad;
+        J *p = j_obj();
+        j_set(p, "name", j_str(args[0]));
+        for (int k = 1; k < nargs; k++) {
+            int64_t n;
+            if (k + 1 < nargs && strcmp(args[k], "--path") == 0) j_set(p, "path", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(args[k], "--kind") == 0) j_set(p, "kind", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(args[k], "--scope") == 0) j_set(p, "scope", j_str(args[++k]));
+            else if (k + 1 < nargs && strcmp(args[k], "--depth") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "depth", j_int(n)), k++;
+            else if (k + 1 < nargs && strcmp(args[k], "--limit") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "limit", j_int(n)), k++;
+            else {
+                json_free(p);
+                goto bad;
+            }
+        }
+        code = run_method(&rpc, cmd, p);
     } else if (strcmp(cmd, "context") == 0) {
         if (nargs < 1) goto bad;
         J *p = j_obj();
