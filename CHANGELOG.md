@@ -2,6 +2,11 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.38.0 - 2026-11-09
+
+### Added
+- Cheap change detection for the workspace index: a file whose size and modification time are unchanged (and older than a 2 s racy window) is not read or hashed again, so a long-running `serve`/`mcp` notices outside edits on its next query at the price of one `stat` per file instead of reading the whole tree. New platform calls `pf_stat` / `pf_unix_ms`; the entry lookup is a binary search instead of a linear scan.
+
 ## 0.37.0 - 2026-11-09
 
 ### Added

@@ -14,7 +14,12 @@ typedef struct {
     uint32_t *ids; /* sorted unique identifier ids */
     size_t nids;
     bool seen;
+    PfStat sig;      /* size + mtime when the content was last read from disk */
+    int64_t sig_at;  /* wall clock of that read; the signature is trusted only when the file was already older than 2 s */
+    bool has_sig;
 } Entry;
+
+static int cmp_key(const void *k, const void *e) { return strcmp((const char *)k, ((const Entry *)e)->path); }
 
 typedef struct {
     char **names;
@@ -28,7 +33,7 @@ struct WsIndex {
     Entry *v;
     size_t n, cap;
     Interner in;
-    size_t extracted;
+    size_t extracted, skipped;
     void *user;
     void (*user_free)(void *);
 };
@@ -224,6 +229,7 @@ static int cmp_entry(const void *a, const void *b) { return strcmp(((const Entry
 
 int wsi_refresh(WsIndex *ix) {
     ix->extracted = 0;
+    ix->skipped = 0;
     StrList files;
     sl_init(&files);
     if (walk(ix, store_root(ix->st), "", &files) != 0) {
@@ -235,19 +241,32 @@ int wsi_refresh(WsIndex *ix) {
     if (store_snapshot_paths(ix->st, &virt) == 0)
         for (size_t i = 0; i < virt.n; i++)
             if (indexable(ix, virt.v[i]) && !sl_has(&files, virt.v[i])) sl_push(&files, virt.v[i]);
-    sl_free(&virt);
     sl_sort(&files);
+    size_t sorted = ix->n; /* entries from earlier refreshes are sorted by path */
+    int64_t now = pf_unix_ms();
     for (size_t i = 0; i < ix->n; i++) ix->v[i].seen = false;
     for (size_t f = 0; f < files.n; f++) {
         char *text;
         size_t len;
-        if (store_snapshot_text(ix->st, files.v[f], &text, &len) != 0) continue; /* vanished: dropped below */
-        Entry *e = NULL;
-        for (size_t i = 0; i < ix->n; i++)
-            if (strcmp(ix->v[i].path, files.v[f]) == 0) {
-                e = &ix->v[i];
-                break;
+        Entry *e = bsearch(files.v[f], ix->v, sorted, sizeof *ix->v, cmp_key);
+        /* unchanged files are recognised by size + mtime without being read (no watcher thread needed:
+         * the check is a stat per file, so a long-running server sees outside edits on its next query) */
+        PfStat sig;
+        bool have = false;
+        if (!sl_has(&virt, files.v[f])) {
+            Buf full;
+            buf_init(&full);
+            buf_printf(&full, "%s/%s", store_root(ix->st), files.v[f]);
+            have = pf_stat(full.p, &sig);
+            buf_free(&full);
+            if (have && e && e->has_sig && sig.size == e->sig.size && sig.mtime_ms == e->sig.mtime_ms &&
+                e->sig_at - sig.mtime_ms > 2000) {
+                e->seen = true;
+                ix->skipped++;
+                continue;
             }
+        }
+        if (store_snapshot_text(ix->st, files.v[f], &text, &len) != 0) continue; /* vanished: dropped below */
         if (!e) {
             if (ix->n == ix->cap) {
                 ix->cap = ix->cap ? ix->cap * 2 : 64;
@@ -259,6 +278,11 @@ int wsi_refresh(WsIndex *ix) {
             e->len = (size_t)-1;
         }
         e->seen = true;
+        e->has_sig = have;
+        if (have) {
+            e->sig = sig;
+            e->sig_at = now;
+        }
         uint64_t h = fnv(text, len);
         if (h != e->hash || len != e->len) {
             if (utf8_valid(text, len)) {
@@ -271,6 +295,7 @@ int wsi_refresh(WsIndex *ix) {
         free(text);
     }
     sl_free(&files);
+    sl_free(&virt);
     size_t k = 0;
     for (size_t i = 0; i < ix->n; i++) {
         if (ix->v[i].seen) ix->v[k++] = ix->v[i];
@@ -282,6 +307,7 @@ int wsi_refresh(WsIndex *ix) {
 }
 
 size_t wsi_extracted(const WsIndex *ix) { return ix->extracted; }
+size_t wsi_skipped(const WsIndex *ix) { return ix->skipped; }
 uint64_t wsi_hash(const WsIndex *ix, size_t i) { return ix->v[i].hash; }
 void *wsi_user(const WsIndex *ix) { return ix->user; }
 void wsi_set_user(WsIndex *ix, void *p, void (*free_fn)(void *)) {

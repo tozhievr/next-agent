@@ -583,3 +583,30 @@ void pf_sock_close(PfSock *k) {
     closesocket(k->s);
     free(k);
 }
+
+/* ---- cheap change detection ---- */
+typedef struct {
+    DWORD dwFileAttributes;
+    DWORD ftCreationTime[2], ftLastAccessTime[2], ftLastWriteTime[2];
+    DWORD nFileSizeHigh, nFileSizeLow;
+} WIN32_FILE_ATTRIBUTE_DATA_;
+BOOL GetFileAttributesExW(const WCHAR *name, int level, void *data);
+void GetSystemTimeAsFileTime(DWORD *ft);
+
+bool pf_stat(const char *path, PfStat *out) {
+    WCHAR *w = to_wide(path);
+    WIN32_FILE_ATTRIBUTE_DATA_ d;
+    BOOL ok = GetFileAttributesExW(w, 0, &d);
+    free(w);
+    if (!ok || (d.dwFileAttributes & ATTR_DIRECTORY)) return false;
+    out->size = ((uint64_t)d.nFileSizeHigh << 32) | d.nFileSizeLow;
+    uint64_t ft = ((uint64_t)d.ftLastWriteTime[1] << 32) | d.ftLastWriteTime[0];
+    out->mtime_ms = (int64_t)(ft / 10000) - 11644473600000ll;
+    return true;
+}
+
+int64_t pf_unix_ms(void) {
+    DWORD ft[2];
+    GetSystemTimeAsFileTime(ft);
+    return (int64_t)((((uint64_t)ft[1] << 32) | ft[0]) / 10000) - 11644473600000ll;
+}

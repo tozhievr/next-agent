@@ -1815,6 +1815,23 @@ static void test_patch_ops(void) {
     free(ws);
 }
 
+static void test_index_stat_shortcut(void) {
+    g_test = "index_stat";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "int a(void) { return 1; }\n");
+    put_file(ws, "b.c", "int b(void) { return 2; }\n");
+    Store *st = store_open(ws);
+    WsIndex *ix = wsi_new(st, NULL);
+    pf_sleep_ms(2300); /* the files must be older than the 2 s "racy" window to be trusted by size + mtime */
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 2 && wsi_skipped(ix) == 0);
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 0 && wsi_skipped(ix) == 2); /* nothing was read */
+    put_file(ws, "b.c", "int b(void) { return 22; }\n"); /* an outside edit: size and mtime change */
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 1 && wsi_skipped(ix) == 1);
+    wsi_free(ix);
+    store_close(st);
+    free(ws);
+}
+
 static void test_agent_tools(void) {
 
 
@@ -1922,6 +1939,7 @@ int main(int argc, char **argv) {
     RUN(test_callgraph);
     RUN(test_merge);
     RUN(test_patch_ops);
+    RUN(test_index_stat_shortcut);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

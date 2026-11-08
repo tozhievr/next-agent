@@ -529,3 +529,25 @@ void pf_sock_close(PfSock *k) {
     sc1(SYS_close, k->fd);
     free(k);
 }
+
+/* ---- cheap change detection ---- */
+bool pf_stat(const char *path, PfStat *out) {
+    unsigned char st[144];
+    if (bad(sc4(SYS_newfstatat, AT_FDCWD, path, st, 0))) return false;
+    unsigned mode;
+    long size, sec, nsec;
+    memcpy(&mode, st + 24, 4);
+    memcpy(&size, st + 48, 8);
+    memcpy(&sec, st + 88, 8);
+    memcpy(&nsec, st + 96, 8);
+    if ((mode & 0170000) != 0100000) return false;
+    out->size = (uint64_t)size;
+    out->mtime_ms = (int64_t)sec * 1000 + nsec / 1000000;
+    return true;
+}
+
+int64_t pf_unix_ms(void) {
+    long ts[2];
+    sc2(SYS_clock_gettime, 0 /* REALTIME */, ts);
+    return (int64_t)ts[0] * 1000 + ts[1] / 1000000;
+}

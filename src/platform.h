@@ -23,6 +23,14 @@ typedef struct PfLock PfLock;
 PfLock *pf_lock_acquire(const char *path, int timeout_ms);
 void pf_lock_release(PfLock *lock);
 
+/* Size and modification time (ms since the Unix epoch) of a regular file; false when it is not one. */
+typedef struct {
+    uint64_t size;
+    int64_t mtime_ms;
+} PfStat;
+bool pf_stat(const char *path, PfStat *out);
+int64_t pf_unix_ms(void); /* wall clock, comparable with PfStat.mtime_ms */
+
 /* Time. */
 uint64_t pf_now_ms(void);
 void pf_sleep_ms(unsigned ms);
