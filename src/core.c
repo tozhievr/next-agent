@@ -212,3 +212,37 @@ int cs_stats(const ChangeSet *cs, const Snapshot *s, size_t *added, size_t *remo
     }
     return 0;
 }
+
+/* Applies `cs` to raw text without building a Snapshot (journal replay). */
+int cs_apply_text(const ChangeSet *cs, const char *text, size_t len, char **out, size_t *outlen) {
+    Buf b;
+    buf_init(&b);
+    size_t cur_b = 0, cur_cp = 0;
+    for (size_t i = 0; i < cs->n; i++) {
+        const Edit *e = &cs->v[i];
+        size_t sb = cur_b, sc = cur_cp;
+        while (sc < e->start && sb < len) {
+            size_t l = utf8_seq_len((unsigned char)text[sb]);
+            sb += l ? l : 1;
+            sc++;
+        }
+        size_t eb = sb, ec = sc;
+        while (ec < e->end && eb < len) {
+            size_t l = utf8_seq_len((unsigned char)text[eb]);
+            eb += l ? l : 1;
+            ec++;
+        }
+        if (sc != e->start || ec != e->end || eb > len) {
+            buf_free(&b);
+            return na_fail("corrupt journal: edit beyond document end");
+        }
+        buf_put(&b, text + cur_b, sb - cur_b);
+        buf_put(&b, e->text, e->tlen);
+        cur_b = eb;
+        cur_cp = ec;
+    }
+    buf_put(&b, text + cur_b, len - cur_b);
+    *outlen = b.len;
+    *out = buf_take(&b);
+    return 0;
+}

@@ -287,6 +287,42 @@ static void test_store(void) {
     free(ws);
 }
 
+static void test_journal_deltas(void) {
+    g_test = "journal_deltas";
+    char *ws = new_ws();
+    Buf big;
+    buf_init(&big);
+    for (int i = 0; i < 2000; i++) buf_printf(&big, "int f%d(void) { return %d; }\n", i, i); /* ~56 KB */
+    put_file(ws, "big.c", big.p);
+    Store *st = store_open(ws);
+    CHECK(st != NULL);
+    for (int i = 0; i < 60; i++) CHECK(edit1(st, "big.c", 4, 5, i % 2 ? "g" : "h", STORE_NO_REV, NULL, NULL) == 0);
+    char *expect = view_text(st, "big.c");
+    store_close(st);
+    char jp[800];
+    snprintf(jp, sizeof jp, "%s/.aed/journal.aedj", ws);
+    Buf jb;
+    buf_init(&jb);
+    CHECK(pf_read_file(jp, &jb) == 0);
+    CHECK(jb.len < 3 * big.len); /* full-text journaling would be ~60x */
+    buf_free(&jb);
+    st = store_open(ws); /* replay deltas */
+    CHECK(st != NULL && store_head(st) == 60);
+    char *again = view_text(st, "big.c");
+    CHECK_STR(again, expect);
+    EditResult res;
+    CHECK(store_undo(st, 0, NULL, &res) == 0);
+    edit_result_free(&res);
+    char *u = view_text(st, "big.c");
+    CHECK(strncmp(u + 4, "g", 1) == 0 || strncmp(u + 4, "h", 1) == 0);
+    free(u);
+    free(again);
+    free(expect);
+    store_close(st);
+    buf_free(&big);
+    free(ws);
+}
+
 static void test_store_torn_tail_and_conflict(void) {
     g_test = "store-journal";
     char *ws = new_ws();
@@ -947,6 +983,7 @@ int main(void) {
     RUN(test_json);
     RUN(test_core);
     RUN(test_store);
+    RUN(test_journal_deltas);
     RUN(test_store_torn_tail_and_conflict);
     RUN(test_validator);
     RUN(test_c23);

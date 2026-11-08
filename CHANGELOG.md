@@ -2,6 +2,11 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.22.0 — 2026-11-08
+
+### Changed
+- Journal commits no longer store the full document text on every revision: a full text is written only as a checkpoint (first revision of a document, or once accumulated deltas outweigh the text); other revisions carry only forward/inverse edits. A 56 KB file edited 60 times now journals about 1x its size instead of about 60x. Old journals remain readable; journals written by 0.22 are not readable by older versions.
+
 ## 0.21.0 — 2026-11-08
 
 ### Added
