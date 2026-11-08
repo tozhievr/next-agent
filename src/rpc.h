@@ -2,6 +2,8 @@
 #ifndef NA_RPC_H
 #define NA_RPC_H
 #include <stdio.h>
+#include "c23.h"
+#include "lsp.h"
 #include "json.h"
 #include "store.h"
 
@@ -10,7 +12,15 @@ typedef struct {
     Validator validator;
     bool has_validator;
     const char *session; /* "cli" or "jsonrpc" */
+    LspHub *hub; /* optional: language servers for non-C documents (outline, select, replace_symbol) */
+    /* per-document incremental outline caches (long-lived servers re-lex only what changed) */
+    char *cache_paths[32];
+    OutlineCache *caches[32];
+    size_t ncaches, next_evict;
 } Rpc;
+
+/* Releases the outline caches. Call before discarding an Rpc. */
+void rpc_release(Rpc *r);
 
 /* Handle one JSON-RPC request. Returns the reply or NULL (notification). */
 J *rpc_dispatch(Rpc *r, const J *request);

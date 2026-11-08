@@ -31,6 +31,7 @@ typedef struct {
     size_t len;
     bool base_set, base_exists;
     uint8_t base_hash[16];
+    size_t ckpt_bytes; /* delta bytes journaled since the last full-text record */
 } Doc;
 
 struct Store {
@@ -123,6 +124,12 @@ static void rev_push(Store *st, Rev r) {
     st->revs[st->nrevs++] = r;
 }
 
+static size_t delta_bytes(const ChangeSet *cs) {
+    size_t n = 0;
+    for (size_t i = 0; i < cs->n; i++) n += cs->v[i].tlen + 16;
+    return n;
+}
+
 static int apply_record(Store *st, const J *rec) {
     const J *t = j_get(rec, "t");
     if (!j_is_str(t)) return na_fail("corrupt journal: record type");
@@ -161,20 +168,32 @@ static int apply_record(Store *st, const J *rec) {
     for (size_t i = 0; i < docs->n; i++) {
         const J *dj = docs->items[i];
         const J *p = j_get(dj, "path"), *text = j_get(dj, "text");
-        if (!j_is_str(p) || !j_is_str(text)) return na_fail("corrupt journal: commit doc");
+        if (!j_is_str(p) || (text && !j_is_str(text))) return na_fail("corrupt journal: commit doc");
         size_t di = doc_index(st, p->s);
         Doc *d = &st->docs[di];
         const J *base = j_get(dj, "base");
         if (base && base_from_json(base, d) != 0) return -1;
-        free(d->text);
-        d->text = na_strndup(text->s, text->slen);
-        d->len = text->slen;
-        d->has_head = true;
-        d->rev = r.id;
         Delta *dl = &r.d[r.nd++];
         dl->doc = di;
         if (edits_from_json(j_get(dj, "forward"), &dl->forward) != 0) return -1;
         if (edits_from_json(j_get(dj, "inverse"), &dl->inverse) != 0) return -1;
+        if (text) {
+            free(d->text);
+            d->text = na_strndup(text->s, text->slen);
+            d->len = text->slen;
+            d->ckpt_bytes = 0;
+        } else {
+            if (!d->has_head) return na_fail("corrupt journal: delta without a base text for %s", d->path);
+            char *nt;
+            size_t nl;
+            if (cs_apply_text(&dl->forward, d->text, d->len, &nt, &nl) != 0) return -1;
+            free(d->text);
+            d->text = nt;
+            d->len = nl;
+            d->ckpt_bytes += delta_bytes(&dl->forward) + delta_bytes(&dl->inverse);
+        }
+        d->has_head = true;
+        d->rev = r.id;
     }
     rev_push(st, r);
     return 0;
@@ -614,10 +633,13 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
         }
         J *dj = j_obj();
         j_set(dj, "path", j_str(canon[i]));
-        j_set(dj, "text", j_strn(after->text, after->len));
+        Doc *d = doc_find(st, canon[i]);
+        /* Full text only as a checkpoint: a document's first revision, or once the journaled
+         * deltas outweigh the text. Replay stays bounded and writes are amortized O(delta). */
+        if (!d || !d->has_head || d->ckpt_bytes + delta_bytes(&changes[i]) + delta_bytes(&inverse) > d->len)
+            j_set(dj, "text", j_strn(after->text, after->len));
         j_set(dj, "forward", edits_to_json(&changes[i]));
         j_set(dj, "inverse", edits_to_json(&inverse));
-        Doc *d = doc_find(st, canon[i]);
         if (!d || !d->base_set) j_set(dj, "base", base_to_json(ld.disk_exists, ld.disk_hash));
         j_push(docs, dj);
         cs_free(&inverse);

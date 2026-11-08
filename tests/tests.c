@@ -4,6 +4,7 @@
 #include "../src/json.h"
 #include "../src/lsp.h"
 #include "../src/platform.h"
+#include "../src/refactor.h"
 #include "../src/rpc.h"
 #include "../src/store.h"
 #include <stdio.h>
@@ -283,6 +284,137 @@ static void test_store(void) {
     CHECK(store_view(st, ".aed/journal.aedj", &s) != 0);
     CHECK(store_view(st, "C:/Windows/win.ini", &s) != 0);
     store_close(st);
+    free(ws);
+}
+
+static bool same_symbols(const SymbolList *a, const SymbolList *b) {
+    if (a->n != b->n) return false;
+    for (size_t i = 0; i < a->n; i++) {
+        const Symbol *x = &a->v[i], *y = &b->v[i];
+        if (strcmp(x->name, y->name) || strcmp(x->kind, y->kind) || strcmp(x->scope, y->scope) ||
+            x->start != y->start || x->end != y->end || x->line != y->line || x->column != y->column)
+            return false;
+    }
+    return true;
+}
+
+static void test_incremental_outline(void) {
+    g_test = "incremental_outline";
+    Buf b;
+    buf_init(&b);
+    for (int i = 0; i < 400; i++)
+        buf_printf(&b, "struct S%d { int a; int b; };\nstatic int f%d(int x) { return x + %d; }\nint v%d = %d;\n", i, i, i, i, i);
+    char *text = na_strdup(b.p);
+    size_t len = b.len;
+    buf_free(&b);
+    OutlineCache *c = outline_cache_new();
+    Snapshot *s = snap_new(1, text, len);
+    SymbolList inc, full;
+    CHECK(c23_outline_cached(c, s, true, &inc) == 0);
+    size_t first_tokens = outline_cache_last_tokens(c);
+    symbols_free(&inc);
+    snap_free(s);
+    /* a one-character edit in the middle re-lexes a small window, not the file */
+    text[len / 2] = text[len / 2] == 'x' ? 'y' : 'x';
+    s = snap_new(2, text, len);
+    CHECK(c23_outline_cached(c, s, true, &inc) == 0);
+    CHECK(outline_cache_last_tokens(c) * 5 < first_tokens);
+    CHECK(outline_cache_last_reused(c) > 1000);
+    c23_outline(s, true, &full);
+    CHECK(same_symbols(&inc, &full));
+    symbols_free(&inc);
+    symbols_free(&full);
+    snap_free(s);
+
+    /* differential fuzz: random edits, cached result must equal a from-scratch scan */
+    static const char *const frags[] = {";", "{", "}", "(", ")", "/*", "*/", "//", "\n", "\"", "'", "#", "int z;", "struct Q { int q; };",
+                                        " ", "x", "\\n", "\xc3\xa9", "typedef int T;", "int fn(void) { return 1; }\n", "enum E { A, B };"};
+    uint32_t rng = 12345;
+    int mismatches = 0;
+    for (int step = 0; step < 300; step++) {
+        rng = rng * 1664525u + 1013904223u;
+        size_t pos = (rng >> 8) % (len + 1);
+        while (pos < len && ((unsigned char)text[pos] & 0xC0) == 0x80) pos++; /* codepoint boundary */
+        rng = rng * 1664525u + 1013904223u;
+        size_t del = (rng >> 8) % 4;
+        size_t dend = pos;
+        for (size_t k = 0; k < del && dend < len; k++) {
+            dend++;
+            while (dend < len && ((unsigned char)text[dend] & 0xC0) == 0x80) dend++;
+        }
+        rng = rng * 1664525u + 1013904223u;
+        const char *ins = (rng >> 8) % 3 == 0 ? "" : frags[(rng >> 12) % (sizeof frags / sizeof *frags)];
+        size_t il = strlen(ins);
+        char *nt = na_alloc(len - (dend - pos) + il + 1);
+        memcpy(nt, text, pos);
+        memcpy(nt + pos, ins, il);
+        memcpy(nt + pos + il, text + dend, len - dend);
+        len = len - (dend - pos) + il;
+        nt[len] = 0;
+        free(text);
+        text = nt;
+        s = snap_new(3 + step, text, len);
+        c23_outline_cached(c, s, true, &inc);
+        c23_outline(s, true, &full);
+        size_t div = outline_cache_first_divergence(c, s);
+        if (div != (size_t)-1 && !mismatches) printf("  cache diverges from a full scan at item %zu (step %d)\n", div, step);
+        if (div != (size_t)-1) mismatches++;
+        if (!same_symbols(&inc, &full)) {
+            if (!mismatches) {
+                printf("  first incremental mismatch: step %d pos %zu del %zu ins \"%s\" (%zu vs %zu symbols)\n", step,
+                       pos, del, ins, inc.n, full.n);
+                size_t k = 0;
+                while (k < inc.n && k < full.n && inc.v[k].start == full.v[k].start && !strcmp(inc.v[k].name, full.v[k].name)) k++;
+                if (k < inc.n) printf("    inc[%zu] %s %s @%zu-%zu\n", k, inc.v[k].kind, inc.v[k].name, inc.v[k].start, inc.v[k].end);
+                if (k < full.n) printf("    full[%zu] %s %s @%zu-%zu\n", k, full.v[k].kind, full.v[k].name, full.v[k].start, full.v[k].end);
+                printf("    tokens=%zu reused=%zu\n", outline_cache_last_tokens(c), outline_cache_last_reused(c));
+                for (size_t q = pos > 60 ? pos - 60 : 0; q < pos + 160 && q < len; q++) putchar(text[q] == '\n' ? '~' : text[q]);
+                putchar('\n');
+            }
+            mismatches++;
+        }
+        symbols_free(&inc);
+        symbols_free(&full);
+        snap_free(s);
+    }
+    CHECK(mismatches == 0);
+    outline_cache_free(c);
+    free(text);
+}
+
+static void test_journal_deltas(void) {
+    g_test = "journal_deltas";
+    char *ws = new_ws();
+    Buf big;
+    buf_init(&big);
+    for (int i = 0; i < 2000; i++) buf_printf(&big, "int f%d(void) { return %d; }\n", i, i); /* ~56 KB */
+    put_file(ws, "big.c", big.p);
+    Store *st = store_open(ws);
+    CHECK(st != NULL);
+    for (int i = 0; i < 60; i++) CHECK(edit1(st, "big.c", 4, 5, i % 2 ? "g" : "h", STORE_NO_REV, NULL, NULL) == 0);
+    char *expect = view_text(st, "big.c");
+    store_close(st);
+    char jp[800];
+    snprintf(jp, sizeof jp, "%s/.aed/journal.aedj", ws);
+    Buf jb;
+    buf_init(&jb);
+    CHECK(pf_read_file(jp, &jb) == 0);
+    CHECK(jb.len < 3 * big.len); /* full-text journaling would be ~60x */
+    buf_free(&jb);
+    st = store_open(ws); /* replay deltas */
+    CHECK(st != NULL && store_head(st) == 60);
+    char *again = view_text(st, "big.c");
+    CHECK_STR(again, expect);
+    EditResult res;
+    CHECK(store_undo(st, 0, NULL, &res) == 0);
+    edit_result_free(&res);
+    char *u = view_text(st, "big.c");
+    CHECK(strncmp(u + 4, "g", 1) == 0 || strncmp(u + 4, "h", 1) == 0);
+    free(u);
+    free(again);
+    free(expect);
+    store_close(st);
+    buf_free(&big);
     free(ws);
 }
 
@@ -699,6 +831,130 @@ static J *call(Rpc *r, const char *req) {
     return a;
 }
 
+static bool history_undo_ok(Store *st) {
+    EditResult r;
+    if (store_undo(st, 0, NULL, &r) != 0) return false;
+    edit_result_free(&r);
+    char *a = view_text(st, "a.c");
+    bool ok = a && strstr(a, "int calc(int x)") != NULL && strstr(a, "area") == NULL;
+    free(a);
+    return ok;
+}
+
+static void test_refactor(void) {
+    g_test = "refactor";
+    char *ws = new_ws();
+    put_file(ws, "a.h", "#ifndef A_H\n#define A_H\nint calc(int x);\nvoid log_it(const char *fmt, ...);\n#endif\n");
+    put_file(ws, "a.c",
+             "/* calc(1) in a comment, \xc3\xa9\xc3\xa8 */\n#include \"a.h\"\n#include <stdio.h>\n"
+             "int calc(int x) { return x * 2; }\n"
+             "int run(void) {\n  const char *s = \"calc(2)\";\n  int v = calc(calc(3) + 1);\n"
+             "  struct { int calc; } m; m.calc = 4;\n  return v + m.calc + (s != 0);\n}\n"
+             "void log_it(const char *fmt, ...) { (void)fmt; }\n"
+             "int other(void) { log_it(\"x\", 1, 2); return calc(0); }\n");
+    Store *st = store_open(ws);
+    CHECK(st != NULL);
+    J *o = NULL;
+    CHECK(rf_references(st, "calc", NULL, true, &o) == 0);
+    CHECK(o && j_get(o, "count")->i == 8); /* decl, def, 3 calls, field decl, 2 member uses; none in comment/string */
+    json_free(o);
+    CHECK(rf_references(st, "calc", NULL, false, &o) == 0 && j_get(o, "count")->i == 6);
+    json_free(o);
+    CHECK_ERR(rf_references(st, "1bad", NULL, true, &o), "invalid parameter");
+
+    /* rename */
+    EditResult res;
+    RfCounts c;
+    CHECK_ERR(rf_rename(st, "calc", "if", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "non-keyword");
+    CHECK_ERR(rf_rename(st, "calc", "other", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "name_conflict");
+    CHECK_ERR(rf_rename(st, "calc", "area", NULL, true, false, 5, NULL, "t", NULL, &res, &c), "stale_rev");
+    CHECK_ERR(rf_rename(st, "nosuch", "area", NULL, true, false, STORE_NO_REV, NULL, "t", NULL, &res, &c), "symbol_not_found");
+    CHECK(rf_rename(st, "calc", "area", NULL, true, false, 0, "rn", "t", NULL, &res, &c) == 0);
+    CHECK(res.rev == 1 && res.paths.n == 2 && c.sites == 8);
+    edit_result_free(&res);
+    char *a = view_text(st, "a.c");
+    CHECK(strstr(a, "int area(int x)") != NULL);
+    CHECK(strstr(a, "area(area(3) + 1)") != NULL);
+    CHECK(strstr(a, "/* calc(1) in a comment") != NULL); /* comment untouched */
+    CHECK(strstr(a, "\"calc(2)\"") != NULL);             /* string untouched */
+    CHECK(strstr(a, "m.area = 4") != NULL);
+    free(a);
+    CHECK(history_undo_ok(st));
+
+    /* add_param: definition, prototype and 4 call sites; offsets after multibyte text */
+    CHECK_ERR(rf_add_param(st, "calc", "int mode", NULL, -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "default");
+    CHECK_ERR(rf_add_param(st, "calc", "int mode", "0", 9, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "position out of range");
+    CHECK_ERR(rf_add_param(st, "nofn", "int m", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c), "symbol_not_found");
+    CHECK(rf_add_param(st, "calc", "int mode", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    CHECK(c.sites == 2 && c.calls == 3); /* run: 2 calls, other: 1 call, member use has no parens -> not counted */
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "int calc(int x, int mode) {") != NULL);
+    CHECK(strstr(a, "calc(calc(3, 0) + 1, 0)") != NULL);
+    CHECK(strstr(a, "return calc(0, 0);") != NULL);
+    CHECK(strstr(a, "/* calc(1) in a comment") != NULL);
+    free(a);
+    char *h = view_text(st, "a.h");
+    CHECK(strstr(h, "int calc(int x, int mode);") != NULL);
+    free(h);
+    /* position 0 and variadic: new parameter goes before `...` */
+    CHECK(rf_add_param(st, "log_it", "int level", "3", 0, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    CHECK(rf_add_param(st, "log_it", "const char *tag", "\"t\"", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "void log_it(int level, const char *fmt, const char *tag, ...)") != NULL);
+    CHECK(strstr(a, "log_it(3, \"x\", \"t\", 1, 2)") != NULL);
+    free(a);
+    /* (void) and () parameter lists */
+    put_file(ws, "v.c", "int z(void);\nint z(void) { return 1; }\nint y(void) { return z(); }\nint w() { return z(); }\n");
+    CHECK(rf_add_param(st, "z", "int k", "5", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    char *v = view_text(st, "v.c");
+    CHECK_STR(v, "int z(int k);\nint z(int k) { return 1; }\nint y(void) { return z(5); }\nint w() { return z(5); }\n");
+    free(v);
+    CHECK(rf_add_param(st, "w", "int q", "0", -1, NULL, STORE_NO_REV, NULL, "t", NULL, &res, &c) == 0);
+    edit_result_free(&res);
+    v = view_text(st, "v.c");
+    CHECK(strstr(v, "int w(int q) {") != NULL);
+    free(v);
+
+    /* add_include */
+    bool changed;
+    CHECK(rf_add_include(st, "a.c", "stdlib.h", true, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && changed);
+    edit_result_free(&res);
+    a = view_text(st, "a.c");
+    CHECK(strstr(a, "#include <stdio.h>\n#include <stdlib.h>\nint calc") != NULL);
+    free(a);
+    CHECK(rf_add_include(st, "a.c", "stdlib.h", true, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && !changed);
+    CHECK(res.paths.n == 0);
+    edit_result_free(&res);
+    CHECK(rf_add_include(st, "a.h", "types.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0 && changed);
+    edit_result_free(&res);
+    h = view_text(st, "a.h");
+    CHECK(strstr(h, "#define A_H\n#include \"types.h\"\nint calc") != NULL); /* after the include guard */
+    free(h);
+    put_file(ws, "crlf.c", "int q;\r\nint r;\r\n");
+    CHECK(rf_add_include(st, "crlf.c", "q.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed) == 0);
+    edit_result_free(&res);
+    char *cr = view_text(st, "crlf.c");
+    CHECK_STR(cr, "#include \"q.h\"\r\n\r\nint q;\r\nint r;\r\n");
+    free(cr);
+    CHECK_ERR(rf_add_include(st, "a.c", "bad\"name.h", false, STORE_NO_REV, NULL, "t", NULL, &res, &changed), "invalid parameter");
+
+    /* find_symbols and unflushed documents */
+    CHECK(edit1(st, "n.c", 0, 0, "int calc_extra(void) { return 0; }\n", STORE_NO_REV, NULL, NULL) == 0);
+    CHECK(rf_find_symbols(st, "CALC", NULL, 0, &o) == 0);
+    CHECK(j_get(o, "count")->i >= 1 && !j_get(o, "truncated")->b);
+    json_free(o);
+    CHECK(rf_find_symbols(st, "", "function", 2, &o) == 0 && j_get(o, "truncated")->b && j_get(o, "count")->i == 2);
+    json_free(o);
+    CHECK(rf_references(st, "calc_extra", NULL, true, &o) == 0 && j_get(o, "count")->i == 1); /* sees the unflushed file */
+    json_free(o);
+    store_close(st);
+    free(ws);
+}
+
 static void test_rpc(void) {
     g_test = "rpc";
     char *ws = new_ws();
@@ -758,7 +1014,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 7);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 13);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -814,23 +1070,306 @@ static void test_live_clangd(void) {
         fflush(stdout);       \
     } while (0)
 
-int main(void) {
+/* ------------------------------------------------ fake language server (tests.exe --fake-lsp) */
+typedef struct {
+    char *uri, *text;
+} FakeDoc;
+
+static void fake_send(J *msg) {
+    Buf f;
+    buf_init(&f);
+    lsp_frame_message(msg, &f);
+    fwrite(f.p, 1, f.len, stdout);
+    fflush(stdout);
+    buf_free(&f);
+    json_free(msg);
+}
+
+static J *fake_reply(const J *id, J *result) {
+    J *r = j_obj();
+    j_set(r, "jsonrpc", j_str("2.0"));
+    char *d = json_dump(id);
+    j_set(r, "id", json_parse(d, strlen(d)));
+    free(d);
+    j_set(r, "result", result);
+    return r;
+}
+
+static void fake_publish(const FakeDoc *d, int64_t version) {
+    J *p = j_obj();
+    j_set(p, "uri", j_str(d->uri));
+    j_set(p, "version", j_int(version));
+    J *diags = j_arr();
+    if (strstr(d->text, "ERROR")) {
+        J *g = j_obj(), *rg = j_obj(), *a = j_obj(), *b = j_obj();
+        j_set(a, "line", j_int(0));
+        j_set(a, "character", j_int(0));
+        j_set(b, "line", j_int(0));
+        j_set(b, "character", j_int(1));
+        j_set(rg, "start", a);
+        j_set(rg, "end", b);
+        j_set(g, "range", rg);
+        j_set(g, "severity", j_int(1));
+        j_set(g, "code", j_str("E1"));
+        j_set(g, "message", j_str("boom"));
+        j_push(diags, g);
+    }
+    j_set(p, "diagnostics", diags);
+    J *m = j_obj();
+    j_set(m, "jsonrpc", j_str("2.0"));
+    j_set(m, "method", j_str("textDocument/publishDiagnostics"));
+    j_set(m, "params", p);
+    fake_send(m);
+}
+
+static J *fake_range(size_t l0, size_t c0, size_t l1, size_t c1) {
+    J *r = j_obj(), *a = j_obj(), *b = j_obj();
+    j_set(a, "line", j_int((int64_t)l0));
+    j_set(a, "character", j_int((int64_t)c0));
+    j_set(b, "line", j_int((int64_t)l1));
+    j_set(b, "character", j_int((int64_t)c1));
+    j_set(r, "start", a);
+    j_set(r, "end", b);
+    return r;
+}
+
+/* Python-ish: `def f` / `class C` at column 0 start a symbol that runs over the indented lines below. */
+static J *fake_symbols(const char *text) {
+    J *top = j_arr();
+    J *cur = NULL, *cur_children = NULL;
+    size_t line = 0;
+    const char *p = text;
+    while (*p) {
+        const char *e = strchr(p, '\n');
+        size_t n = e ? (size_t)(e - p) : strlen(p);
+        bool is_def = strncmp(p, "def ", 4) == 0, is_class = strncmp(p, "class ", 6) == 0;
+        bool is_method = strncmp(p, "    def ", 8) == 0;
+        if (is_def || is_class) {
+            const char *name = p + (is_def ? 4 : 6);
+            size_t nl = 0;
+            while (name + nl < p + n && name[nl] != '(' && name[nl] != ':') nl++;
+            cur = j_obj();
+            j_set(cur, "name", j_strn(name, nl));
+            j_set(cur, "kind", j_int(is_def ? 12 : 5));
+            j_set(cur, "range", fake_range(line, 0, line, n));
+            cur_children = NULL;
+            if (is_class) {
+                cur_children = j_arr();
+                j_set(cur, "children", cur_children);
+            }
+            j_push(top, cur);
+        } else if (is_method && cur_children) {
+            const char *name = p + 8;
+            size_t nl = 0;
+            while (name + nl < p + n && name[nl] != '(') nl++;
+            J *m = j_obj();
+            j_set(m, "name", j_strn(name, nl));
+            j_set(m, "kind", j_int(6));
+            j_set(m, "range", fake_range(line, 4, line, n));
+            j_push(cur_children, m);
+        }
+        if (cur && n > 0 && (p[0] == ' ' || is_def || is_class)) {
+            /* extend the current symbol's range to this line */
+            J *end = (J *)j_get(j_get(cur, "range"), "end");
+            ((J *)j_get(end, "line"))->i = (int64_t)line;
+            ((J *)j_get(end, "character"))->i = (int64_t)n;
+        }
+        line++;
+        if (!e) break;
+        p = e + 1;
+    }
+    return top;
+}
+
+static int fake_lsp(void) {
+    FakeDoc docs[8];
+    size_t nd = 0;
+    char hdr[256];
+    for (;;) {
+        size_t clen = 0;
+        bool got = false;
+        while (fgets(hdr, sizeof hdr, stdin)) {
+            if (hdr[0] == '\r' || hdr[0] == '\n') {
+                got = true;
+                break;
+            }
+            if (strncmp(hdr, "Content-Length:", 15) == 0) clen = (size_t)atoi(hdr + 15);
+        }
+        if (!got || clen == 0) return 0;
+        char *body = na_alloc(clen + 1);
+        if (fread(body, 1, clen, stdin) != clen) return 0;
+        J *msg = json_parse(body, clen);
+        free(body);
+        if (!msg) return 1;
+        const J *method = j_get(msg, "method"), *id = j_get(msg, "id"), *params = j_get(msg, "params");
+        const char *m = j_is_str(method) ? method->s : "";
+        if (strcmp(m, "initialize") == 0) {
+            J *caps = j_obj(), *sync = j_obj(), *res = j_obj();
+            j_set(sync, "change", j_int(2));
+            j_set(sync, "openClose", j_bool(true));
+            j_set(caps, "textDocumentSync", sync);
+            j_set(caps, "positionEncoding", j_str("utf-16"));
+            j_set(res, "capabilities", caps);
+            fake_send(fake_reply(id, res));
+        } else if (strcmp(m, "shutdown") == 0) {
+            fake_send(fake_reply(id, j_null()));
+        } else if (strcmp(m, "exit") == 0) {
+            return 0;
+        } else if (strcmp(m, "textDocument/didOpen") == 0) {
+            const J *td = j_get(params, "textDocument");
+            if (nd < 8) {
+                docs[nd].uri = na_strdup(j_get(td, "uri")->s);
+                docs[nd].text = na_strndup(j_get(td, "text")->s, j_get(td, "text")->slen);
+                fake_publish(&docs[nd], j_get(td, "version")->i);
+                nd++;
+            }
+        } else if (strcmp(m, "textDocument/didChange") == 0) {
+            const J *td = j_get(params, "textDocument");
+            for (size_t i = 0; i < nd; i++) {
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) != 0) continue;
+                const J *ch = j_get(params, "contentChanges")->items[0];
+                const J *rg = j_get(ch, "range");
+                const J *t = j_get(ch, "text");
+                if (!rg) {
+                    free(docs[i].text);
+                    docs[i].text = na_strndup(t->s, t->slen);
+                } else {
+                    size_t len = strlen(docs[i].text), so = 0, eo = 0;
+                    const J *s0 = j_get(rg, "start"), *e0 = j_get(rg, "end");
+                    lsp_position_to_offset(docs[i].text, len, (size_t)j_get(s0, "line")->i, (size_t)j_get(s0, "character")->i,
+                                           ENC_UTF16, &so);
+                    lsp_position_to_offset(docs[i].text, len, (size_t)j_get(e0, "line")->i, (size_t)j_get(e0, "character")->i,
+                                           ENC_UTF16, &eo);
+                    size_t sb = cp_to_byte(docs[i].text, len, so), eb = cp_to_byte(docs[i].text, len, eo);
+                    Buf nb;
+                    buf_init(&nb);
+                    buf_put(&nb, docs[i].text, sb);
+                    buf_put(&nb, t->s, t->slen);
+                    buf_put(&nb, docs[i].text + eb, len - eb);
+                    free(docs[i].text);
+                    docs[i].text = buf_take(&nb);
+                }
+                fake_publish(&docs[i], j_get(td, "version")->i);
+            }
+        } else if (strcmp(m, "textDocument/didClose") == 0) {
+            const J *td = j_get(params, "textDocument");
+            for (size_t i = 0; i < nd; i++)
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) == 0) {
+                    free(docs[i].uri);
+                    free(docs[i].text);
+                    docs[i] = docs[--nd];
+                    break;
+                }
+        } else if (strcmp(m, "textDocument/documentSymbol") == 0) {
+            const J *td = j_get(params, "textDocument");
+            J *res = j_arr();
+            for (size_t i = 0; i < nd; i++)
+                if (strcmp(docs[i].uri, j_get(td, "uri")->s) == 0) {
+                    json_free(res);
+                    res = fake_symbols(docs[i].text);
+                }
+            fake_send(fake_reply(id, res));
+        } else if (id) {
+            fake_send(fake_reply(id, j_null()));
+        }
+        json_free(msg);
+    }
+}
+
+static char g_self[600];
+
+static void test_lsp_hub(void) {
+    g_test = "lsp_hub";
+    char *ws = new_ws();
+    char cfg[1500];
+    snprintf(cfg, sizeof cfg,
+             "{\"servers\":[{\"name\":\"fake\",\"command\":\"%s\",\"args\":\"--fake-lsp\",\"extensions\":[\".py\"],\"language\":\"python\"}]}",
+             g_self);
+    put_file(ws, ".aed/lsp.json", cfg);
+    put_file(ws, "m.py", "def alpha():\n    return 1\n\nclass Box:\n    def size(self):\n        return 2\n\ndef omega():\n    return 3\n");
+    Store *st = store_open(ws);
+    LspHub *hub = lsp_hub_new(ws, NULL, 5000);
+    CHECK(lsp_hub_handles(hub, "m.py"));
+    CHECK(!lsp_hub_handles(hub, "notes.txt"));
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.hub = hub;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"outline\",\"params\":{\"target\":\"m.py\"}}");
+    const J *syms = a ? j_get(j_get(a, "result"), "symbols") : NULL;
+    CHECK(syms && syms->n == 3);
+    if (syms && syms->n == 3) {
+        CHECK_STR(j_get(syms->items[0], "name")->s, "alpha");
+        CHECK_STR(j_get(syms->items[0], "kind")->s, "function");
+        CHECK_STR(j_get(syms->items[1], "kind")->s, "class");
+        CHECK(j_get(syms->items[2], "line")->i == 8);
+    }
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"outline\",\"params\":{\"target\":\"m.py\",\"nested\":true}}");
+    syms = a ? j_get(j_get(a, "result"), "symbols") : NULL;
+    CHECK(syms && syms->n == 4);
+    if (syms && syms->n == 4) {
+        CHECK_STR(j_get(syms->items[2], "name")->s, "size");
+        CHECK_STR(j_get(syms->items[2], "scope")->s, "Box");
+    }
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"replace_symbol\",\"params\":{\"target\":\"m.py\",\"name\":\"omega\",\"replacement\":\"def omega():\\n    return 33\",\"if_rev\":0}}");
+    CHECK(a && j_get(a, "result") != NULL);
+    json_free(a);
+    char *v = view_text(st, "m.py");
+    CHECK(strstr(v, "return 33") != NULL && strstr(v, "return 1") != NULL);
+    free(v);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"lsp_servers\"}");
+    CHECK(a && j_get(j_get(a, "result"), "servers")->n >= 2);
+    json_free(a);
+
+    /* the gate validates non-C documents through the hub and syncs edits incrementally */
+    DiagnosticGate *gate = gate_new(ws, lsp_hub_ops(hub), st, 2);
+    Validator val = gate_validator(gate);
+    CHECK(edit1(st, "m.py", 0, 0, "# header\n", STORE_NO_REV, &val, NULL) == 0);
+    CHECK_ERR(edit1(st, "m.py", 0, 0, "ERROR\n", STORE_NO_REV, &val, NULL), "diagnostics_regression");
+    CHECK(edit1(st, "m.py", 0, 0, "# second\n", STORE_NO_REV, &val, NULL) == 0);
+    LspClient *c = lsp_hub_client(hub, "m.py");
+    CHECK(c && lsp_client_incremental(c));
+    CHECK(c && lsp_client_ranged_changes(c) >= 2 && lsp_client_full_changes(c) == 0);
+    gate_free(gate);
+    lsp_hub_free(hub);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
+    {
+        char *self = pf_fullpath(argv[0]);
+        snprintf(g_self, sizeof g_self, "%s", self ? self : argv[0]);
+        free(self);
+    }
     const char *tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMPDIR");
+#ifdef __linux__
+    if (!tmp) tmp = "/tmp";
+#endif
     snprintf(g_base, sizeof g_base, "%s/nextagent-tests", tmp ? tmp : ".");
     pf_mkdirs(g_base);
     RUN(test_util);
     RUN(test_json);
     RUN(test_core);
     RUN(test_store);
+    RUN(test_journal_deltas);
+    RUN(test_incremental_outline);
     RUN(test_store_torn_tail_and_conflict);
     RUN(test_validator);
     RUN(test_c23);
+    RUN(test_refactor);
     RUN(test_lsp_codec_framing);
     RUN(test_lsp_diag);
     RUN(test_lsp_build);
     RUN(test_gate);
     RUN(test_gate_dependents);
     RUN(test_rpc);
+    RUN(test_lsp_hub);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

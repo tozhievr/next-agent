@@ -1,6 +1,7 @@
 #include "rpc.h"
 #include "c23.h"
 #include "platform.h"
+#include "refactor.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -125,6 +126,96 @@ static int batch_from_ops(const J *ops, Batch *b) {
 /* --------------------------------------------------------------- methods */
 static const Validator *validator_of(Rpc *r) { return r->has_validator ? &r->validator : NULL; }
 
+static OutlineCache *outline_cache_of(Rpc *r, const char *target) {
+    char *canon = store_canon(r->store, target);
+    if (!canon) return NULL;
+    for (size_t i = 0; i < r->ncaches; i++)
+        if (strcmp(r->cache_paths[i], canon) == 0) {
+            free(canon);
+            return r->caches[i];
+        }
+    size_t slot = r->ncaches;
+    if (slot == 32) {
+        slot = r->next_evict++ % 32;
+        free(r->cache_paths[slot]);
+        outline_cache_free(r->caches[slot]);
+    } else {
+        r->ncaches++;
+    }
+    r->cache_paths[slot] = canon;
+    r->caches[slot] = outline_cache_new();
+    return r->caches[slot];
+}
+
+void rpc_release(Rpc *r) {
+    for (size_t i = 0; i < r->ncaches; i++) {
+        free(r->cache_paths[i]);
+        outline_cache_free(r->caches[i]);
+    }
+    r->ncaches = 0;
+}
+
+static bool is_c_family(const char *p) {
+    static const char *const exts[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"};
+    for (size_t i = 0; i < sizeof exts / sizeof *exts; i++)
+        if (path_has_suffix_ci(p, exts[i])) return true;
+    return false;
+}
+
+/* Non-C documents are outlined by a language server when one is available. */
+static bool use_lsp(Rpc *r, const char *target) {
+    return r->hub && !is_c_family(target) && lsp_hub_handles(r->hub, target);
+}
+
+static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
+    char *canon = store_canon(r->store, target);
+    if (!canon) return -1;
+    Buf b;
+    buf_init(&b);
+    buf_printf(&b, "%s/%s", store_root(r->store), canon);
+    free(canon);
+    char *abs = buf_take(&b);
+    int rc = lsp_hub_outline(r->hub, abs, s->text, s->len, nested, out);
+    free(abs);
+    return rc;
+}
+
+static int outline_any(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
+    if (use_lsp(r, target)) return lsp_symbols(r, target, s, nested, out);
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_outline_cached(oc, s, nested, out) : c23_outline(s, nested, out);
+}
+
+static int select_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *kind,
+                      const char *scope, Symbol *out) {
+    if (use_lsp(r, target)) {
+        SymbolList all;
+        if (lsp_symbols(r, target, s, true, &all) != 0) return -1;
+        int rc = symbols_select(&all, name, kind, scope, out);
+        symbols_free(&all);
+        return rc;
+    }
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_select_cached(oc, s, name, kind, scope, out) : c23_select(s, name, kind, scope, out);
+}
+
+static int replace_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *replacement,
+                       const char *kind, const char *scope, ChangeSet *cs) {
+    if (use_lsp(r, target)) {
+        Symbol sym;
+        if (select_any(r, target, s, name, kind, scope, &sym) != 0) return -1;
+        cs_init(cs);
+        cs_add(cs, sym.start, sym.end, replacement, strlen(replacement));
+        free(sym.name);
+        free(sym.kind);
+        free(sym.scope);
+        return 0;
+    }
+    OutlineCache *oc = outline_cache_of(r, target);
+    return oc ? c23_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, cs)
+              : c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, cs);
+}
+
 static int m_view(Rpc *r, const J *p, J **out) {
     const char *target;
     if (need_str(p, "target", &target)) return -1;
@@ -146,7 +237,7 @@ static int m_outline(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     SymbolList list;
-    int rc = c23_outline(s, nested, &list);
+    int rc = outline_any(r, target, s, nested, &list);
     if (rc == 0) {
         J *arr = j_arr();
         for (size_t i = 0; i < list.n; i++) j_push(arr, symbol_to_json(&list.v[i]));
@@ -167,7 +258,7 @@ static int m_select(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     Symbol sym;
-    int rc = c23_select(s, name, kind, scope, &sym);
+    int rc = select_any(r, target, s, name, kind, scope, &sym);
     if (rc == 0) {
         *out = symbol_to_json(&sym);
         free(sym.name);
@@ -191,7 +282,7 @@ static int m_replace_symbol(Rpc *r, const J *p, J **out) {
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     ChangeSet cs;
-    int rc = c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, &cs);
+    int rc = replace_any(r, target, s, name, replacement, kind, scope, &cs);
     snap_free(s);
     if (rc != 0) return -1;
     EditResult res;
@@ -295,15 +386,119 @@ static int m_open(Rpc *r, const J *p, J **out) {
     return 0;
 }
 
+/* ------------------------------------------------------------ refactorings */
+static int opt_paths(const J *p, const char *key, StrList *out) {
+    sl_init(out);
+    const J *v = j_get(p, key);
+    if (!v || v->k == J_NULL) return 0;
+    if (v->k != J_ARR) return na_fail("invalid parameter: %s must be an array", key);
+    for (size_t i = 0; i < v->n; i++) {
+        if (!j_is_str(v->items[i])) {
+            sl_free(out);
+            return na_fail("invalid parameter: %s must contain strings", key);
+        }
+        sl_push(out, v->items[i]->s);
+    }
+    return 0;
+}
+
+static const char *session_of(Rpc *r) { return r->session ? r->session : "jsonrpc"; }
+
+static int m_references(Rpc *r, const J *p, J **out) {
+    const char *name;
+    bool members;
+    StrList only;
+    if (need_str(p, "name", &name) || opt_bool(p, "members", true, &members) || opt_paths(p, "paths", &only)) return -1;
+    int rc = rf_references(r->store, name, &only, members, out);
+    sl_free(&only);
+    return rc;
+}
+
+static int m_rename(Rpc *r, const J *p, J **out) {
+    const char *name, *new_name, *label;
+    bool members, allow;
+    int64_t if_rev;
+    StrList only;
+    if (need_str(p, "name", &name) || need_str(p, "new_name", &new_name) || opt_str(p, "label", &label) ||
+        opt_bool(p, "members", true, &members) || opt_bool(p, "allow_existing", false, &allow) ||
+        opt_int(p, "if_rev", STORE_NO_REV, &if_rev) || opt_paths(p, "paths", &only))
+        return -1;
+    EditResult res;
+    RfCounts c;
+    int rc = rf_rename(r->store, name, new_name, &only, members, allow, if_rev, label, session_of(r), validator_of(r), &res, &c);
+    sl_free(&only);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "sites", j_int((int64_t)c.sites));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_add_param(Rpc *r, const J *p, J **out) {
+    const char *function, *param, *def, *label;
+    int64_t pos, if_rev;
+    StrList only;
+    if (need_str(p, "function", &function) || need_str(p, "param", &param) || opt_str(p, "default", &def) ||
+        opt_int(p, "position", -1, &pos) || opt_str(p, "label", &label) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev) ||
+        opt_paths(p, "paths", &only))
+        return -1;
+    EditResult res;
+    RfCounts c;
+    int rc = rf_add_param(r->store, function, param, def, pos, &only, if_rev, label, session_of(r), validator_of(r), &res, &c);
+    sl_free(&only);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "declarations", j_int((int64_t)c.sites));
+    j_set(*out, "calls", j_int((int64_t)c.calls));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_add_include(Rpc *r, const J *p, J **out) {
+    const char *target, *header, *label;
+    bool system;
+    int64_t if_rev;
+    if (need_str(p, "target", &target) || need_str(p, "header", &header) || opt_bool(p, "system", false, &system) ||
+        opt_str(p, "label", &label) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev))
+        return -1;
+    EditResult res;
+    bool changed;
+    if (rf_add_include(r->store, target, header, system, if_rev, label, session_of(r), validator_of(r), &res, &changed) != 0)
+        return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "changed", j_bool(changed));
+    edit_result_free(&res);
+    return 0;
+}
+
+static int m_find_symbols(Rpc *r, const J *p, J **out) {
+    const char *query, *kind;
+    int64_t limit;
+    if (need_str(p, "query", &query) || opt_str(p, "kind", &kind) || opt_int(p, "limit", 100, &limit)) return -1;
+    if (limit < 0) return na_fail("invalid parameter: limit must be non-negative");
+    return rf_find_symbols(r->store, query, kind, (size_t)limit, out);
+}
+
 typedef struct {
     const char *name;
     int (*fn)(Rpc *, const J *, J **);
 } Method;
 
+static int m_lsp_servers(Rpc *r, const J *p, J **out) {
+    (void)p;
+    J *o = j_obj();
+    j_set(o, "servers", r->hub ? lsp_hub_status(r->hub) : j_arr());
+    j_set(o, "enabled", j_bool(r->hub != NULL));
+    *out = o;
+    return 0;
+}
+
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
     {"replace_symbol", m_replace_symbol},       {"edit", m_edit},      {"history", m_history},
-    {"sync", m_sync},
+    {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
+    {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
+    {"lsp_servers", m_lsp_servers},
 };
 
 /* 0 ok, -1 failure (na_errmsg), -2 unknown method */
@@ -390,6 +585,18 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\",\"enum\":[\"log\",\"undo\",\"redo\"]},\"n\":{\"type\":\"integer\"},\"rev\":{\"type\":\"integer\"}}}"));
     j_push(arr, tool_def("sync", "Flush committed revisions to disk.",
                          "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"));
+    j_push(arr, tool_def("references", "List identifier occurrences of a name across the workspace (syntactic).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"members\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"name\"]}"));
+    j_push(arr, tool_def("rename", "Rename an identifier across the workspace in one atomic revision (syntactic).",
+                         "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"new_name\":{\"type\":\"string\"},\"if_rev\":{\"type\":\"integer\"},\"members\":{\"type\":\"boolean\"},\"allow_existing\":{\"type\":\"boolean\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"name\",\"new_name\"]}"));
+    j_push(arr, tool_def("add_param", "Add a parameter to a C function and an argument to every call site.",
+                         "{\"type\":\"object\",\"properties\":{\"function\":{\"type\":\"string\"},\"param\":{\"type\":\"string\"},\"default\":{\"type\":\"string\"},\"position\":{\"type\":\"integer\"},\"if_rev\":{\"type\":\"integer\"},\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"label\":{\"type\":\"string\"}},\"required\":[\"function\",\"param\"]}"));
+    j_push(arr, tool_def("add_include", "Insert an #include after the last include (no-op if present).",
+                         "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"header\":{\"type\":\"string\"},\"system\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"header\"]}"));
+    j_push(arr, tool_def("lsp_servers", "List the configured language servers and whether they are installed/running.",
+                         "{\"type\":\"object\",\"properties\":{}}"));
+    j_push(arr, tool_def("find_symbols", "Search top-level symbols across the workspace by name substring.",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     return arr;
 }
 

@@ -1,0 +1,364 @@
+/* Language server hub: maps file extensions to language servers (clangd, pyright, rust-analyzer,
+ * gopls, ...), starts them on demand, and turns documentSymbol answers into NextAgent symbols. */
+#include "lsp.h"
+#include "platform.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+    char *name;
+    StrList exes, args; /* candidates in preference order (parallel lists) */
+    StrList exts;
+    char *lang; /* languageId override */
+    LspClient *client;
+    bool tried;
+    char *error;
+} Server;
+
+typedef struct {
+    char *uri;
+    Server *srv;
+} UriMap;
+
+struct LspHub {
+    char *root;
+    int timeout_ms;
+    Server *v;
+    size_t n, cap;
+    UriMap *uris;
+    size_t nuris, capuris;
+};
+
+static Server *add_server(LspHub *h, const char *name, const char *lang) {
+    if (h->n == h->cap) {
+        h->cap = h->cap ? h->cap * 2 : 8;
+        h->v = na_realloc(h->v, h->cap * sizeof *h->v);
+    }
+    Server *s = &h->v[h->n++];
+    memset(s, 0, sizeof *s);
+    s->name = na_strdup(name);
+    s->lang = lang ? na_strdup(lang) : NULL;
+    sl_init(&s->exes);
+    sl_init(&s->args);
+    sl_init(&s->exts);
+    return s;
+}
+
+static void cand(Server *s, const char *exe, const char *args) {
+    sl_push(&s->exes, exe);
+    sl_push(&s->args, args);
+}
+
+static void exts(Server *s, const char *const *list) {
+    for (size_t i = 0; list[i]; i++) sl_push(&s->exts, list[i]);
+}
+
+static void load_config(LspHub *h) {
+    char *p = NULL;
+    Buf pb;
+    buf_init(&pb);
+    buf_printf(&pb, "%s/.aed/lsp.json", h->root);
+    p = buf_take(&pb);
+    Buf data;
+    buf_init(&data);
+    int rc = pf_read_file(p, &data);
+    free(p);
+    if (rc != 0 || data.len == 0) {
+        buf_free(&data);
+        return;
+    }
+    J *cfg = json_parse(data.p, data.len);
+    buf_free(&data);
+    const J *arr = cfg ? j_get(cfg, "servers") : NULL;
+    if (arr && arr->k == J_ARR) {
+        for (size_t i = 0; i < arr->n; i++) {
+            const J *e = arr->items[i];
+            const J *name = j_get(e, "name"), *cmd = j_get(e, "command"), *args = j_get(e, "args");
+            const J *xs = j_get(e, "extensions"), *lang = j_get(e, "language");
+            if (!j_is_str(cmd) || !xs || xs->k != J_ARR) continue;
+            Server *s = add_server(h, j_is_str(name) ? name->s : cmd->s, j_is_str(lang) ? lang->s : NULL);
+            cand(s, cmd->s, j_is_str(args) ? args->s : "");
+            for (size_t k = 0; k < xs->n; k++)
+                if (j_is_str(xs->items[k])) sl_push(&s->exts, xs->items[k]->s);
+        }
+    }
+    json_free(cfg);
+}
+
+LspHub *lsp_hub_new(const char *root, const char *clangd_exe, int timeout_ms) {
+    LspHub *h = na_alloc(sizeof *h);
+    h->root = path_normalize(root);
+    h->timeout_ms = timeout_ms > 0 ? timeout_ms : 20000;
+    load_config(h); /* user entries win over the built-ins below */
+    static const char *const c_exts[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx", NULL};
+    static const char *const py_exts[] = {".py", ".pyi", NULL};
+    static const char *const ts_exts[] = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", NULL};
+    static const char *const rs_exts[] = {".rs", NULL};
+    static const char *const go_exts[] = {".go", NULL};
+    static const char *const zig_exts[] = {".zig", NULL};
+    static const char *const lua_exts[] = {".lua", NULL};
+    Server *s = add_server(h, "clangd", NULL);
+    cand(s, clangd_exe ? clangd_exe : "clangd", "--log=error --background-index=false --header-insertion=never");
+    exts(s, c_exts);
+    s = add_server(h, "python", NULL);
+    cand(s, "pyright-langserver", "--stdio");
+    cand(s, "basedpyright-langserver", "--stdio");
+    cand(s, "pylsp", "");
+    exts(s, py_exts);
+    s = add_server(h, "rust-analyzer", NULL);
+    cand(s, "rust-analyzer", "");
+    exts(s, rs_exts);
+    s = add_server(h, "gopls", NULL);
+    cand(s, "gopls", "");
+    exts(s, go_exts);
+    s = add_server(h, "typescript", NULL);
+    cand(s, "typescript-language-server", "--stdio");
+    exts(s, ts_exts);
+    s = add_server(h, "zls", NULL);
+    cand(s, "zls", "");
+    exts(s, zig_exts);
+    s = add_server(h, "lua", NULL);
+    cand(s, "lua-language-server", "");
+    exts(s, lua_exts);
+    return h;
+}
+
+void lsp_hub_free(LspHub *h) {
+    if (!h) return;
+    for (size_t i = 0; i < h->n; i++) {
+        Server *s = &h->v[i];
+        clangd_close(s->client);
+        free(s->name);
+        free(s->lang);
+        free(s->error);
+        sl_free(&s->exes);
+        sl_free(&s->args);
+        sl_free(&s->exts);
+    }
+    free(h->v);
+    for (size_t i = 0; i < h->nuris; i++) free(h->uris[i].uri);
+    free(h->uris);
+    free(h->root);
+    free(h);
+}
+
+static Server *match(LspHub *h, const char *path) {
+    for (size_t i = 0; i < h->n; i++)
+        for (size_t k = 0; k < h->v[i].exts.n; k++)
+            if (path_has_suffix_ci(path, h->v[i].exts.v[k])) return &h->v[i];
+    return NULL;
+}
+
+/* Returns the running client for the file, starting its server on first use. */
+static LspClient *client_for(LspHub *h, const char *path, Server **srv_out) {
+    Server *s = match(h, path);
+    if (srv_out) *srv_out = s;
+    if (!s) return NULL;
+    if (!s->tried) {
+        s->tried = true;
+        for (size_t i = 0; i < s->exes.n && !s->client; i++) {
+            char *found = pf_which(s->exes.v[i]);
+            if (!found) continue;
+            free(found);
+            s->client = lsp_client_start(h->root, s->exes.v[i], s->args.v[i], h->timeout_ms);
+            if (!s->client) s->error = na_strdup(na_errmsg());
+        }
+        if (!s->client && !s->error) s->error = na_strdup("no language server executable found on PATH");
+        if (s->client && s->lang) lsp_client_set_language(s->client, s->lang);
+    }
+    return s->client;
+}
+
+bool lsp_hub_handles(LspHub *h, const char *path) { return client_for(h, path, NULL) != NULL; }
+
+/* ---------------------------------------------------------------- LspOps */
+static void remember(LspHub *h, const char *uri, Server *s) {
+    for (size_t i = 0; i < h->nuris; i++)
+        if (strcmp(h->uris[i].uri, uri) == 0) {
+            h->uris[i].srv = s;
+            return;
+        }
+    if (h->nuris == h->capuris) {
+        h->capuris = h->capuris ? h->capuris * 2 : 16;
+        h->uris = na_realloc(h->uris, h->capuris * sizeof *h->uris);
+    }
+    h->uris[h->nuris].uri = na_strdup(uri);
+    h->uris[h->nuris].srv = s;
+    h->nuris++;
+}
+
+static LspClient *by_uri(LspHub *h, const char *uri) {
+    for (size_t i = 0; i < h->nuris; i++)
+        if (strcmp(h->uris[i].uri, uri) == 0) return h->uris[i].srv->client;
+    na_seterr("no language server session for %s", uri);
+    return NULL;
+}
+
+static int hub_open(void *ctx, const char *abs_path, const char *text, size_t len, int64_t version, char **uri) {
+    LspHub *h = ctx;
+    Server *s;
+    LspClient *c = client_for(h, abs_path, &s);
+    if (!c) return na_fail("no_language_server: %s (%s)", abs_path, s && s->error ? s->error : "no server configured");
+    LspOps o = clangd_ops(c);
+    int rc = o.open_document(o.ctx, abs_path, text, len, version, uri);
+    if (rc == 0) remember(h, *uri, s);
+    return rc;
+}
+
+static int hub_change(void *ctx, const char *uri, const char *text, size_t len, int64_t version) {
+    LspClient *c = by_uri(ctx, uri);
+    if (!c) return -1;
+    LspOps o = clangd_ops(c);
+    return o.change_document(o.ctx, uri, text, len, version);
+}
+
+static int hub_wait(void *ctx, const char *uri, int64_t version, J **report) {
+    LspClient *c = by_uri(ctx, uri);
+    if (!c) return -1;
+    LspOps o = clangd_ops(c);
+    return o.wait_diagnostics(o.ctx, uri, version, report);
+}
+
+static int hub_close(void *ctx, const char *uri) {
+    LspClient *c = by_uri(ctx, uri);
+    if (!c) return -1;
+    LspOps o = clangd_ops(c);
+    return o.close_document(o.ctx, uri);
+}
+
+static bool hub_supports(void *ctx, const char *abs_path) { return lsp_hub_handles(ctx, abs_path); }
+
+LspOps lsp_hub_ops(LspHub *h) {
+    LspOps o;
+    o.open_document = hub_open;
+    o.change_document = hub_change;
+    o.wait_diagnostics = hub_wait;
+    o.close_document = hub_close;
+    o.ctx = h;
+    o.supports = hub_supports;
+    return o;
+}
+
+/* ---------------------------------------------------------------- symbols */
+static const char *const KIND_NAMES[] = {
+    "file",     "module",   "namespace", "package",   "class",     "method",    "property", "field",
+    "constructor", "enum",  "interface", "function",  "variable",  "constant",  "string",   "number",
+    "boolean",  "array",    "object",    "key",       "null",      "enummember", "struct",  "event",
+    "operator", "typeparameter",
+};
+
+typedef struct {
+    const char *text;
+    size_t len;
+    PosEnc enc;
+    SymbolList *out;
+    bool nested;
+} Conv;
+
+static bool pos_to_offset(const Conv *cv, const J *pos, size_t *off) {
+    const J *l = pos ? j_get(pos, "line") : NULL, *ch = pos ? j_get(pos, "character") : NULL;
+    if (!j_is_int(l) || !j_is_int(ch) || l->i < 0 || ch->i < 0) return false;
+    return lsp_position_to_offset(cv->text, cv->len, (size_t)l->i, (size_t)ch->i, cv->enc, off) == 0;
+}
+
+static void add_symbol(Conv *cv, const J *item, const char *scope, const J *range) {
+    const J *name = j_get(item, "name"), *kind = j_get(item, "kind");
+    if (!j_is_str(name) || !range) return;
+    size_t s, e;
+    if (!pos_to_offset(cv, j_get(range, "start"), &s) || !pos_to_offset(cv, j_get(range, "end"), &e) || e < s) return;
+    SymbolList *out = cv->out;
+    if (out->n == out->cap) {
+        out->cap = out->cap ? out->cap * 2 : 16;
+        out->v = na_realloc(out->v, out->cap * sizeof *out->v);
+    }
+    Symbol *sym = &out->v[out->n++];
+    int k = j_is_int(kind) ? (int)kind->i : 0;
+    sym->name = na_strdup(name->s);
+    sym->kind = na_strdup(k >= 1 && k <= 26 ? KIND_NAMES[k - 1] : "symbol");
+    sym->scope = na_strdup(scope);
+    sym->start = s;
+    sym->end = e;
+    const J *sl = j_get(j_get(range, "start"), "line"), *sc = j_get(j_get(range, "start"), "character");
+    sym->line = (size_t)sl->i + 1;
+    sym->column = (size_t)sc->i;
+}
+
+static void walk(Conv *cv, const J *arr, const char *scope, int depth) {
+    if (!arr || arr->k != J_ARR) return;
+    for (size_t i = 0; i < arr->n; i++) {
+        const J *it = arr->items[i];
+        const J *children = j_get(it, "children");
+        const J *range = j_get(it, "range");
+        const J *loc = j_get(it, "location");
+        if (!range && loc) range = j_get(loc, "range"); /* SymbolInformation */
+        const J *container = j_get(it, "containerName");
+        const char *sc = scope;
+        if (!children && j_is_str(container)) sc = container->s;
+        bool top_level = depth == 0 && !sc[0];
+        if (top_level || cv->nested) add_symbol(cv, it, sc, range);
+        if (children) {
+            const J *name = j_get(it, "name");
+            Buf b;
+            buf_init(&b);
+            if (scope[0]) buf_printf(&b, "%s::", scope);
+            if (j_is_str(name)) buf_puts(&b, name->s);
+            char *inner = buf_take(&b);
+            walk(cv, children, inner, depth + 1);
+            free(inner);
+        }
+    }
+}
+
+int lsp_hub_outline(LspHub *h, const char *abs_path, const char *text, size_t len, bool nested, SymbolList *out) {
+    memset(out, 0, sizeof *out);
+    Server *s;
+    LspClient *c = client_for(h, abs_path, &s);
+    if (!c) return na_fail("no_language_server: %s (%s)", abs_path, s && s->error ? s->error : "no server configured");
+    char *uri = NULL;
+    if (lsp_client_sync(c, abs_path, text, len, &uri) != 0) return -1;
+    J *doc = j_obj();
+    j_set(doc, "uri", j_str(uri));
+    free(uri);
+    J *params = j_obj();
+    j_set(params, "textDocument", doc);
+    J *res = NULL;
+    if (clangd_request(c, "textDocument/documentSymbol", params, &res) != 0) return -1;
+    Conv cv;
+    cv.text = text;
+    cv.len = len;
+    cv.enc = ENC_UTF16;
+    pos_enc_parse(clangd_encoding(c), &cv.enc);
+    cv.out = out;
+    cv.nested = nested;
+    walk(&cv, res, "", 0);
+    json_free(res);
+    return 0;
+}
+
+J *lsp_hub_status(LspHub *h) {
+    J *arr = j_arr();
+    for (size_t i = 0; i < h->n; i++) {
+        Server *s = &h->v[i];
+        J *o = j_obj();
+        j_set(o, "name", j_str(s->name));
+        J *xs = j_arr();
+        for (size_t k = 0; k < s->exts.n; k++) j_push(xs, j_str(s->exts.v[k]));
+        j_set(o, "extensions", xs);
+        const char *found = NULL;
+        char *path = NULL;
+        for (size_t k = 0; k < s->exes.n && !path; k++) {
+            path = pf_which(s->exes.v[k]);
+            if (path) found = s->exes.v[k];
+        }
+        j_set(o, "command", j_str(found ? found : (s->exes.n ? s->exes.v[0] : "")));
+        j_set(o, "available", j_bool(path != NULL));
+        j_set(o, "running", j_bool(s->client != NULL));
+        if (s->error) j_set(o, "error", j_str(s->error));
+        free(path);
+        j_push(arr, o);
+    }
+    return arr;
+}
+
+LspClient *lsp_hub_client(LspHub *h, const char *path) { return client_for(h, path, NULL); }

@@ -7,7 +7,7 @@ Agents edit by *symbol* or *codepoint range* instead of re-reading whole files, 
 
 Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Windows SDK, Visual Studio, Python or SQLite is required: the result is a single `nextagent.exe` (~170 KB) that talks only to kernel32.
 
-> **Status: 0.20.1, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
+> **Status: 0.24.0, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
 
 ## Contents
 
@@ -36,6 +36,7 @@ Typical agent edit loops are wasteful and fragile: read a file, guess line numbe
 | History | `log`, `undo` of the head or of any revision (rebased over later edits, `undo_conflict` on overlap), `redo`. |
 | C23 navigation | Built-in tolerant scanner: `outline`, `--nested` struct/union/enum fields, `select` by name/kind/scope, guarded `replace_symbol`. Syntax only, no name resolution. |
 | Interfaces | CLI, JSON-RPC 2.0 over newline-delimited stdio, MCP stdio bridge. |
+| Languages | `serve --lsp`: Python, Rust, Go, TypeScript, ... via language servers (symbols and diagnostic gate); incremental C23 outline cache. |
 | clangd gate | Pre-commit diagnostics comparison, literal-include dependent discovery, `compile_commands.json` include dirs, fail-closed freshness, build-state recheck inside the write lock. |
 | Sync | Explicit `sync` writes committed text to disk with baseline conflict checks. |
 
@@ -47,9 +48,22 @@ One line (PowerShell, Windows x64): downloads the latest release, verifies its S
 irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
 ```
 
-A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.20.1"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
+Linux x86-64: `curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/main/install.sh | sh` (installs to `~/.local/bin`; `NEXTAGENT_VERSION`, `NEXTAGENT_DIR` work too).
+
+A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.24.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
 
 ## Build
+
+**Recommended (Windows and Linux, identical behaviour):** clang + the vendored libc23, no system libc or SDK:
+
+```sh
+python build.py test --target windows   # or linux (WSL runs the tests when on Windows)
+python tests/parity.py build/linux/nextagent   # output must equal tests/parity.golden
+```
+
+Needs clang, lld, llvm and ninja. CI builds and tests both targets and publishes `windows-x64.zip` and `linux-x64.tar.gz` on every `v*` tag.
+
+Alternative Windows builds:
 
 Two compilers are supported; both produce the same `build/nextagent.exe`.
 
@@ -70,7 +84,7 @@ Two compilers are supported; both produce the same `build/nextagent.exe`.
 
 If a compiler is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"` or `$env:CLANG = "C:\Program Files\LLVM\bin\clang.exe"`.
 The clang path is verified here only by a syntax/warnings check; the full link runs in CI.
-The suite has 158 checks; the live-clangd ones are skipped when `clangd` is missing.
+The suite has 298 checks; the live-clangd ones are skipped when `clangd` is missing.
 
 ## Quick start
 
@@ -146,6 +160,28 @@ Example client configuration:
                                   "args": ["--root", "D:/project", "mcp", "--clangd"] } } }
 ```
 
+## Other languages (language servers)
+
+`serve --lsp` / `mcp --lsp` start a *language server hub*. Files are routed by extension to a server that is started on first use:
+
+| Languages | Server (first one found on `PATH`) |
+| --- | --- |
+| C, C++ | `clangd` |
+| Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` |
+| Rust | `rust-analyzer` |
+| Go | `gopls` |
+| TypeScript, JavaScript | `typescript-language-server` |
+| Zig, Lua | `zls`, `lua-language-server` |
+
+With the hub, `outline`, `select` and `replace_symbol` work on non-C files through `textDocument/documentSymbol` (`nested` returns children with `scope`), and the pre-commit diagnostic gate also vets edits to those files. Edits reach the server as ranged `didChange` notifications when it supports incremental sync. `lsp_servers` lists what is configured, installed and running.
+Add or override servers in `<root>/.aed/lsp.json`:
+
+```json
+{"servers": [{"name": "mypy", "command": "pylsp", "args": "", "extensions": [".py"], "language": "python"}]}
+```
+
+Servers installed as `.cmd`/`.bat` shims (typical for npm packages on Windows) must be wrapped, e.g. `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
+
 ## clangd diagnostic gate
 
 With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` is validated **before** it is committed:
@@ -190,10 +226,10 @@ tests/tests.c   test suite
 
 ## Limitations and not implemented
 
-- **Not implemented:** branches, offline brain, M3 refactorings (rename / references / add-param), three-way merge and file watcher, async writer, socket transport, M5b.
+- **Not implemented:** branches, offline brain, three-way merge and file watcher, async writer, socket transport, M5b.
 - The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
 - clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
-- The GitHub Actions workflows (`ci.yml`, `release.yml`) have **not been run yet**.
+- Refactorings (`references`, `rename`, `add_param`) are token-based and C-only; for other languages only outline/select/replace and the diagnostic gate go through LSP.
 
 See [CHANGELOG.md](CHANGELOG.md) and [docs/agent-plan.md](docs/agent-plan.md).
 

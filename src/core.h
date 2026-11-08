@@ -41,6 +41,7 @@ void cs_sort(ChangeSet *cs); /* stable by (start, end) */
 int cs_validate(const ChangeSet *cs); /* sorted, non-overlapping */
 ChangeSet cs_clone(const ChangeSet *cs);
 int cs_apply(const ChangeSet *cs, const Snapshot *s, int64_t new_rev, Snapshot **out);
+int cs_apply_text(const ChangeSet *cs, const char *text, size_t len, char **out, size_t *outlen);
 int cs_invert(const ChangeSet *cs, const Snapshot *s, ChangeSet *out);
 size_t cs_map_pos(const ChangeSet *cs, size_t offset, int assoc);
 int cs_stats(const ChangeSet *cs, const Snapshot *s, size_t *added, size_t *removed);

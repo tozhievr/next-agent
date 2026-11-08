@@ -9,7 +9,14 @@ typedef struct {
     J *report; /* {"version": n, "diagnostics": [...]} */
 } DiagSlot;
 
-struct ClangdClient {
+typedef struct {
+    char *uri;
+    char *text; /* last text the server has seen */
+    size_t len;
+    int64_t version;
+} OpenDoc;
+
+struct LspClient {
     PfProc *proc;
     LspReader reader;
     int timeout_ms;
@@ -17,6 +24,11 @@ struct ClangdClient {
     int64_t next_id;
     DiagSlot *slots;
     size_t nslots, cap;
+    OpenDoc *docs;
+    size_t ndocs, capdocs;
+    int sync_kind; /* textDocumentSync.change: 0 none, 1 full, 2 incremental */
+    char *lang;    /* languageId override */
+    size_t ranged, full;
 };
 
 static int proc_read(void *ctx, void *buf, size_t cap, int timeout_ms) {
@@ -45,7 +57,7 @@ char *lsp_path_to_uri(const char *abs_path) {
     return buf_take(&b);
 }
 
-static int send_msg(ClangdClient *c, J *msg) {
+static int send_msg(LspClient *c, J *msg) {
     Buf frame;
     buf_init(&frame);
     int rc = lsp_frame_message(msg, &frame);
@@ -55,7 +67,7 @@ static int send_msg(ClangdClient *c, J *msg) {
     return rc;
 }
 
-static int notify(ClangdClient *c, const char *method, J *params) {
+static int notify(LspClient *c, const char *method, J *params) {
     J *m = j_obj();
     j_set(m, "jsonrpc", j_str("2.0"));
     j_set(m, "method", j_str(method));
@@ -63,7 +75,7 @@ static int notify(ClangdClient *c, const char *method, J *params) {
     return send_msg(c, m);
 }
 
-static void store_report(ClangdClient *c, const J *params) {
+static void store_report(LspClient *c, const J *params) {
     const J *uri = j_get(params, "uri"), *diags = j_get(params, "diagnostics"), *ver = j_get(params, "version");
     if (!j_is_str(uri) || !diags || diags->k != J_ARR) return;
     J *report = j_obj();
@@ -89,13 +101,13 @@ static void store_report(ClangdClient *c, const J *params) {
     c->nslots++;
 }
 
-static J *find_report(ClangdClient *c, const char *uri) {
+static J *find_report(LspClient *c, const char *uri) {
     for (size_t i = 0; i < c->nslots; i++)
         if (strcmp(c->slots[i].uri, uri) == 0) return c->slots[i].report;
     return NULL;
 }
 
-static void drop_report(ClangdClient *c, const char *uri) {
+static void drop_report(LspClient *c, const char *uri) {
     for (size_t i = 0; i < c->nslots; i++) {
         if (strcmp(c->slots[i].uri, uri) != 0) continue;
         free(c->slots[i].uri);
@@ -108,7 +120,7 @@ static void drop_report(ClangdClient *c, const char *uri) {
 /* Process one incoming message. `want_id` >= 0: if the matching response
  * arrives it is returned in *response. Returns 1 handled, 0 timeout, -1 error
  * (including EOF). */
-static int pump(ClangdClient *c, int timeout_ms, int64_t want_id, J **response) {
+static int pump(LspClient *c, int timeout_ms, int64_t want_id, J **response) {
     J *msg = NULL;
     int rc = lsp_read_message(&c->reader, timeout_ms, &msg);
     if (rc == 0) return 0;
@@ -140,7 +152,7 @@ static int pump(ClangdClient *c, int timeout_ms, int64_t want_id, J **response) 
     return 1;
 }
 
-int clangd_request(ClangdClient *c, const char *method, J *params, J **result) {
+int clangd_request(LspClient *c, const char *method, J *params, J **result) {
     int64_t id = ++c->next_id;
     J *m = j_obj();
     j_set(m, "jsonrpc", j_str("2.0"));
@@ -178,15 +190,21 @@ int clangd_request(ClangdClient *c, const char *method, J *params, J **result) {
     }
 }
 
-ClangdClient *clangd_start(const char *root, const char *exe, int timeout_ms) {
-    char *path = pf_which(exe ? exe : "clangd");
+LspClient *clangd_start(const char *root, const char *exe, int timeout_ms) {
+    return lsp_client_start(root, exe ? exe : "clangd", "--log=error --background-index=false --header-insertion=never",
+                            timeout_ms);
+}
+
+LspClient *lsp_client_start(const char *root, const char *exe, const char *args, int timeout_ms) {
+    char *path = pf_which(exe);
     if (!path) {
-        na_seterr("clangd not found");
+        na_seterr("language server not found: %s", exe);
         return NULL;
     }
-    ClangdClient *c = na_alloc(sizeof *c);
+    LspClient *c = na_alloc(sizeof *c);
     c->timeout_ms = timeout_ms > 0 ? timeout_ms : 20000;
-    c->proc = pf_spawn(path, "--log=error --background-index=false --header-insertion=never", root);
+    c->sync_kind = 1;
+    c->proc = pf_spawn(path, args ? args : "", root);
     free(path);
     if (!c->proc) {
         free(c);
@@ -205,9 +223,11 @@ ClangdClient *clangd_start(const char *root, const char *exe, int timeout_ms) {
     j_push(encs, j_str("utf-16"));
     j_set(general, "positionEncodings", encs);
     j_set(caps, "general", general);
-    J *td = j_obj(), *pd = j_obj();
+    J *td = j_obj(), *pd = j_obj(), *ds = j_obj();
     j_set(pd, "versionSupport", j_bool(true));
     j_set(td, "publishDiagnostics", pd);
+    j_set(ds, "hierarchicalDocumentSymbolSupport", j_bool(true));
+    j_set(td, "documentSymbol", ds);
     j_set(caps, "textDocument", td);
     j_set(params, "capabilities", caps);
     J *res = NULL;
@@ -216,6 +236,9 @@ ClangdClient *clangd_start(const char *root, const char *exe, int timeout_ms) {
         return NULL;
     }
     const J *capres = j_get(res, "capabilities");
+    const J *tds = capres ? j_get(capres, "textDocumentSync") : NULL;
+    if (j_is_int(tds)) c->sync_kind = (int)tds->i;
+    else if (tds && tds->k == J_OBJ && j_is_int(j_get(tds, "change"))) c->sync_kind = (int)j_get(tds, "change")->i;
     const J *enc = capres ? j_get(capres, "positionEncoding") : NULL;
     if (j_is_str(enc)) {
         PosEnc tmp;
@@ -231,7 +254,7 @@ ClangdClient *clangd_start(const char *root, const char *exe, int timeout_ms) {
     return c;
 }
 
-void clangd_close(ClangdClient *c) {
+void clangd_close(LspClient *c) {
     if (!c) return;
     if (c->proc) {
         J *res = NULL;
@@ -250,23 +273,70 @@ void clangd_close(ClangdClient *c) {
         json_free(c->slots[i].report);
     }
     free(c->slots);
+    for (size_t i = 0; i < c->ndocs; i++) {
+        free(c->docs[i].uri);
+        free(c->docs[i].text);
+    }
+    free(c->docs);
+    free(c->lang);
     free(c);
 }
 
-const char *clangd_encoding(const ClangdClient *c) { return c->encoding; }
+void lsp_client_set_language(LspClient *c, const char *language_id) {
+    free(c->lang);
+    c->lang = language_id ? na_strdup(language_id) : NULL;
+}
+bool lsp_client_incremental(const LspClient *c) { return c->sync_kind == 2; }
+size_t lsp_client_ranged_changes(const LspClient *c) { return c->ranged; }
+size_t lsp_client_full_changes(const LspClient *c) { return c->full; }
+
+const char *clangd_encoding(const LspClient *c) { return c->encoding; }
 
 /* ----------------------------------------------------------- LspOps glue */
-static const char *language_of(const char *path) {
-    return path_has_suffix_ci(path, ".c") || path_has_suffix_ci(path, ".h") ? "c" : "cpp";
+static const struct {
+    const char *ext, *lang;
+} LANGS[] = {
+    {".c", "c"},           {".h", "c"},          {".cc", "cpp"},       {".cpp", "cpp"},
+    {".cxx", "cpp"},       {".hh", "cpp"},       {".hpp", "cpp"},      {".hxx", "cpp"},
+    {".py", "python"},     {".pyi", "python"},   {".rs", "rust"},      {".go", "go"},
+    {".ts", "typescript"}, {".tsx", "typescriptreact"}, {".js", "javascript"}, {".mjs", "javascript"},
+    {".cjs", "javascript"}, {".jsx", "javascriptreact"}, {".zig", "zig"}, {".lua", "lua"},
+    {".java", "java"},     {".cs", "csharp"},    {".rb", "ruby"},      {".php", "php"},
+    {".swift", "swift"},   {".kt", "kotlin"},
+};
+
+const char *lsp_language_id(const char *path) {
+    for (size_t i = 0; i < sizeof LANGS / sizeof *LANGS; i++)
+        if (path_has_suffix_ci(path, LANGS[i].ext)) return LANGS[i].lang;
+    return "plaintext";
 }
 
+static OpenDoc *find_doc(LspClient *c, const char *uri) {
+    for (size_t i = 0; i < c->ndocs; i++)
+        if (strcmp(c->docs[i].uri, uri) == 0) return &c->docs[i];
+    return NULL;
+}
+
+static void forget_doc(LspClient *c, const char *uri) {
+    for (size_t i = 0; i < c->ndocs; i++) {
+        if (strcmp(c->docs[i].uri, uri) != 0) continue;
+        free(c->docs[i].uri);
+        free(c->docs[i].text);
+        c->docs[i] = c->docs[--c->ndocs];
+        return;
+    }
+}
+
+static int op_close(void *ctx, const char *uri);
+
 static int op_open(void *ctx, const char *abs_path, const char *text, size_t len, int64_t version, char **uri) {
-    ClangdClient *c = ctx;
+    LspClient *c = ctx;
     *uri = lsp_path_to_uri(abs_path);
+    if (find_doc(c, *uri)) op_close(c, *uri); /* reopen from scratch: fresh version space */
     drop_report(c, *uri);
     J *doc = j_obj();
     j_set(doc, "uri", j_str(*uri));
-    j_set(doc, "languageId", j_str(language_of(abs_path)));
+    j_set(doc, "languageId", j_str(c->lang ? c->lang : lsp_language_id(abs_path)));
     j_set(doc, "version", j_int(version));
     j_set(doc, "text", j_strn(text, len));
     J *params = j_obj();
@@ -275,27 +345,105 @@ static int op_open(void *ctx, const char *abs_path, const char *text, size_t len
     if (rc != 0) {
         free(*uri);
         *uri = NULL;
+        return rc;
     }
-    return rc;
+    if (c->ndocs == c->capdocs) {
+        c->capdocs = c->capdocs ? c->capdocs * 2 : 8;
+        c->docs = na_realloc(c->docs, c->capdocs * sizeof *c->docs);
+    }
+    OpenDoc *d = &c->docs[c->ndocs++];
+    d->uri = na_strdup(*uri);
+    d->text = na_strndup(text, len);
+    d->len = len;
+    d->version = version;
+    return 0;
+}
+
+static size_t count_cps(const char *t, size_t n) {
+    size_t cp = 0;
+    for (size_t i = 0; i < n; i++)
+        if (((unsigned char)t[i] & 0xC0) != 0x80) cp++;
+    return cp;
+}
+
+static J *position_json(size_t line, size_t ch) {
+    J *p = j_obj();
+    j_set(p, "line", j_int((int64_t)line));
+    j_set(p, "character", j_int((int64_t)ch));
+    return p;
 }
 
 static int op_change(void *ctx, const char *uri, const char *text, size_t len, int64_t version) {
-    ClangdClient *c = ctx;
+    LspClient *c = ctx;
+    OpenDoc *d = find_doc(c, uri);
     J *doc = j_obj();
     j_set(doc, "uri", j_str(uri));
     j_set(doc, "version", j_int(version));
     J *change = j_obj();
-    j_set(change, "text", j_strn(text, len));
+    bool ranged = false;
+    if (d && c->sync_kind == 2) {
+        /* Ship only the differing middle part; prefix and suffix are trimmed to codepoint boundaries. */
+        size_t minlen = d->len < len ? d->len : len, pre = 0, suf = 0;
+        while (pre < minlen && d->text[pre] == text[pre]) pre++;
+        while (pre > 0 && pre < d->len && ((unsigned char)d->text[pre] & 0xC0) == 0x80) pre--;
+        while (suf < minlen - pre && d->text[d->len - 1 - suf] == text[len - 1 - suf]) suf++;
+        while (suf > 0 && ((unsigned char)d->text[d->len - suf] & 0xC0) == 0x80) suf--;
+        PosEnc enc = ENC_UTF16;
+        pos_enc_parse(c->encoding, &enc);
+        size_t sl, sc, el, ec;
+        if (lsp_offset_to_position(d->text, d->len, count_cps(d->text, pre), enc, &sl, &sc) == 0 &&
+            lsp_offset_to_position(d->text, d->len, count_cps(d->text, d->len - suf), enc, &el, &ec) == 0) {
+            J *range = j_obj();
+            j_set(range, "start", position_json(sl, sc));
+            j_set(range, "end", position_json(el, ec));
+            j_set(change, "range", range);
+            j_set(change, "text", j_strn(text + pre, len - pre - suf));
+            ranged = true;
+        }
+    }
+    if (!ranged) j_set(change, "text", j_strn(text, len));
     J *changes = j_arr();
     j_push(changes, change);
     J *params = j_obj();
     j_set(params, "textDocument", doc);
     j_set(params, "contentChanges", changes);
-    return notify(c, "textDocument/didChange", params);
+    int rc = notify(c, "textDocument/didChange", params);
+    if (rc == 0) {
+        if (ranged) c->ranged++;
+        else c->full++;
+        if (d) {
+            free(d->text);
+            d->text = na_strndup(text, len);
+            d->len = len;
+            d->version = version;
+        }
+    }
+    return rc;
+}
+
+/* Opens a document, or sends an incremental update when it is already open. */
+int lsp_client_sync(LspClient *c, const char *abs_path, const char *text, size_t len, char **uri) {
+    char *u = lsp_path_to_uri(abs_path);
+    OpenDoc *d = find_doc(c, u);
+    if (!d) {
+        free(u);
+        return op_open(c, abs_path, text, len, 1, uri);
+    }
+    if (d->len == len && memcmp(d->text, text, len) == 0) {
+        *uri = u;
+        return 0;
+    }
+    int rc = op_change(c, u, text, len, d->version + 1);
+    if (rc != 0) {
+        free(u);
+        return rc;
+    }
+    *uri = u;
+    return 0;
 }
 
 static int op_wait(void *ctx, const char *uri, int64_t version, J **report) {
-    ClangdClient *c = ctx;
+    LspClient *c = ctx;
     uint64_t deadline = pf_now_ms() + (uint64_t)c->timeout_ms;
     while (true) {
         J *r = find_report(c, uri);
@@ -317,8 +465,9 @@ static int op_wait(void *ctx, const char *uri, int64_t version, J **report) {
 }
 
 static int op_close(void *ctx, const char *uri) {
-    ClangdClient *c = ctx;
+    LspClient *c = ctx;
     drop_report(c, uri);
+    forget_doc(c, uri);
     J *doc = j_obj();
     j_set(doc, "uri", j_str(uri));
     J *params = j_obj();
@@ -326,17 +475,18 @@ static int op_close(void *ctx, const char *uri) {
     return notify(c, "textDocument/didClose", params);
 }
 
-LspOps clangd_ops(ClangdClient *c) {
+LspOps clangd_ops(LspClient *c) {
     LspOps o;
     o.open_document = op_open;
     o.change_document = op_change;
     o.wait_diagnostics = op_wait;
     o.close_document = op_close;
     o.ctx = c;
+    o.supports = NULL;
     return o;
 }
 
-int clangd_formatting(ClangdClient *c, const char *uri, int tab_size, J **edits) {
+int clangd_formatting(LspClient *c, const char *uri, int tab_size, J **edits) {
     J *doc = j_obj();
     j_set(doc, "uri", j_str(uri));
     J *opts = j_obj();

@@ -2,6 +2,7 @@
  * database, dependency discovery, a clangd client and a pre-commit gate. */
 #ifndef NA_LSP_H
 #define NA_LSP_H
+#include "c23.h"
 #include "core.h"
 #include "json.h"
 #include "store.h"
@@ -86,16 +87,46 @@ typedef struct {
     int (*wait_diagnostics)(void *ctx, const char *uri, int64_t version, J **report);
     int (*close_document)(void *ctx, const char *uri);
     void *ctx;
+    /* Optional: does a server handle this file? NULL = every file. */
+    bool (*supports)(void *ctx, const char *abs_path);
 } LspOps;
 
-typedef struct ClangdClient ClangdClient;
-ClangdClient *clangd_start(const char *root, const char *exe, int timeout_ms);
-void clangd_close(ClangdClient *c);
-const char *clangd_encoding(const ClangdClient *c);
-LspOps clangd_ops(ClangdClient *c);
-int clangd_request(ClangdClient *c, const char *method, J *params, J **result);
-int clangd_formatting(ClangdClient *c, const char *uri, int tab_size, J **edits);
+/* A client of one language server process (clangd, pyright, rust-analyzer, ...). */
+typedef struct LspClient LspClient;
+typedef LspClient ClangdClient; /* historical name */
+/* `args` is the raw command line tail; `exe` is looked up on PATH. */
+LspClient *lsp_client_start(const char *root, const char *exe, const char *args, int timeout_ms);
+LspClient *clangd_start(const char *root, const char *exe, int timeout_ms);
+void clangd_close(LspClient *c);
+const char *clangd_encoding(const LspClient *c);
+LspOps clangd_ops(LspClient *c);
+int clangd_request(LspClient *c, const char *method, J *params, J **result);
+int clangd_formatting(LspClient *c, const char *uri, int tab_size, J **edits);
 char *lsp_path_to_uri(const char *abs_path);
+/* Overrides the languageId sent in didOpen (default: derived from the file extension). */
+void lsp_client_set_language(LspClient *c, const char *language_id);
+/* True when the server accepted ranged (incremental) didChange notifications. */
+bool lsp_client_incremental(const LspClient *c);
+/* Number of didChange notifications sent as a range / as whole text (diagnostics, tests). */
+size_t lsp_client_ranged_changes(const LspClient *c);
+size_t lsp_client_full_changes(const LspClient *c);
+/* Opens (or incrementally updates) a document and returns its URI (malloc'd). */
+int lsp_client_sync(LspClient *c, const char *abs_path, const char *text, size_t len, char **uri);
+const char *lsp_language_id(const char *path); /* "c", "python", ... or "plaintext" */
+
+/* ---- language server hub: one server per language family, started on demand ---- */
+typedef struct LspHub LspHub;
+/* Reads <root>/.aed/lsp.json (optional) on top of the built-in server table. `clangd_exe` (optional)
+ * replaces the C/C++ server command. */
+LspHub *lsp_hub_new(const char *root, const char *clangd_exe, int timeout_ms);
+void lsp_hub_free(LspHub *h);
+LspOps lsp_hub_ops(LspHub *h);
+bool lsp_hub_handles(LspHub *h, const char *path); /* a configured, installable server exists */
+LspClient *lsp_hub_client(LspHub *h, const char *path); /* the running client for a file, or NULL */
+/* Top-level (or all, with `nested`) symbols of a document from textDocument/documentSymbol. */
+int lsp_hub_outline(LspHub *h, const char *abs_path, const char *text, size_t len, bool nested, SymbolList *out);
+/* [{name, extensions, command, available, running}] */
+J *lsp_hub_status(LspHub *h);
 
 /* ---- pre-commit diagnostic gate ---- */
 typedef struct DiagnosticGate DiagnosticGate;

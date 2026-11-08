@@ -15,8 +15,13 @@ static void usage(void) {
           "  redo\n"
           "  history [--limit N]\n"
           "  sync [PATH...]\n"
-          "  serve [--clangd[=EXE]]         JSON-RPC 2.0, one object per line on stdio\n"
-          "  mcp [--clangd[=EXE]]           MCP stdio bridge\n",
+          "  references NAME [--no-members] [--path P]...\n"
+          "  rename NAME NEW_NAME [--no-members] [--allow-existing] [--path P]... [--if-rev N]\n"
+          "  add-param FUNCTION PARAM [--default EXPR] [--position N] [--path P]...\n"
+          "  add-include TARGET HEADER [--system] [--if-rev N]\n"
+          "  find QUERY [--kind K] [--limit N]\n"
+          "  serve [--clangd[=EXE]|--lsp]        JSON-RPC 2.0, one object per line on stdio\n"
+          "  mcp [--clangd[=EXE]|--lsp]         MCP stdio bridge\n",
           stderr);
 }
 
@@ -56,7 +61,7 @@ static int parse_int(const char *s, int64_t *out) {
     return 0;
 }
 
-#if defined(__clang__) && defined(_WIN32)
+#if defined(__clang__) && defined(_WIN32) && !defined(NA_LIBC23)
 /* The MSVC CRT opens stdio in text mode (LF -> CRLF, Ctrl-Z = EOF); switch to
  * binary so JSON framing and codepoint offsets are byte-exact. nextc's libc
  * is already binary. */
@@ -70,6 +75,42 @@ static void stdio_binary(void) {
 #else
 static void stdio_binary(void) {}
 #endif
+
+static const char *const N1[] = {"name", NULL};
+static const char *const N2[] = {"name", "new_name"};
+static const char *const N3[] = {"function", "param"};
+static const char *const N4[] = {"target", "header"};
+static const char *const N5[] = {"query", NULL};
+
+/* Generic CLI -> RPC mapping for the refactoring commands: positional
+ * parameters by name, then known flags. Returns NULL on a usage error. */
+static J *cli_params(const char *const *pos_names, int npos, char **args, int nargs) {
+    if (nargs < npos) return NULL;
+    J *p = j_obj();
+    for (int k = 0; k < npos; k++) j_set(p, pos_names[k], j_str(args[k]));
+    for (int k = npos; k < nargs; k++) {
+        const char *a = args[k];
+        int64_t n;
+        if (strcmp(a, "--no-members") == 0) j_set(p, "members", j_bool(false));
+        else if (strcmp(a, "--allow-existing") == 0) j_set(p, "allow_existing", j_bool(true));
+        else if (strcmp(a, "--system") == 0) j_set(p, "system", j_bool(true));
+        else if (k + 1 < nargs && strcmp(a, "--default") == 0) j_set(p, "default", j_str(args[++k]));
+        else if (k + 1 < nargs && strcmp(a, "--kind") == 0) j_set(p, "kind", j_str(args[++k]));
+        else if (k + 1 < nargs && strcmp(a, "--label") == 0) j_set(p, "label", j_str(args[++k]));
+        else if (k + 1 < nargs && strcmp(a, "--position") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "position", j_int(n)), k++;
+        else if (k + 1 < nargs && strcmp(a, "--if-rev") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "if_rev", j_int(n)), k++;
+        else if (k + 1 < nargs && strcmp(a, "--limit") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "limit", j_int(n)), k++;
+        else if (k + 1 < nargs && strcmp(a, "--path") == 0) {
+            const J *ex = j_get(p, "paths");
+            if (!ex) j_set(p, "paths", j_arr());
+            j_push((J *)j_get(p, "paths"), j_str(args[++k]));
+        } else {
+            json_free(p);
+            return NULL;
+        }
+    }
+    return p;
+}
 
 int main(int argc, char **argv) {
     stdio_binary();
@@ -198,6 +239,17 @@ int main(int argc, char **argv) {
             }
         }
         code = run_method(&rpc, "history", p);
+    } else if (strcmp(cmd, "references") == 0 || strcmp(cmd, "rename") == 0 || strcmp(cmd, "add-param") == 0 ||
+               strcmp(cmd, "add-include") == 0 || strcmp(cmd, "find") == 0) {
+        J *p;
+        const char *method;
+        if (strcmp(cmd, "references") == 0) p = cli_params(N1, 1, args, nargs), method = "references";
+        else if (strcmp(cmd, "rename") == 0) p = cli_params(N2, 2, args, nargs), method = "rename";
+        else if (strcmp(cmd, "add-param") == 0) p = cli_params(N3, 2, args, nargs), method = "add_param";
+        else if (strcmp(cmd, "add-include") == 0) p = cli_params(N4, 2, args, nargs), method = "add_include";
+        else p = cli_params(N5, 1, args, nargs), method = "find_symbols";
+        if (!p) goto bad;
+        code = run_method(&rpc, method, p);
     } else if (strcmp(cmd, "sync") == 0) {
         J *p = j_obj();
         if (nargs > 0) {
@@ -207,12 +259,17 @@ int main(int argc, char **argv) {
         }
         code = run_method(&rpc, "sync", p);
     } else if (strcmp(cmd, "serve") == 0 || strcmp(cmd, "mcp") == 0) {
-        const char *clangd = NULL;
+        const char *clangd = NULL, *lsp_clangd = NULL;
+        bool use_hub = false;
         for (int k = 0; k < nargs; k++) {
             if (strcmp(args[k], "--clangd") == 0) clangd = "clangd";
             else if (strncmp(args[k], "--clangd=", 9) == 0) clangd = args[k] + 9;
+            else if (strcmp(args[k], "--lsp") == 0) use_hub = true;
+            else if (strncmp(args[k], "--lsp=", 6) == 0) use_hub = true, lsp_clangd = args[k] + 6;
             else goto bad;
         }
+        if (use_hub && clangd) goto bad;
+        LspHub *hub = NULL;
         ClangdClient *client = NULL;
         DiagnosticGate *gate = NULL;
         if (clangd) {
@@ -226,21 +283,31 @@ int main(int argc, char **argv) {
             rpc.validator = gate_validator(gate);
             rpc.has_validator = true;
         }
+        if (use_hub) {
+            hub = lsp_hub_new(store_root(store), lsp_clangd && *lsp_clangd ? lsp_clangd : NULL, 20000);
+            gate = gate_new(store_root(store), lsp_hub_ops(hub), store, 2);
+            rpc.validator = gate_validator(gate);
+            rpc.has_validator = true;
+            rpc.hub = hub;
+        }
         rpc.session = "jsonrpc";
         if (rpc_serve(&rpc, stdin, stdout, strcmp(cmd, "mcp") == 0) != 0) {
             fprintf(stderr, "nextagent: %s\n", na_errmsg());
             code = 1;
         }
         gate_free(gate);
+        lsp_hub_free(hub);
         clangd_close(client);
     } else {
         goto bad;
     }
 done:
+    rpc_release(&rpc);
     store_close(store);
     return code;
 bad:
     usage();
+    rpc_release(&rpc);
     store_close(store);
     return 2;
 }

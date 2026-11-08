@@ -2,6 +2,46 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.25.0 - 2026-11-08
+
+### Added
+- Linux x86-64 support: raw-syscall platform layer (`src/platform_posix.c`), no glibc/musl needed.
+- `build.py`: builds with clang + libc23 (vendored in `vendor/libc23`) for Windows or Linux; `test` runs the suite.
+- Cross-platform parity check (`tests/parity.py`, `tests/parity.golden`): identical output on Windows and Linux.
+
+## 0.24.0 — 2026-11-08
+
+### Added
+- Language server hub (`serve --lsp`, `mcp --lsp`): other languages through any LSP server — clangd, pyright/pylsp, rust-analyzer, gopls, typescript-language-server, zls, lua-language-server — chosen by file extension, started on demand, configurable in `.aed/lsp.json`.
+- `outline`, `select` and `replace_symbol` for non-C files via `textDocument/documentSymbol`; the diagnostic gate validates edits to those files too.
+- Incremental document sync: edits are sent as ranged `didChange` (common prefix/suffix trimmed) when the server advertises incremental sync.
+- `lsp_servers` method and MCP tool.
+- Tests run against a fake language server (`tests --fake-lsp`), including ranged-sync round trips.
+
+### Changed
+- `ClangdClient` is now the generic `LspClient` (old names remain as aliases); documents are tracked per client, reopening a document starts a fresh version space.
+
+## 0.23.0 — 2026-11-08
+
+### Added
+- Incremental C23 outline: a per-document cache finds the changed byte range, re-lexes only a small window around it and splices the result with the unchanged top-level items (including nested symbols). JSON-RPC/MCP servers keep up to 32 caches; a one-character edit in a 40 KB file lexes about 11% of the tokens of a full scan. A differential fuzz test (300 random edits) checks that the cache is identical to a from-scratch scan.
+
+### Changed
+- A function whose body is never closed is now handled like the unterminated tail of the file, so results no longer depend on how much text follows it.
+
+## 0.22.0 â€” 2026-11-08
+
+### Changed
+- Journal commits no longer store the full document text on every revision: a full text is written only as a checkpoint (first revision of a document, or once accumulated deltas outweigh the text); other revisions carry only forward/inverse edits. A 56 KB file edited 60 times now journals about 1x its size instead of about 60x. Old journals remain readable; journals written by 0.22 are not readable by older versions.
+
+## 0.21.0 â€” 2026-11-08
+
+### Added
+- M3 refactoring (syntactic, comment/string/`#include`-aware): `references`, `rename`, `add_param`, `add_include`, `find_symbols` as CLI commands, JSON-RPC methods and MCP tools. Multi-file edits commit as one revision and see unflushed documents.
+
+### Fixed
+- Test sources no longer depend on the compiler's encoding of non-ASCII string literals.
+
 ## 0.20.1 â€” 2026-11-06
 
 ### Added
