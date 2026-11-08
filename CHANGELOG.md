@@ -2,6 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.25.0 - 2026-11-08
+
+### Added
+- Linux x86-64 support: raw-syscall platform layer (`src/platform_posix.c`), no glibc/musl needed.
+- `build.py`: builds with clang + libc23 (vendored in `vendor/libc23`) for Windows or Linux; `test` runs the suite.
+- Cross-platform parity check (`tests/parity.py`, `tests/parity.golden`): identical output on Windows and Linux.
+
 ## 0.24.0 — 2026-11-08
 
 ### Added

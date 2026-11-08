@@ -10,33 +10,27 @@ permissions:
   contents: read
 
 jobs:
-  clang:
-    name: clang / windows
-    runs-on: windows-latest
+  build:
+    name: clang + libc23 / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, target: windows }
+          - { os: ubuntu-latest, target: linux }
     steps:
       - uses: actions/checkout@v4
-      - name: Build and test
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
         shell: pwsh
-        run: ./build.ps1 test -Compiler clang
-
-  nextc:
-    # Optional: needs the NEXTC_REPO repository variable (owner/name of the nextc
-    # repository). Skipped when it is not set. Not yet exercised on a runner.
-    name: nextc / windows
-    if: ${{ vars.NEXTC_REPO != '' }}
-    runs-on: windows-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install nextc
-        shell: pwsh
-        env:
-          NEXTC_REPO: ${{ vars.NEXTC_REPO }}
         run: |
-          git clone --depth 1 "https://github.com/$env:NEXTC_REPO.git" "$env:RUNNER_TEMP/nextc"
-          $exe = Get-ChildItem "$env:RUNNER_TEMP/nextc" -Recurse -Filter nextc.exe | Select-Object -First 1
-          if (-not $exe) { throw "nextc.exe not found in the cloned repository; build it first" }
-          "NEXTC=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+          clang --version
       - name: Build and test
-        shell: pwsh
-        run: ./build.ps1 test -Compiler nextc
+        run: python build.py test --target ${{ matrix.target }}
+      - name: Cross-platform parity
+        run: python tests/parity.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}

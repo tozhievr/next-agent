@@ -48,9 +48,22 @@ One line (PowerShell, Windows x64): downloads the latest release, verifies its S
 irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
 ```
 
+Linux x86-64: `curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/main/install.sh | sh` (installs to `~/.local/bin`; `NEXTAGENT_VERSION`, `NEXTAGENT_DIR` work too).
+
 A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.24.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
 
 ## Build
+
+**Recommended (Windows and Linux, identical behaviour):** clang + the vendored libc23, no system libc or SDK:
+
+```sh
+python build.py test --target windows   # or linux (WSL runs the tests when on Windows)
+python tests/parity.py build/linux/nextagent   # output must equal tests/parity.golden
+```
+
+Needs clang, lld, llvm and ninja. CI builds and tests both targets and publishes `windows-x64.zip` and `linux-x64.tar.gz` on every `v*` tag.
+
+Alternative Windows builds:
 
 Two compilers are supported; both produce the same `build/nextagent.exe`.
 

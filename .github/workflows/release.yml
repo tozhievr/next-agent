@@ -1,8 +1,7 @@
 name: Release
 
-# Push a tag such as v0.20.1 to build, test and publish a GitHub release with
-# nextagent-<version>-windows-x64.zip and SHA256SUMS.txt.
-#   git tag v0.20.1 && git push origin v0.20.1
+# Push a tag such as v0.25.0 to build, test and publish a GitHub release with
+# nextagent-<version>-windows-x64.zip, nextagent-<version>-linux-x64.tar.gz and SHA256SUMS.txt.
 # The tag must match NA_VERSION in src/util.h.
 
 on:
@@ -11,73 +10,101 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)publish, e.g. v0.20.0"
+        description: "Existing tag to (re)publish, e.g. v0.25.0"
         required: true
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
+  build:
+    name: build / ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { os: windows-latest, target: windows }
+          - { os: ubuntu-latest, target: linux }
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
-      - name: Resolve tag and check version
-        id: v
-        shell: pwsh
-        run: |
-          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { "${{ github.ref_name }}" }
-          $ver = $tag.TrimStart("v")
-          $src = (Select-String -Path src/util.h -Pattern '#define NA_VERSION "([^"]+)"').Matches[0].Groups[1].Value
-          if ($src -ne $ver) { throw "tag $tag does not match NA_VERSION $src in src/util.h" }
-          "tag=$tag" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
-          "ver=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+      - name: Check tag against NA_VERSION
+        shell: bash
         env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          src=$(sed -n 's/.*#define NA_VERSION "\([^"]*\)".*/\1/p' src/util.h | tr -d '\r')
+          [ "${TAG#v}" = "$src" ] || { echo "tag $TAG does not match NA_VERSION $src"; exit 1; }
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build
+      - name: Install toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
       - name: Build and test
-        shell: pwsh
-        run: ./build.ps1 test -Compiler clang
+        run: python build.py test --target ${{ matrix.target }}
+      - name: Parity
+        run: python tests/parity.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
       - name: Package
-        shell: pwsh
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          $ver = "${{ steps.v.outputs.ver }}"
-          $name = "nextagent-$ver-windows-x64"
-          New-Item -ItemType Directory -Force "dist/$name" | Out-Null
-          Copy-Item build/nextagent.exe, README.md, LICENSE, CHANGELOG.md, docs/AGENT_GUIDE.md "dist/$name"
-          Compress-Archive -Path "dist/$name/*" -DestinationPath "dist/$name.zip"
-          $h = (Get-FileHash "dist/$name.zip" -Algorithm SHA256).Hash.ToLower()
-          "$h  $name.zip" | Out-File -Encoding ascii dist/SHA256SUMS.txt
-          Get-Content dist/SHA256SUMS.txt
-      - name: Extract release notes
-        shell: pwsh
-        run: |
-          $ver = "${{ steps.v.outputs.ver }}"
-          $lines = Get-Content CHANGELOG.md
-          $start = ($lines | Select-String -Pattern "^## \[?$([regex]::Escape($ver))\]?" | Select-Object -First 1).LineNumber
-          if ($start) {
-              $rest = $lines[$start..($lines.Count - 1)]
-              $end = ($rest | Select-String -Pattern "^## " | Select-Object -First 1).LineNumber
-              $body = if ($end) { $rest[0..($end - 2)] } else { $rest }
-              $body | Set-Content dist/notes.md
-          } else {
-              "Release $ver" | Set-Content dist/notes.md
-          }
-          Add-Content dist/notes.md "`n**Install:** ``irm https://raw.githubusercontent.com/${{ github.repository }}/main/install.ps1 | iex``"
+          ver=${TAG#v}
+          name=nextagent-$ver-${{ matrix.target }}-x64
+          mkdir -p dist/$name
+          if [ "${{ matrix.target }}" = windows ]; then
+            cp build/windows/nextagent.exe dist/$name/
+          else
+            cp build/linux/nextagent dist/$name/ && chmod +x dist/$name/nextagent
+          fi
+          cp README.md LICENSE CHANGELOG.md docs/AGENT_GUIDE.md dist/$name/
+          cd dist
+          if [ "${{ matrix.target }}" = windows ]; then
+            python -c "import shutil,sys; shutil.make_archive('$name','zip','.','$name')"
+            f=$name.zip
+          else
+            tar -czf $name.tar.gz $name && f=$name.tar.gz
+          fi
+          python -c "import hashlib,sys; print(hashlib.sha256(open('$f','rb').read()).hexdigest()+'  $f')" > $f.sha256
+          cat $f.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+            dist/*.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Publish
-        shell: pwsh
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          $tag = "${{ steps.v.outputs.tag }}"
-          $ver = "${{ steps.v.outputs.ver }}"
-          $files = "dist/nextagent-$ver-windows-x64.zip", "dist/SHA256SUMS.txt"
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
-              gh release upload $tag @files --clobber
-          } else {
-              $extra = @()
-              if ($ver -match "-") { $extra += "--prerelease" }
-              gh release create $tag @files --title "NextAgent $ver" --notes-file dist/notes.md --verify-tag @extra
-          }
+          ver=${TAG#v}
+          cat dist/*.sha256 > dist/SHA256SUMS.txt
+          rm dist/*.sha256
+          awk -v v="$ver" '$0 ~ "^## \[?"v"\]?" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "Release $ver" > notes.md
+          printf '\n**Install:** `irm https://raw.githubusercontent.com/%s/main/install.ps1 | iex` (Windows), `curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | sh` (Linux)\n' "${{ github.repository }}" "${{ github.repository }}" >> notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            extra=""; case "$ver" in *-*) extra="--prerelease";; esac
+            gh release create "$TAG" dist/* --title "NextAgent $ver" --notes-file notes.md --verify-tag $extra
+          fi
