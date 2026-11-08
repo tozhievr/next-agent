@@ -12,6 +12,7 @@ typedef struct {
     Store *store;
     Validator validator;
     bool has_validator;
+    bool autoflush; /* serve/mcp: write each committed revision to disk (default on; --no-sync disables) */
     const char *session; /* "cli" or "jsonrpc" */
     WsIndex *index; /* workspace index, created on first use */
     LspHub *hub; /* optional: language servers for non-C documents (outline, select, replace_symbol) */

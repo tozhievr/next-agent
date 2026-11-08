@@ -380,8 +380,10 @@ char *store_canon(const Store *st, const char *name) {
     }
     const char *rel = norm + strlen(st->root);
     while (*rel == '/') rel++;
+    /* the two configuration files the tool reads from .aed/ may be written like any other file */
+    bool config = strcmp(rel, ".aed/lsp.json") == 0 || strcmp(rel, ".aed/embed.json") == 0;
     /* reserved components and alternate data streams / drive-relative forms */
-    for (const char *p = rel; *p;) {
+    for (const char *p = config ? "" : rel; *p;) {
         const char *q = strchr(p, '/');
         size_t cl = q ? (size_t)(q - p) : strlen(p);
         if (comp_is(p, cl, ".git") || comp_is(p, cl, ".aed")) {
@@ -768,6 +770,46 @@ J *store_history(Store *st, int limit) {
     return arr;
 }
 
+/* What revision `rev` (0 = head) changed: per file, the hunks as removed/added text. `line` (1-based, in the text the
+ * revision produced) is given for the head revision only, where that text is the current one. */
+int store_rev_diff(Store *st, int64_t rev, J **out) {
+    if (refresh(st) != 0) return -1;
+    int64_t head = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
+    if (!head) return na_fail("no revisions");
+    if (rev == 0) rev = head;
+    if (rev < 1 || rev > head) return na_fail("unknown revision %lld", (long long)rev);
+    const Rev *r = &st->revs[rev - 1];
+    J *files = j_arr();
+    for (size_t i = 0; i < r->nd; i++) {
+        const Doc *d = &st->docs[r->d[i].doc];
+        const ChangeSet *fw = &r->d[i].forward, *iv = &r->d[i].inverse;
+        J *hunks = j_arr();
+        for (size_t k = 0; k < fw->n && k < iv->n; k++) {
+            J *h = j_obj();
+            if (rev == head && d->has_head && d->text) {
+                size_t b = cp_to_byte(d->text, d->len, iv->v[k].start), line = 1;
+                for (size_t q = 0; q < b; q++)
+                    if (d->text[q] == '\n') line++;
+                j_set(h, "line", j_int((int64_t)line));
+            }
+            j_set(h, "offset", j_int((int64_t)fw->v[k].start));
+            j_set(h, "removed", j_strn(iv->v[k].text, iv->v[k].tlen));
+            j_set(h, "added", j_strn(fw->v[k].text, fw->v[k].tlen));
+            j_push(hunks, h);
+        }
+        J *f = j_obj();
+        j_set(f, "path", j_str(d->path));
+        j_set(f, "hunks", hunks);
+        j_push(files, f);
+    }
+    J *o = j_obj();
+    j_set(o, "rev", j_int(rev));
+    j_set(o, "label", j_str(r->label));
+    j_set(o, "files", files);
+    *out = o;
+    return 0;
+}
+
 /* ---------------------------------------------------------------- flush --- */
 static int disk_state(const char *full, bool *exists, uint8_t hash[16]) {
     Buf b;
@@ -987,8 +1029,11 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         sl_push(&selected, d->path);
     }
     sl_sort(&selected);
-    /* detect conflicts across ALL selected paths before writing any */
-    for (size_t i = 0; i < selected.n; i++) {
+    /* detect conflicts across ALL selected paths before writing any; a flush of everything (sync without paths)
+     * skips conflicted files, writes the rest and reports the skipped ones at the end */
+    char *skipped = NULL;
+    size_t nskipped = 0;
+    for (size_t i = 0; i < selected.n;) {
         const Doc *d = doc_find(st, selected.v[i]);
         char *full = disk_path(st, d->path);
         bool exists = false;
@@ -997,9 +1042,18 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         free(full);
         if (drc != 0) goto out_sel;
         if (disk_conflict(d, exists, hash)) {
-            na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
-            goto out_sel;
+            if (paths) {
+                na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
+                goto out_sel;
+            }
+            if (!skipped) skipped = na_strdup(d->path);
+            nskipped++;
+            free(selected.v[i]);
+            memmove(selected.v + i, selected.v + i + 1, (selected.n - i - 1) * sizeof *selected.v);
+            selected.n--;
+            continue;
         }
+        i++;
     }
     for (size_t i = 0; i < selected.n; i++) {
         const Doc *d = doc_find(st, selected.v[i]);
@@ -1044,7 +1098,13 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         if (written) sl_push(written, selected.v[i]);
     }
     rc = 0;
+    if (nskipped) {
+        na_seterr("disk_conflict: %zu file(s) changed outside nextagent were not written, the others were (first: %s; reconcile with: nextagent merge %s)",
+                  nskipped, skipped, skipped);
+        rc = -1;
+    }
 out_sel:
+    free(skipped);
     sl_free(&selected);
 out:
     sl_free(&wanted);

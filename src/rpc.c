@@ -494,6 +494,11 @@ static int m_history(Rpc *r, const J *p, J **out) {
     const char *op;
     if (opt_str(p, "op", &op)) return -1;
     if (!op) op = "log";
+    if (strcmp(op, "diff") == 0) {
+        int64_t rev;
+        if (opt_int(p, "rev", 0, &rev)) return -1;
+        return store_rev_diff(r->store, rev, out);
+    }
     if (strcmp(op, "log") == 0) {
         int64_t n;
         if (opt_int(p, "n", 20, &n)) return -1;
@@ -598,6 +603,20 @@ static int m_references(Rpc *r, const J *p, J **out) {
     if (need_str(p, "name", &name) || opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope) || opt_str(p, "path", &path) ||
         opt_bool(p, "members", true, &members) || opt_paths(p, "paths", &only))
         return -1;
+    if (path) {
+        Buf full;
+        buf_init(&full);
+        buf_puts(&full, store_root(r->store));
+        buf_putc(&full, '/');
+        buf_puts(&full, path);
+        char *fp = buf_take(&full);
+        bool dir = pf_is_dir(fp);
+        free(fp);
+        if (dir) {
+            sl_free(&only);
+            return na_fail("invalid parameter: path must be the file that defines the symbol, not a directory (%s)", path);
+        }
+    }
     int rc = -1;
     if (r->hub) {
         Sem s = sem_of(r);
@@ -1442,7 +1461,21 @@ static const Method METHODS[] = {
 static int call_method(Rpc *r, const char *method, const J *params, J **out) {
     *out = NULL;
     for (size_t i = 0; i < sizeof METHODS / sizeof METHODS[0]; i++)
-        if (strcmp(METHODS[i].name, method) == 0) return METHODS[i].fn(r, params, out);
+        if (strcmp(METHODS[i].name, method) == 0) {
+            int rc = METHODS[i].fn(r, params, out);
+            /* long-lived servers put every committed revision on disk at once (the CLI does it itself, with merge) */
+            const J *paths = rc == 0 && r->autoflush && *out ? j_get(*out, "paths") : NULL;
+            if (paths && paths->k == J_ARR && paths->n && strcmp(method, "sync") != 0) {
+                const char *names[64];
+                size_t n = paths->n < 64 ? paths->n : 64;
+                for (size_t k = 0; k < n; k++) names[k] = paths->items[k]->s;
+                if (store_flush(r->store, names, n, NULL) != 0) {
+                    j_set(*out, "written", j_bool(false));
+                    j_set(*out, "flush_error", j_str(na_errmsg()));
+                }
+            }
+            return rc;
+        }
     return -2;
 }
 
@@ -1530,12 +1563,12 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"depth\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"name\"]}"));
     j_push(arr, tool_def("merge", "Reconcile files that were changed outside NextAgent (sync reports disk_conflict): line-based three-way merge of baseline, journal and disk. strategy auto|ours|theirs; conflicts are reported, never written.",
                          "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"strategy\":{\"type\":\"string\",\"enum\":[\"auto\",\"ours\",\"theirs\"]},\"dry_run\":{\"type\":\"boolean\"}}}"));
-    j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
-                         "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
+    j_push(arr, tool_def("patch", "Apply several edits across files as one revision. Each edit is {path, new} plus ONE locator: old (literal text; all:true for every match), start_line/end_line (replace lines), before_line/after_line (insert), at_end:true (append), symbol (replace a symbol), before_symbol/after_symbol (insert next to one), or create:true (new file; fails if it exists). Prefer text and symbol locators to line numbers.",
+                         "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"},\"start_line\":{\"type\":\"integer\"},\"end_line\":{\"type\":\"integer\"},\"before_line\":{\"type\":\"integer\"},\"after_line\":{\"type\":\"integer\"},\"at_end\":{\"type\":\"boolean\"},\"symbol\":{\"type\":\"string\"},\"before_symbol\":{\"type\":\"string\"},\"after_symbol\":{\"type\":\"string\"},\"create\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",
                          "{\"type\":\"object\",\"properties\":{\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"start\":{\"type\":\"integer\"},\"end\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[\"path\",\"start\",\"end\",\"text\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"ops\"]}"));
-    j_push(arr, tool_def("history", "Revision log, undo (optionally of a given rev) or redo.",
-                         "{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\",\"enum\":[\"log\",\"undo\",\"redo\"]},\"n\":{\"type\":\"integer\"},\"rev\":{\"type\":\"integer\"}}}"));
+    j_push(arr, tool_def("history", "Revision log, undo (optionally of a given rev), redo, or diff (what a revision changed; default the last).",
+                         "{\"type\":\"object\",\"properties\":{\"op\":{\"type\":\"string\",\"enum\":[\"log\",\"undo\",\"redo\",\"diff\"]},\"n\":{\"type\":\"integer\"},\"rev\":{\"type\":\"integer\"}}}"));
     j_push(arr, tool_def("sync", "Flush committed revisions to disk.",
                          "{\"type\":\"object\",\"properties\":{\"paths\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"));
     j_push(arr, tool_def("references", "Find all references to one symbol across the workspace (language server; token search for C without a server).",

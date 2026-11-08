@@ -113,6 +113,7 @@ size_t lsp_client_full_changes(const LspClient *c);
 /* Opens (or incrementally updates) a document and returns its URI (malloc'd). */
 int lsp_client_sync(LspClient *c, const char *abs_path, const char *text, size_t len, char **uri);
 bool lsp_client_settle(LspClient *c, const char *abs_path, int budget_ms);
+int lsp_client_wait_lenient(LspClient *c, const char *uri, int64_t version, J **report);
 const char *lsp_language_id(const char *path); /* "c", "python", ... or "plaintext" */
 
 /* ---- language server hub: one server per language family, started on demand ---- */

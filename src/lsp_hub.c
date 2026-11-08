@@ -223,8 +223,10 @@ static int hub_change(void *ctx, const char *uri, const char *text, size_t len, 
 }
 
 static int hub_wait(void *ctx, const char *uri, int64_t version, J **report) {
+    LspHub *h = ctx;
     LspClient *c = by_uri(ctx, uri);
     if (!c) return -1;
+    if (c != h->v[h->clangd_idx].client) return lsp_client_wait_lenient(c, uri, version, report);
     LspOps o = clangd_ops(c);
     return o.wait_diagnostics(o.ctx, uri, version, report);
 }

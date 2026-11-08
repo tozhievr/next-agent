@@ -1821,6 +1821,57 @@ static void test_patch_ops(void) {
     free(ws);
 }
 
+/* Long-lived servers write each revision to disk; `diff` shows what a revision changed; a flush of everything skips
+ * the files that changed outside and still writes the rest; .aed/lsp.json can be edited like a normal file. */
+static void test_flush_and_diff(void) {
+    g_test = "flush_and_diff";
+    char *ws = new_ws();
+    put_file(ws, "a.txt", "one\ntwo\n");
+    put_file(ws, "b.txt", "x\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.autoflush = true;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.txt\",\"old\":\"two\",\"new\":\"2\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    char *d = get_file(ws, "a.txt");
+    CHECK(d && strcmp(d, "one\n2\n") == 0); /* on disk without sync */
+    free(d);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"history\",\"params\":{\"op\":\"diff\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    const J *h = res ? j_get(j_get(j_get(res, "files")->items[0], "hunks")->items[0], "removed") : NULL;
+    CHECK(h && strcmp(h->s, "two") == 0);
+    CHECK(res && strcmp(j_get(j_get(j_get(res, "files")->items[0], "hunks")->items[0], "added")->s, "2") == 0);
+    CHECK(res && j_get(j_get(j_get(res, "files")->items[0], "hunks")->items[0], "line")->i == 2);
+    json_free(a);
+    /* no autoflush: two files committed, one of them then changed outside */
+    r.autoflush = false;
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.txt\",\"old\":\"one\",\"new\":\"1\"},{\"path\":\"b.txt\",\"old\":\"x\",\"new\":\"y\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    put_file(ws, "a.txt", "changed outside\n");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"sync\",\"params\":{}}");
+    CHECK(strstr(err_of(a), "disk_conflict") != NULL && strstr(err_of(a), "a.txt") != NULL);
+    json_free(a);
+    d = get_file(ws, "b.txt");
+    CHECK(d && strcmp(d, "y\n") == 0); /* the other file was written */
+    free(d);
+    d = get_file(ws, "a.txt");
+    CHECK(d && strcmp(d, "changed outside\n") == 0); /* the conflicted one was left alone */
+    free(d);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\".aed/lsp.json\",\"create\":true,\"new\":\"{}\"},{\"path\":\".aed/journal.aedj\",\"create\":true,\"new\":\"x\"}]}}");
+    CHECK(strstr(err_of(a), "reserved") != NULL); /* any other .aed path stays closed */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\".aed/lsp.json\",\"create\":true,\"new\":\"{}\"}]}}");
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 /* The index and the search cache survive between processes (.aed/index.cache): a second session gives the
  * same answer, picks up edits made in between, and a damaged cache file is simply rebuilt. */
 static void test_index_cache(void) {
@@ -1947,7 +1998,8 @@ static void test_agent_tools(void) {
     CHECK(strncmp(va, "int f(void) {\r\n  return 7;\r\n}\r\nint g(void) {", 44) == 0); /* CRLF kept, trailing newline supplied */
     free(va);
     a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"replace_text\",\"params\":{\"target\":\"a.c\",\"start_line\":4,\"end_line\":6,\"new\":\"\"}}");
-    CHECK(a && j_get(a, "result"));
+    RUN(test_patch_ops);
+    RUN(test_flush_and_diff);
     json_free(a);
     va = view_text(st, "a.c");
     CHECK(strcmp(va, "int f(void) {\r\n  return 7;\r\n}\r\n") == 0); /* an empty replacement deletes the lines */
