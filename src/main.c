@@ -15,6 +15,11 @@ static void usage(void) {
           "  redo\n"
           "  history [--limit N]\n"
           "  sync [PATH...]\n"
+          "  references NAME [--no-members] [--path P]...\n"
+          "  rename NAME NEW_NAME [--no-members] [--allow-existing] [--path P]... [--if-rev N]\n"
+          "  add-param FUNCTION PARAM [--default EXPR] [--position N] [--path P]...\n"
+          "  add-include TARGET HEADER [--system] [--if-rev N]\n"
+          "  find QUERY [--kind K] [--limit N]\n"
           "  serve [--clangd[=EXE]|--lsp]        JSON-RPC 2.0, one object per line on stdio\n"
           "  mcp [--clangd[=EXE]|--lsp]         MCP stdio bridge\n",
           stderr);
@@ -56,7 +61,7 @@ static int parse_int(const char *s, int64_t *out) {
     return 0;
 }
 
-#if defined(__clang__) && defined(_WIN32)
+#if defined(__clang__) && defined(_WIN32) && !defined(NA_LIBC23)
 /* The MSVC CRT opens stdio in text mode (LF -> CRLF, Ctrl-Z = EOF); switch to
  * binary so JSON framing and codepoint offsets are byte-exact. nextc's libc
  * is already binary. */

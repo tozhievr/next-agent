@@ -1,0 +1,51 @@
+$ nextagent outline a.c
+exit=0
+{"symbols":[{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""},{"name":"run","kind":"function","start":79,"end":122,"line":4,"column":0,"scope":""}]}
+$ nextagent outline a.c --nested
+exit=0
+{"symbols":[{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""},{"name":"run","kind":"function","start":79,"end":122,"line":4,"column":0,"scope":""},{"name":"P","kind":"struct","start":123,"end":149,"line":5,"column":0,"scope":""},{"name":"x","kind":"field","start":134,"end":140,"line":5,"column":11,"scope":"P"},{"name":"y","kind":"field","start":141,"end":147,"line":5,"column":18,"scope":"P"}]}
+$ nextagent select a.c calc
+exit=0
+{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""}
+$ nextagent references calc
+exit=0
+{"count":4,"references":[{"path":"a.c","start":49,"end":53,"line":3,"column":4,"member":false,"call":true},{"path":"a.c","start":102,"end":106,"line":4,"column":23,"member":false,"call":true},{"path":"a.c","start":107,"end":111,"line":4,"column":28,"member":false,"call":true},{"path":"a.h","start":28,"end":32,"line":3,"column":4,"member":false,"call":true}]}
+$ nextagent rename calc area
+exit=0
+{"rev":1,"paths":["a.c","a.h"],"sites":4}
+$ nextagent view a.c
+exit=0
+{"rev":1,"path":"a.c","text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x) { return x * 2; }\nint run(void) { return area(area(3) + 1); }\nstruct P { int x; int y; };\n"}
+$ nextagent add-param area int mode --default 0
+exit=0
+{"rev":2,"paths":["a.c","a.h"],"declarations":2,"calls":2}
+$ nextagent add-include a.c stdlib.h --system
+exit=0
+{"rev":3,"paths":["a.c"],"changed":true}
+$ nextagent view a.c
+exit=0
+{"rev":3,"path":"a.c","text":"#include \"a.h\"\n#include <stdlib.h>\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
+$ nextagent history
+exit=0
+[{"rev":3,"parent":2,"label":"add_include","ts":0},{"rev":2,"parent":1,"label":"add_param","ts":0},{"rev":1,"parent":null,"label":"rename","ts":0}]
+$ nextagent undo
+exit=0
+{"rev":4,"paths":["a.c"]}
+$ nextagent view a.c
+exit=0
+{"rev":4,"path":"a.c","text":"#include \"a.h\"\n/* calc(1) in a comment éè */\nint area(int x, int mode) { return x * 2; }\nint run(void) { return area(area(3, 0) + 1, 0); }\nstruct P { int x; int y; };\n"}
+$ nextagent redo
+exit=0
+{"rev":5,"paths":["a.c"]}
+$ nextagent find ar
+exit=0
+{"count":2,"truncated":false,"symbols":[{"name":"area","kind":"function","start":65,"end":108,"line":4,"column":0,"scope":"","path":"a.c"},{"name":"area","kind":"declaration","start":24,"end":50,"line":3,"column":0,"scope":"","path":"a.h"}]}
+$ nextagent sync
+exit=0
+{"ok":true,"written":["a.c","a.h"]}
+file a.c sha256=9592ff63bf5834b9a736928e3975f2068de3617a594e07785bbf6dee6eea2f69
+file a.h sha256=8b4084ffb1c79720368e3fbb4234e87e56c2f4593363b47ab4f55ccaf5d3f20c
+file crlf.c sha256=9034338d5e7adccdc779b5c8fd039fbbd37117b0e8481536f06b78d1a808adf3
+$ nextagent history
+exit=0
+[{"rev":5,"parent":4,"label":"undo revision 4","ts":0},{"rev":4,"parent":3,"label":"undo revision 3","ts":0},{"rev":3,"parent":2,"label":"add_include","ts":0},{"rev":2,"parent":1,"label":"add_param","ts":0},{"rev":1,"parent":null,"label":"rename","ts":0}]

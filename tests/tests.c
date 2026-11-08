@@ -1347,6 +1347,10 @@ int main(int argc, char **argv) {
         free(self);
     }
     const char *tmp = getenv("TEMP");
+    if (!tmp) tmp = getenv("TMPDIR");
+#ifdef __linux__
+    if (!tmp) tmp = "/tmp";
+#endif
     snprintf(g_base, sizeof g_base, "%s/nextagent-tests", tmp ? tmp : ".");
     pf_mkdirs(g_base);
     RUN(test_util);
