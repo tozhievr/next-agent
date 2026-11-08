@@ -23,7 +23,7 @@ static void usage(void) {
           "  add-include TARGET HEADER [--system] [--if-rev N]\n"
           "  find QUERY [--kind K] [--limit N]\n"
           "  search QUERY [--word] [-i] [--context N] [--path SUBSTR] [--limit N]\n"
-          "  locate QUERY [--path SUBSTR] [--limit N]    ranked hybrid search (BM25 + names + phrase)\n"
+          "  locate QUERY [--path SUBSTR] [--limit N] [--embed N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
           "  serve [--clangd[=EXE]|--lsp [--no-gate]]        JSON-RPC 2.0, one object per line on stdio\n"
           "  mcp [--clangd[=EXE]|--lsp [--no-gate]]         MCP stdio bridge\n",
@@ -435,6 +435,7 @@ int main(int argc, char **argv) {
             int64_t n;
             if (k + 1 < nargs && strcmp(args[k], "--path") == 0) j_set(p, "path", j_str(args[++k]));
             else if (k + 1 < nargs && strcmp(args[k], "--limit") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "limit", j_int(n)), k++;
+            else if (k + 1 < nargs && strcmp(args[k], "--embed") == 0 && parse_int(args[k + 1], &n) == 0) j_set(p, "embed_budget", j_int(n)), k++;
             else {
                 json_free(p);
                 goto bad;

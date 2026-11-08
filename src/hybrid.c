@@ -12,6 +12,7 @@
  * hash, so a query after a small edit re-tokenizes only the changed files. All arithmetic is plain
  * IEEE with no libm and a fixed evaluation order, so results are identical on every platform. */
 #include "semantic.h"
+#include "embed.h"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,9 @@ typedef struct {
     uint32_t nbt, nnt;    /* pair counts */
     uint32_t blen, nlen;  /* token totals */
     float *vec;           /* DIM floats, NULL when not (yet) embeddable */
+    uint64_t ekey;        /* key of the external embedding of this chunk (0: no embedder) */
+    char *etext;          /* text for the external model, kept until it has been embedded */
+    uint32_t elen;
 } HChunk;
 
 typedef struct {
@@ -100,6 +104,8 @@ typedef struct {
     size_t nrow, rowcap;
     uint32_t *df;
     size_t dfcap;
+    Embedder *emb; /* external model from .aed/embed.json, or NULL */
+    bool emb_tried;
 } Hyb;
 
 static void hfile_free(HFile *f) {
@@ -109,6 +115,7 @@ static void hfile_free(HFile *f) {
         free(f->c[i].bt);
         free(f->c[i].nt);
         free(f->c[i].vec);
+        free(f->c[i].etext);
     }
     free(f->c);
     free(f->path);
@@ -124,6 +131,7 @@ static void hyb_free(void *p) {
     free(h->W);
     free(h->row);
     free(h->df);
+    embed_close(h->emb);
     free(h);
 }
 
@@ -337,6 +345,20 @@ static void build_file(Hyb *h, Sem *s, HFile *hf, size_t fi) {
         }
         tokenize(rel, strlen(rel), collect_emit, &col);
         c->nnt = compress(&col.ids, &c->nt, &c->nlen);
+        if (h->emb) { /* what the external model will see: the label, then the chunk, cut at max_chars */
+            Buf et;
+            buf_init(&et);
+            if (cur) buf_printf(&et, "%s %s\n", cur->kind, cur->name);
+            size_t room = embed_max_chars(h->emb), take = e - a < room ? e - a : room;
+            while (take > 0 && take < e - a && ((unsigned char)text[a + take] & 0xC0) == 0x80) take--;
+            buf_put(&et, text + a, take);
+            c->ekey = embed_key(h->emb, et.p ? et.p : "", et.len);
+            if (embed_get(h->emb, c->ekey)) buf_free(&et);
+            else {
+                c->elen = (uint32_t)et.len;
+                c->etext = buf_take(&et);
+            }
+        }
         first = line;
     }
     free(col.ids.v);
@@ -567,7 +589,7 @@ typedef struct {
     uint32_t file, idx;
 } Ref;
 
-int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit, J **out) {
+int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit, size_t embed_budget, J **out) {
     size_t qn = strlen(query);
     if (qn == 0) return na_fail("invalid parameter: query must not be empty");
     if (limit == 0 || limit > 100) limit = 10;
@@ -577,6 +599,11 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         h = na_alloc(sizeof *h);
         memset(h, 0, sizeof *h);
         wsi_set_user(s->ix, h, hyb_free);
+    }
+    char *cfg_err = NULL;
+    if (!h->emb_tried) {
+        h->emb_tried = true;
+        h->emb = embed_open(store_root(s->st), &cfg_err);
     }
     refresh_cache(h, s);
     if (h->built != h->version || !h->row) build_embeddings(h);
@@ -666,24 +693,90 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         }
     }
 
-    double *rb = na_alloc((nch + 1) * sizeof *rb), *rn = na_alloc((nch + 1) * sizeof *rn), *re = na_alloc((nch + 1) * sizeof *re);
-    ranks_of(score[0], nch, 0, rb);
-    ranks_of(score[1], nch, 0, rn);
-    ranks_of(sem, nch, 0.15, re);
+    double *ext = na_alloc((nch + 1) * sizeof *ext);
+    for (size_t i = 0; i < nch; i++) ext[i] = 0;
+    double *rb = na_alloc((nch + 1) * sizeof *rb), *rn = na_alloc((nch + 1) * sizeof *rn), *re = na_alloc((nch + 1) * sizeof *re),
+           *rx = na_alloc((nch + 1) * sizeof *rx);
     Rank *fin = na_alloc((nch + 1) * sizeof *fin);
-    size_t nfin = 0;
-    for (size_t i = 0; i < nch; i++) {
-        double v = 0;
-        if (rb[i] > 0) v += 1.0 / (60.0 + rb[i]);
-        if (rn[i] > 0) v += 1.5 / (60.0 + rn[i]);
-        if (re[i] > 0) v += 0.8 / (60.0 + re[i]);
-        if (v <= 0) continue;
-        const HChunk *c = CH(i);
-        v *= kind_factor(c);
-        if (c->sym && strcmp(c->sym, query) == 0) v += 0.05; /* the query IS the symbol name */
-        fin[nfin++] = (Rank){v, (uint32_t)i};
+    size_t nfin = 0, embedded_now = 0;
+    char *emb_err = NULL;
+    bool use_ext = false;
+    for (int pass = 0; pass < 2; pass++) {
+        ranks_of(score[0], nch, 0, rb);
+        ranks_of(score[1], nch, 0, rn);
+        ranks_of(sem, nch, 0.15, re);
+        ranks_of(ext, nch, 0, rx);
+        nfin = 0;
+        for (size_t i = 0; i < nch; i++) {
+            double v = 0;
+            if (rb[i] > 0) v += 1.0 / (60.0 + rb[i]);
+            if (rn[i] > 0) v += 1.5 / (60.0 + rn[i]);
+            if (re[i] > 0) v += (use_ext ? 0.4 : 0.8) / (60.0 + re[i]);
+            if (rx[i] > 0) v += 1.6 / (60.0 + rx[i]);
+            if (v <= 0) continue;
+            const HChunk *c = CH(i);
+            v *= kind_factor(c);
+            if (c->sym && strcmp(c->sym, query) == 0) v += 0.05; /* the query IS the symbol name */
+            fin[nfin++] = (Rank){v, (uint32_t)i};
+        }
+        qsort(fin, nfin, sizeof *fin, cmp_rank);
+        if (pass == 1 || !h->emb) break;
+
+        /* external model: embed the query and, within the budget, the best chunks that have no vector yet */
+        size_t cap = embed_budget + 1;
+        const char **tx = na_alloc(cap * sizeof *tx);
+        size_t *tl = na_alloc(cap * sizeof *tl);
+        HChunk **todo = na_alloc(cap * sizeof *todo);
+        size_t k = 0;
+        tx[0] = query;
+        tl[0] = qn;
+        bool *taken = na_alloc((nch + 1) * sizeof *taken);
+        for (size_t r = 0; r < nfin && k < embed_budget; r++) {
+            HChunk *c = &h->f[ref[fin[r].id].file].c[ref[fin[r].id].idx];
+            if (!c->etext) continue;
+            taken[fin[r].id] = true;
+            todo[k] = c;
+            tx[k + 1] = c->etext;
+            tl[k + 1] = c->elen;
+            k++;
+        }
+        for (size_t i = 0; i < nch && k < embed_budget; i++) { /* then the rest, in file order */
+            HChunk *c = &h->f[ref[i].file].c[ref[i].idx];
+            if (!c->etext || taken[i]) continue;
+            todo[k] = c;
+            tx[k + 1] = c->etext;
+            tl[k + 1] = c->elen;
+            k++;
+        }
+        free(taken);
+
+        if (embed_texts(h->emb, tx, tl, k + 1) != 0) {
+            emb_err = na_strdup(na_errmsg());
+        } else {
+            for (size_t j = 0; j < k; j++) {
+                free(todo[j]->etext);
+                todo[j]->etext = NULL;
+            }
+            embedded_now = k;
+        }
+        embed_flush(h->emb);
+        free(tx);
+        free(tl);
+        free(todo);
+        const float *qv = embed_dim(h->emb) ? embed_get(h->emb, embed_key(h->emb, query, qn)) : NULL;
+        if (!qv) continue;
+        size_t dim = embed_dim(h->emb);
+        for (size_t i = 0; i < nch; i++) {
+            const HChunk *c = CH(i);
+            const float *v = c->ekey ? embed_get(h->emb, c->ekey) : NULL;
+            if (!v) continue;
+            double dot = 0;
+            for (size_t d = 0; d < dim; d++) dot += (double)qv[d] * v[d];
+            ext[i] = dot;
+            use_ext = true;
+        }
     }
-    qsort(fin, nfin, sizeof *fin, cmp_rank);
+
 
     /* exact phrase: checked on the best candidates only (needs the file text) */
     size_t cand = nfin < 60 ? nfin : 60;
@@ -771,7 +864,25 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
     j_set(o, "chunks", j_int((int64_t)nch));
     j_set(o, "truncated", j_bool(nfin > limit));
     j_set(o, "matches", arr);
+    if (h->emb) {
+        J *em = j_obj();
+        size_t pending = 0;
+        for (size_t i = 0; i < nch; i++)
+            if (h->f[ref[i].file].c[ref[i].idx].etext) pending++;
+        j_set(em, "model", j_str(embed_model(h->emb)));
+        j_set(em, "used", j_bool(use_ext));
+        j_set(em, "embedded_now", j_int((int64_t)embedded_now));
+        j_set(em, "pending", j_int((int64_t)pending));
+        if (emb_err) j_set(em, "error", j_str(emb_err));
+        j_set(o, "embedding", em);
+    } else if (cfg_err) {
+        J *em = j_obj();
+        j_set(em, "error", j_str(cfg_err));
+        j_set(o, "embedding", em);
+    }
     *out = o;
+    free(emb_err);
+    free(cfg_err);
 
     free(fin);
     free(score[0]);
@@ -780,6 +891,8 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
     free(rb);
     free(rn);
     free(re);
+    free(rx);
+    free(ext);
     free(qid);
     free(ref);
     free(lq);

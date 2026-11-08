@@ -189,7 +189,22 @@ Add or override servers in `<root>/.aed/lsp.json`:
 
 Servers installed as `.cmd`/`.bat` shims (typical for npm packages on Windows) must be wrapped, e.g. `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
 
+### Embedding model (optional)
+
+`locate` works without any model (BM25 plus embeddings learned from your own code). To add a real
+model, create `.aed/embed.json`:
+
+```
+{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "nomic-embed-text"}   # Ollama, llama.cpp server, LM Studio, vLLM...
+{"command": "my-embedder", "args": "--fast"}                                    # any program: {"input":[...]} -> {"embeddings":[[...]]} per line
+```
+
+Plain HTTP only, no DNS and no TLS (put a local proxy in front of a remote or https service, or use
+`command`). Each chunk is sent once and cached in `.aed/embed.cache`; `locate --embed N` caps new chunks per query.
+
 ## clangd diagnostic gate
+
+
 
 With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` is validated **before** it is committed:
 

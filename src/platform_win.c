@@ -496,3 +496,90 @@ void pf_proc_close(PfProc *p, int graceful_ms) {
     if (p->out_r) CloseHandle(p->out_r);
     free(p);
 }
+
+/* ---- TCP client (Winsock; resolved from ws2_32.dll at link time) ---- */
+int WSAStartup(uint16_t version, void *data);
+uintptr_t socket(int af, int type, int protocol);
+int connect(uintptr_t s, const void *addr, int len);
+int send(uintptr_t s, const void *buf, int len, int flags);
+int recv(uintptr_t s, void *buf, int len, int flags);
+int closesocket(uintptr_t s);
+int setsockopt(uintptr_t s, int level, int name, const void *val, int len);
+int WSAGetLastError(void);
+
+struct PfSock {
+    uintptr_t s;
+};
+
+static bool parse_ipv4(const char *host, uint8_t out[4]) {
+    if (strcmp(host, "localhost") == 0) host = "127.0.0.1";
+    const char *p = host;
+    for (int i = 0; i < 4; i++) {
+        if (*p < '0' || *p > '9') return false;
+        unsigned v = 0;
+        while (*p >= '0' && *p <= '9') v = v * 10 + (unsigned)(*p++ - '0');
+        if (v > 255 || (i < 3 && *p++ != '.')) return false;
+        out[i] = (uint8_t)v;
+    }
+    return *p == 0;
+}
+
+PfSock *pf_tcp_connect(const char *host, int port, int timeout_ms) {
+    static bool started;
+    if (!started) {
+        unsigned char wsadata[512];
+        if (WSAStartup(0x0202, wsadata) != 0) {
+            na_seterr("cannot initialise Winsock");
+            return NULL;
+        }
+        started = true;
+    }
+    uint8_t ip[4];
+    if (!parse_ipv4(host, ip)) {
+        na_seterr("embedding url: host must be an IPv4 address or localhost (got %s)", host);
+        return NULL;
+    }
+    uintptr_t s = socket(2, 1, 6);
+    if (s == (uintptr_t)-1) {
+        na_seterr("cannot create socket");
+        return NULL;
+    }
+    DWORD ms = (DWORD)timeout_ms;
+    setsockopt(s, 0xffff, 0x1005, &ms, sizeof ms);
+    setsockopt(s, 0xffff, 0x1006, &ms, sizeof ms);
+    unsigned char sa[16] = {2, 0, (unsigned char)(port >> 8), (unsigned char)port, ip[0], ip[1], ip[2], ip[3]};
+    if (connect(s, sa, sizeof sa) != 0) {
+        closesocket(s);
+        na_seterr("cannot connect to %s:%d", host, port);
+        return NULL;
+    }
+    PfSock *k = na_alloc(sizeof *k);
+    k->s = s;
+    return k;
+}
+
+int pf_sock_write(PfSock *k, const void *data, size_t n) {
+    const char *p = data;
+    while (n > 0) {
+        int w = send(k->s, p, n > 65536 ? 65536 : (int)n, 0);
+        if (w <= 0) return -1;
+        p += w;
+        n -= (size_t)w;
+    }
+    return 0;
+}
+
+int pf_sock_read(PfSock *k, void *buf, size_t cap, int timeout_ms) {
+    DWORD ms = (DWORD)(timeout_ms < 1 ? 1 : timeout_ms);
+    setsockopt(k->s, 0xffff, 0x1006, &ms, sizeof ms);
+    int r = recv(k->s, buf, cap > 65536 ? 65536 : (int)cap, 0);
+    if (r > 0) return r;
+    if (r < 0 && WSAGetLastError() == 10060) return 0; /* WSAETIMEDOUT */
+    return -1;
+}
+
+void pf_sock_close(PfSock *k) {
+    if (!k) return;
+    closesocket(k->s);
+    free(k);
+}

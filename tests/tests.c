@@ -1,6 +1,7 @@
 /* NextAgent test suite (C23, built with nextc). Run: build.ps1 test */
 #include "../src/c23.h"
 #include "../src/core.h"
+#include "../src/embed.h"
 #include "../src/index.h"
 #include "../src/json.h"
 #include "../src/lsp.h"
@@ -1572,7 +1573,89 @@ static void test_hybrid(void) {
     free(ws);
 }
 
+/* `tests --fake-embed`: an embedding model that speaks the JSON-lines protocol (words hashed into 16 dims) */
+static int fake_embed(void) {
+    char line[65536];
+    while (fgets(line, sizeof line, stdin)) {
+        J *req = json_parse(line, strlen(line));
+        const J *in = req ? j_get(req, "input") : NULL;
+        Buf out;
+        buf_init(&out);
+        buf_puts(&out, "{\"embeddings\":[");
+        for (size_t i = 0; in && i < in->n; i++) {
+            double v[16] = {0};
+            const char *s = in->items[i]->s;
+            for (size_t k = 0; s[k];) {
+                size_t a = k;
+                unsigned h = 7;
+                while (s[k] && isalnum((unsigned char)s[k])) h = h * 31 + (unsigned char)tolower((unsigned char)s[k++]);
+                if (k > a) v[h % 16] += 1;
+                else k++;
+            }
+            buf_printf(&out, "%s[", i ? "," : "");
+            for (int d = 0; d < 16; d++) buf_printf(&out, "%s%g", d ? "," : "", v[d]);
+            buf_puts(&out, "]");
+        }
+        buf_puts(&out, "]}\n");
+        fwrite(out.p, 1, out.len, stdout);
+        fflush(stdout);
+        buf_free(&out);
+        json_free(req);
+    }
+    return 0;
+}
+
+static void test_embed(void) {
+    g_test = "embed";
+    /* HTTP framing */
+    const char *ok = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    Buf body;
+    buf_init(&body);
+    int status = 0;
+    CHECK(embed_http_parse(ok, strlen(ok), &status, &body) == 1 && status == 200 && body.len == 5 && memcmp(body.p, "hello", 5) == 0);
+    CHECK(embed_http_parse(ok, strlen(ok) - 2, &status, &body) == 0); /* body not complete yet */
+    const char *ch = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n4\r\ndefg\r\n0\r\n\r\n";
+    CHECK(embed_http_parse(ch, strlen(ch), &status, &body) == 1 && body.len == 7 && memcmp(body.p, "abcdefg", 7) == 0);
+    CHECK(embed_http_parse(ch, strlen(ch) - 9, &status, &body) == 0);
+    CHECK(embed_http_parse("garbage\r\n\r\n", 11, &status, &body) == -1);
+    buf_free(&body);
+
+    /* config errors */
+    char *ws = new_ws(), *err = NULL;
+    CHECK(embed_open(ws, &err) == NULL && err == NULL); /* not configured */
+    char cfgpath[600];
+    snprintf(cfgpath, sizeof cfgpath, "%s/.aed/embed.json", ws);
+    put_file(ws, ".aed/embed.json", "{\"url\":\"https://example.com/v1/embeddings\"}");
+    CHECK(embed_open(ws, &err) == NULL && err && strstr(err, "http://"));
+    free(err);
+
+    /* command mode end to end through hybrid_search, with the cache surviving a restart */
+    char cfg[1200];
+    snprintf(cfg, sizeof cfg, "{\"command\":\"%s\",\"args\":\"--fake-embed\",\"model\":\"t16\",\"batch\":2}", g_self);
+    put_file(ws, ".aed/embed.json", cfg);
+    put_file(ws, "a.c", "/* writes everything to disk */\nint flush_all(void) { return 1; }\n");
+    put_file(ws, "b.c", "int draw_button(int x) { return x; }\nint draw_label(int x) { return x; }\n");
+    for (int round = 0; round < 2; round++) {
+        Store *st = store_open(ws);
+        Rpc r;
+        memset(&r, 0, sizeof r);
+        r.store = st;
+        J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"hybrid_search\",\"params\":{\"query\":\"write to disk\"}}");
+        const J *res = a ? j_get(a, "result") : NULL, *em = res ? j_get(res, "embedding") : NULL;
+        CHECK(em && j_get(em, "used")->b && !j_get(em, "error"));
+        CHECK(em && j_get(em, "pending")->i == 0);
+        CHECK(em && (round == 0 ? j_get(em, "embedded_now")->i >= 3 : j_get(em, "embedded_now")->i == 0)); /* cached on disk */
+        const J *m = res ? j_get(res, "matches") : NULL;
+        CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "flush_all") == 0);
+        json_free(a);
+        rpc_release(&r);
+        store_close(st);
+    }
+    free(ws);
+}
+
 static void test_agent_tools(void) {
+
 
     g_test = "agent_tools";
     char *ws = new_ws();
@@ -1626,6 +1709,7 @@ static void test_agent_tools(void) {
 
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
+    if (argc > 1 && strcmp(argv[1], "--fake-embed") == 0) return fake_embed();
     {
         char *self = pf_fullpath(argv[0]);
         snprintf(g_self, sizeof g_self, "%s", self ? self : argv[0]);
@@ -1658,6 +1742,7 @@ int main(int argc, char **argv) {
     RUN(test_semantic);
     RUN(test_live_semantic);
     RUN(test_hybrid);
+    RUN(test_embed);
     RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);

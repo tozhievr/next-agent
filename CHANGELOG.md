@@ -2,7 +2,15 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.32.0 - 2026-11-09
+
+### Added
+- External embedding model for `locate` / `hybrid_search`, configured in `.aed/embed.json`, with our own small caller and no heavy backend: `{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "..."}` (OpenAI-style or Ollama `/api/embed`, plain HTTP over a built-in TCP client: Winsock on Windows, raw syscalls on Linux, no DNS, no TLS) or `{"command": "exe", "args": "..."}` (JSON lines on stdin/stdout). Optional `api_key_env`, `batch`, `timeout_ms`, `max_chars`.
+- The model becomes a fourth ranking signal (kNN, cosine). Vectors are normalised and cached in `.aed/embed.cache` keyed by model and text, so each chunk is sent once; `locate --embed N` / `embed_budget` limits how many new chunks one query embeds (default 256, best candidates first), the result reports `embedding.pending`. A model whose vector size differs from the cache resets it. Backend errors never fail a search; they are reported in `embedding.error`.
+- Platform layer: `pf_tcp_connect/pf_sock_*` (IPv4 literal or `localhost`).
+
 ## 0.31.0 - 2026-11-09
+
 
 ### Added
 - `locate` / `hybrid_search` now has a third signal: kNN over local embeddings. "Random indexing" learns from the workspace itself which words occur in the same code (no model, no network, deterministic), chunk and query vectors are weighted sums of word vectors, similarity is the cosine; fused with BM25 over code words and BM25 over symbol/path names by weighted reciprocal rank fusion.
