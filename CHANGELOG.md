@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.29.0 - 2026-11-08
+
+### Added
+- Agent ergonomics (fewer calls, fewer tokens): `search` (grep over the index with context), `patch` (many literal replacements across files as one revision), `view --symbol NAME`, `--brief` compact output (`NEXTAGENT_BRIEF=1`).
+- Every CLI command that changes text now writes it to disk right away (`--no-sync` to keep it in the journal only); before, forgetting `sync` left the disk behind the journal.
+- `symbol_not_found` lists similar names; `ambiguous_symbol` lists the candidates with kind and line.
+
+### Changed
+- CHANGELOG.md is UTF-8 (it contained a stray Windows-1252 byte NextAgent itself rejected).
+
 ## 0.28.0 - 2026-11-08
 
 ### Added
@@ -36,10 +46,10 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - `build.py`: builds with clang + libc23 (vendored in `vendor/libc23`) for Windows or Linux; `test` runs the suite.
 - Cross-platform parity check (`tests/parity.py`, `tests/parity.golden`): identical output on Windows and Linux.
 
-## 0.24.0 � 2026-11-08
+## 0.24.0 — 2026-11-08
 
 ### Added
-- Language server hub (`serve --lsp`, `mcp --lsp`): other languages through any LSP server � clangd, pyright/pylsp, rust-analyzer, gopls, typescript-language-server, zls, lua-language-server � chosen by file extension, started on demand, configurable in `.aed/lsp.json`.
+- Language server hub (`serve --lsp`, `mcp --lsp`): other languages through any LSP server — clangd, pyright/pylsp, rust-analyzer, gopls, typescript-language-server, zls, lua-language-server — chosen by file extension, started on demand, configurable in `.aed/lsp.json`.
 - `outline`, `select` and `replace_symbol` for non-C files via `textDocument/documentSymbol`; the diagnostic gate validates edits to those files too.
 - Incremental document sync: edits are sent as ranged `didChange` (common prefix/suffix trimmed) when the server advertises incremental sync.
 - `lsp_servers` method and MCP tool.
@@ -48,7 +58,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - `ClangdClient` is now the generic `LspClient` (old names remain as aliases); documents are tracked per client, reopening a document starts a fresh version space.
 
-## 0.23.0 � 2026-11-08
+## 0.23.0 — 2026-11-08
 
 ### Added
 - Incremental C23 outline: a per-document cache finds the changed byte range, re-lexes only a small window around it and splices the result with the unchanged top-level items (including nested symbols). JSON-RPC/MCP servers keep up to 32 caches; a one-character edit in a 40 KB file lexes about 11% of the tokens of a full scan. A differential fuzz test (300 random edits) checks that the cache is identical to a from-scratch scan.
@@ -56,12 +66,12 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - A function whose body is never closed is now handled like the unterminated tail of the file, so results no longer depend on how much text follows it.
 
-## 0.22.0 — 2026-11-08
+## 0.22.0 â€” 2026-11-08
 
 ### Changed
 - Journal commits no longer store the full document text on every revision: a full text is written only as a checkpoint (first revision of a document, or once accumulated deltas outweigh the text); other revisions carry only forward/inverse edits. A 56 KB file edited 60 times now journals about 1x its size instead of about 60x. Old journals remain readable; journals written by 0.22 are not readable by older versions.
 
-## 0.21.0 — 2026-11-08
+## 0.21.0 â€” 2026-11-08
 
 ### Added
 - M3 refactoring (syntactic, comment/string/`#include`-aware): `references`, `rename`, `add_param`, `add_include`, `find_symbols` as CLI commands, JSON-RPC methods and MCP tools. Multi-file edits commit as one revision and see unflushed documents.
@@ -69,7 +79,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Test sources no longer depend on the compiler's encoding of non-ASCII string literals.
 
-## 0.20.1 — 2026-11-06
+## 0.20.1 â€” 2026-11-06
 
 ### Added
 - Build with clang: `./build.ps1 -Compiler clang` (or `NA_COMPILER=clang ./build.sh`); stdio is switched to binary mode under the MSVC CRT.
@@ -80,7 +90,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Changed
 - CI now builds and tests with clang (always) and with nextc (optional, when `NEXTC_REPO` is set).
 
-## 0.20.0 — 2026-11-06
+## 0.20.0 â€” 2026-11-06
 
 ### Changed (breaking)
 - Complete rewrite in C23, built with the nextc compiler; no Python, SQLite or tree-sitter dependency.
@@ -105,14 +115,14 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - CI workflow rewritten but not yet run.
 - clangd does not re-diagnose unchanged dependents for semantic changes to an overlay header.
 
-## 0.19.1 — 2026-11-06
+## 0.19.1 â€” 2026-11-06
 
 ### Fixed
 - Reject virtual document inventories without a snapshot reader, rather than attempting to read nonexistent disk files.
 - Use a set for virtual path membership during bounded dependency traversal.
 - Added guard and file-limit tests.
 
-## 0.19.0 — 2026-11-06
+## 0.19.0 â€” 2026-11-06
 
 ### Added
 - Public read-only Store.snapshot_paths() enumerates tracked document heads, including unflushed new files.
@@ -123,7 +133,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Limitations
 - clangd may not resolve Store-only headers from dependent translation units without filesystem materialization; diagnostic gate is not a complete virtual filesystem.
 
-## 0.18.4 — 2026-11-06
+## 0.18.4 â€” 2026-11-06
 
 ### Fixed
 - Dependency traversal now recognizes changed unflushed headers in the Store even if they do not yet exist on disk.
@@ -133,7 +143,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Limitations
 - Unflushed source files are still not enumerated by the dependency scanner.
 
-## 0.18.3 — 2026-11-06
+## 0.18.3 â€” 2026-11-06
 
 ### Fixed
 - DiagnosticGate captures bounded C/C++ filesystem path inventory and compile_commands.json bytes during validation.
@@ -144,12 +154,12 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Build-state check does not freeze external filesystem; paths can change after recheck and before commit.
 - Only C/C++ source/header path inventory and two supported compilation database locations are tracked.
 
-## 0.18.2 — 2026-11-06
+## 0.18.2 â€” 2026-11-06
 
 ### Fixed
 - Updated transaction-boundary regression test for speculative validation outside SQLite BEGIN IMMEDIATE, as intended since v0.18.0.
 
-## 0.18.1 — 2026-11-06
+## 0.18.1 â€” 2026-11-06
 
 ### Fixed
 - DiagnosticGate records the dependent document texts read during validation.
@@ -159,7 +169,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Limitations
 - Filesystem discovery and compile_commands.json may still change during validation without detection; read-set covers document contents only.
 
-## 0.18.0 — 2026-11-06
+## 0.18.0 â€” 2026-11-06
 
 ### Changed
 - Store.edit performs optional diagnostic validation before BEGIN IMMEDIATE, reducing SQLite writer lock duration during clangd waits.
@@ -169,7 +179,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Limitations
 - Optimistic preflight may need retry on stale revisions; dependency files are not individually rechecked after validation.
 
-## 0.17.0 — 2026-11-06
+## 0.17.0 â€” 2026-11-06
 
 ### Added
 - Public read-only Store.snapshot_text(name) accessor that does not import documents, write to SQLite or commit active transactions.
@@ -178,13 +188,13 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Removed private Store._doc reader usage from LSP snapshot tests and gate wiring.
 
-## 0.16.1 — 2026-11-06
+## 0.16.1 â€” 2026-11-06
 
 ### Fixed
 - Corrected SQLite snapshot dependency regression test to close its implicit read transaction before a subsequent edit.
 - v0.14.0 CI revealed the failure on all three platforms; latest CI is pending.
 
-## 0.16.0 — 2026-11-06
+## 0.16.0 â€” 2026-11-06
 
 ### Added
 - Per-translation-unit include search paths from compile_commands.json.
@@ -195,7 +205,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Multiple commands for one source are conservatively merged; -iquote/-I order is not modeled separately.
 - No macro or conditional preprocessing, external include directories, response files or generated headers.
 
-## 0.15.0 — 2026-11-06
+## 0.15.0 â€” 2026-11-06
 
 ### Added
 - Conservative compile_commands.json reader for -I, -iquote and /I directories.
@@ -207,7 +217,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - No macros, conditional compilation, response files, system includes, external include paths or compiler driver evaluation.
 - The implementation deliberately rejects include directories outside the workspace.
 
-## 0.14.0 — 2026-11-06
+## 0.14.0 â€” 2026-11-06
 
 ### Added
 - Optional snapshot_text reader for dependency discovery, allowing current unflushed SQLite include directives to drive transitive dependency scans.
@@ -218,7 +228,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Files must exist on disk to be enumerated by the scanner; newly created Store-only paths are not yet included.
 - Macro/conditional includes and compile_commands.json are not yet supported.
 
-## 0.13.1 — 2026-11-06
+## 0.13.1 â€” 2026-11-06
 
 ### Fixed
 - JSON-RPC clangd gate now reads unchanged dependent documents from the SQLite Store snapshot instead of the potentially stale filesystem.
@@ -228,7 +238,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Include dependency discovery still reads on-disk directives, not unsynced Store content.
 - Uses a private Store reader during validation; a public snapshot accessor is planned.
 
-## 0.13.0 — 2026-11-06
+## 0.13.0 â€” 2026-11-06
 
 ### Added
 - DiagnosticGate now opens discovered transitive literal-include dependent translation units and checks their diagnostics before committing header changes.
@@ -238,7 +248,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Dependency graph uses on-disk quoted includes; unchanged unsynced SQLite documents and compile_commands include paths are not represented.
 - The gate is conservative, but not a complete compilation database or preprocessor-aware validator.
 
-## 0.12.0 — 2026-11-06
+## 0.12.0 â€” 2026-11-06
 
 ### Added
 - Bounded transitive dependency discovery for literal quoted C/C++ includes.
@@ -248,13 +258,13 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Dependency discovery is not yet wired into DiagnosticGate; this is groundwork only.
 - Does not resolve macro includes, conditional compilation, -I search paths, generated headers or compile_commands.json.
 
-## 0.11.1 — 2026-11-06
+## 0.11.1 â€” 2026-11-06
 
 ### Tests
 - Added live clangd multi-file diagnostic rejection test on Ubuntu CI.
 - Confirmed v0.11.0 Ubuntu CI passed with real clangd; Windows and macOS results were still pending at time of update.
 
-## 0.11.0 — 2026-11-06
+## 0.11.0 â€” 2026-11-06
 
 ### Added
 - Batch diagnostic gate opens all changed documents, collects baseline reports, then stages all candidate overlays before comparing diagnostics.
@@ -264,14 +274,14 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Only changed documents are checked; unchanged dependent translation units are not yet included.
 - Live clangd compatibility and CI remain under verification.
 
-## 0.10.1 — 2026-11-06
+## 0.10.1 â€” 2026-11-06
 
 ### Fixed
 - JSON-RPC now returns structured errors for clangd diagnostic timeouts and connection failures instead of terminating the server.
 - Added regression tests proving the server continues processing subsequent requests and preserves the SQLite revision.
 - Normalized import order for Ruff.
 
-## 0.10.0 — 2026-11-06
+## 0.10.0 â€” 2026-11-06
 
 ### Added
 - Diagnostic validation for Store.undo and JSON-RPC history undo, preserving atomic rollback on rejection.
@@ -281,21 +291,21 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Limitations
 - Multi-file cross-dependency analysis is not yet implemented; live diagnostic test may expose clangd compatibility issues.
 
-## 0.9.2 — 2026-11-06
+## 0.9.2 â€” 2026-11-06
 
 ### Fixed
 - Ruff UP035 import errors in JSON-RPC and SQLite modules.
 - CI now installs clangd on Ubuntu and runs the real LSP smoke test with Python 3.16.0a1.
 
-## 0.9.1 — 2026-11-06
+## 0.9.1 â€” 2026-11-06
 
 ### Fixed
 - Corrected clangd client lock initialization and serialized LSP writes.
 - Added opt-in real clangd smoke test and version consistency regression test.
 - Repaired escaped newline formatting in documentation.
 
-## 0.9.0 — 2026-11-06
-\n### Added\n- Optional `nextagent serve --clangd` mode enforcing diagnostic validation for JSON-RPC edits and symbol replacements.\n- Server lifecycle owns clangd client, and injected validators enable regression tests without clangd installation.\n\n### Limitations\n- Strict mode rejects unversioned or missing diagnostics; live clangd end-to-end verification is pending.\n- Cross-file diagnostic regressions and history undo are not covered by the gate.\n\n## 0.8.0 — 2026-11-06\n\n### Added\n- Opt-in pre-commit Store validator callback, executed inside the SQLite transaction before revision creation.\n- DiagnosticGate for clangd candidate overlays, versioned diagnostics and regression rejection.\n- Version-aware wait for clangd diagnostics and mock-based Store rollback tests.\n\n### Limitations\n- DiagnosticGate is Python API only; not wired into CLI/JSON-RPC. No live clangd integration test.\n- Fail closed on clangd diagnostics without a version; cross-file diagnostics are not yet validated.\n\n## 0.7.0 — 2026-11-06\n\n### Added\n- Diagnostic delta comparison with duplicate-aware error/warning detection.\n- Fail-closed validation of LSP diagnostic report versions.\n- Tests for new errors, warnings, duplicates, reordering and stale diagnostics.\n\n### Fixed\n- UTF-8 CJK position test now uses byte offsets, resolving the v0.5.0 CI failure.\n\n### Limitations\n- Validation is a standalone component; no Store pre-commit gate or rollback integration yet.\n\n## 0.6.0 — 2026-11-06\n\n### Added\n- Experimental clangd subprocess LSP client with initialize/shutdown lifecycle, request correlation and timeouts.\n- didOpen/didChange notifications, diagnostics capture and formatting requests.\n- Unit tests for missing executable, request correlation and workspace boundary.\n\n### Limitations\n- Not wired into editor JSON-RPC; formatting edits are returned, not applied. No diagnostics delta/rollback yet.\n\n## 0.5.0 — 2026-11-06\n\n### Added\n- Strict LSP position codecs for UTF-8, UTF-16 and UTF-32.\n- Binary Content-Length LSP framing with size limits and malformed-frame rejection.\n- Unicode and protocol framing regression tests.\n\n### Limitations\n- clangd subprocess, lifecycle, diagnostics and formatting are not yet integrated.\n\n## 0.4.0 — 2026-11-06\n\n### Added\n- Scoped nested C23 type/field navigation and ambiguity-safe selection.\n- Revision-guarded JSON-RPC `replace_symbol` for entire syntactic declarations.\n- Tests for scoped field lookup and stale revision rejection.\n\n### Limitations\n- No semantic name resolution, cross-file references or validation of replacement text.\n\n## 0.3.0 — 2026-11-06\n\n### Added\n- Initial C23 tree-sitter syntax navigation: outline, exact-name select, byte-to-Unicode offset mapping.\n- CLI and JSON-RPC outline/select operations, tests for Unicode and ambiguous names.\n\n### Limitations\n- Only top-level syntactic declarations; no cross-file resolution, LSP, refactoring or complete C23 semantic model.\n\n## 0.2.0 — 2026-11-06
+## 0.9.0 â€” 2026-11-06
+\n### Added\n- Optional `nextagent serve --clangd` mode enforcing diagnostic validation for JSON-RPC edits and symbol replacements.\n- Server lifecycle owns clangd client, and injected validators enable regression tests without clangd installation.\n\n### Limitations\n- Strict mode rejects unversioned or missing diagnostics; live clangd end-to-end verification is pending.\n- Cross-file diagnostic regressions and history undo are not covered by the gate.\n\n## 0.8.0 â€” 2026-11-06\n\n### Added\n- Opt-in pre-commit Store validator callback, executed inside the SQLite transaction before revision creation.\n- DiagnosticGate for clangd candidate overlays, versioned diagnostics and regression rejection.\n- Version-aware wait for clangd diagnostics and mock-based Store rollback tests.\n\n### Limitations\n- DiagnosticGate is Python API only; not wired into CLI/JSON-RPC. No live clangd integration test.\n- Fail closed on clangd diagnostics without a version; cross-file diagnostics are not yet validated.\n\n## 0.7.0 â€” 2026-11-06\n\n### Added\n- Diagnostic delta comparison with duplicate-aware error/warning detection.\n- Fail-closed validation of LSP diagnostic report versions.\n- Tests for new errors, warnings, duplicates, reordering and stale diagnostics.\n\n### Fixed\n- UTF-8 CJK position test now uses byte offsets, resolving the v0.5.0 CI failure.\n\n### Limitations\n- Validation is a standalone component; no Store pre-commit gate or rollback integration yet.\n\n## 0.6.0 â€” 2026-11-06\n\n### Added\n- Experimental clangd subprocess LSP client with initialize/shutdown lifecycle, request correlation and timeouts.\n- didOpen/didChange notifications, diagnostics capture and formatting requests.\n- Unit tests for missing executable, request correlation and workspace boundary.\n\n### Limitations\n- Not wired into editor JSON-RPC; formatting edits are returned, not applied. No diagnostics delta/rollback yet.\n\n## 0.5.0 â€” 2026-11-06\n\n### Added\n- Strict LSP position codecs for UTF-8, UTF-16 and UTF-32.\n- Binary Content-Length LSP framing with size limits and malformed-frame rejection.\n- Unicode and protocol framing regression tests.\n\n### Limitations\n- clangd subprocess, lifecycle, diagnostics and formatting are not yet integrated.\n\n## 0.4.0 â€” 2026-11-06\n\n### Added\n- Scoped nested C23 type/field navigation and ambiguity-safe selection.\n- Revision-guarded JSON-RPC `replace_symbol` for entire syntactic declarations.\n- Tests for scoped field lookup and stale revision rejection.\n\n### Limitations\n- No semantic name resolution, cross-file references or validation of replacement text.\n\n## 0.3.0 â€” 2026-11-06\n\n### Added\n- Initial C23 tree-sitter syntax navigation: outline, exact-name select, byte-to-Unicode offset mapping.\n- CLI and JSON-RPC outline/select operations, tests for Unicode and ambiguous names.\n\n### Limitations\n- Only top-level syntactic declarations; no cross-file resolution, LSP, refactoring or complete C23 semantic model.\n\n## 0.2.0 â€” 2026-11-06
 
 ### Added
 - NextAgent public identity: `nextagent` CLI, `nextagent` Python package and distribution.
@@ -308,7 +318,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Not yet supported
 - Semantic selectors, tree-sitter, LSP, MCP and Unix socket transport.
 
-## 0.1.1 — 2026-11-06
+## 0.1.1 â€” 2026-11-06
 
 ### Fixed
 - `sync` now compares the latest disk content against the imported baseline, rejecting observed external changes with `disk_conflict` before writing.
@@ -318,7 +328,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 ### Remaining limitations
 - Multi-file disk writes are not transactional and race-free against external processes; three-way merge is scheduled for M4.
 
-## 0.1.0 — 2026-11-06
+## 0.1.0 â€” 2026-11-06
 
 ### Added
 - Initial M0 source-editing foundation: immutable Unicode snapshots and invertible changesets.

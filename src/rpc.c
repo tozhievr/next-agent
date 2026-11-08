@@ -227,13 +227,35 @@ static int m_view(Rpc *r, const J *p, J **out) {
     const char *target;
     if (need_str(p, "target", &target)) return -1;
     int64_t first, last;
-    if (opt_int(p, "start_line", 0, &first) || opt_int(p, "end_line", 0, &last)) return -1;
+    const char *symbol, *kind, *scope;
+    if (opt_int(p, "start_line", 0, &first) || opt_int(p, "end_line", 0, &last) || opt_str(p, "symbol", &symbol) ||
+        opt_str(p, "kind", &kind) || opt_str(p, "scope", &scope))
+        return -1;
     Snapshot *s;
     if (store_view(r->store, target, &s) != 0) return -1;
     J *o = j_obj();
     j_set(o, "rev", j_int(s->rev));
     j_set(o, "path", j_str(target));
     j_set(o, "lines", j_int((int64_t)s->nlines));
+    if (symbol) { /* just the declaration/definition of one symbol */
+        Symbol sym;
+        if (select_any(r, target, s, symbol, kind, scope, &sym) != 0) {
+            json_free(o);
+            snap_free(s);
+            return -1;
+        }
+        size_t bs = cp_to_byte(s->text, s->len, sym.start), be = cp_to_byte(s->text, s->len, sym.end);
+        if (bs == (size_t)-1) bs = s->len;
+        if (be == (size_t)-1) be = s->len;
+        j_set(o, "start_line", j_int((int64_t)sym.line));
+        j_set(o, "text", j_strn(s->text + bs, be - bs));
+        free(sym.name);
+        free(sym.kind);
+        free(sym.scope);
+        snap_free(s);
+        *out = o;
+        return 0;
+    }
     if (first > 0 || last > 0) { /* 1-based inclusive line window */
         size_t a = first > 0 ? (size_t)first - 1 : 0, b = last > 0 ? (size_t)last : s->nlines;
         if (b > s->nlines) b = s->nlines;
@@ -622,6 +644,95 @@ static int m_add_include(Rpc *r, const J *p, J **out) {
     return 0;
 }
 
+static int m_search(Rpc *r, const J *p, J **out) {
+    const char *query, *path;
+    bool word, icase;
+    int64_t context, limit;
+    if (need_str(p, "query", &query) || opt_str(p, "path", &path) || opt_bool(p, "word", false, &word) ||
+        opt_bool(p, "ignore_case", false, &icase) || opt_int(p, "context", 0, &context) || opt_int(p, "limit", 100, &limit))
+        return -1;
+    if (context < 0 || limit < 0) return na_fail("invalid parameter: context and limit must be non-negative");
+    Sem s = sem_of(r);
+    return sem_search(&s, query, word, icase, (size_t)context, path, (size_t)limit, out);
+}
+
+/* Several literal replacements in several files as one revision:
+ * edits: [{path, old, new, all?}], each `old` must match exactly once unless `all`. */
+static int m_patch(Rpc *r, const J *p, J **out) {
+    const J *edits = j_get(p, "edits");
+    const char *label;
+    int64_t if_rev;
+    if (opt_str(p, "label", &label) || opt_int(p, "if_rev", STORE_NO_REV, &if_rev)) return -1;
+    if (!edits || edits->k != J_ARR || edits->n == 0) return na_fail("invalid parameter: edits must be a non-empty array");
+    if (if_rev == STORE_NO_REV) if_rev = store_head(r->store);
+    char **names = na_alloc(edits->n * sizeof *names);
+    Snapshot **snaps = na_alloc(edits->n * sizeof *snaps);
+    ChangeSet *sets = na_alloc(edits->n * sizeof *sets);
+    size_t n = 0;
+    int rc = 0;
+    size_t total = 0;
+    for (size_t e = 0; e < edits->n && rc == 0; e++) {
+        const J *ed = edits->items[e];
+        const J *jp = j_get(ed, "path"), *jo = j_get(ed, "old"), *jn = j_get(ed, "new"), *ja = j_get(ed, "all");
+        if (!j_is_str(jp) || !j_is_str(jo) || !j_is_str(jn) || jo->slen == 0) {
+            rc = na_fail("invalid parameter: edits[%zu] needs path, old (non-empty) and new", e);
+            break;
+        }
+        size_t slot = n;
+        for (size_t k = 0; k < n; k++)
+            if (strcmp(names[k], jp->s) == 0) slot = k;
+        if (slot == n) {
+            if (store_view(r->store, jp->s, &snaps[n]) != 0) {
+                rc = -1;
+                break;
+            }
+            names[n] = na_strdup(jp->s);
+            cs_init(&sets[n]);
+            n++;
+        }
+        const Snapshot *s = snaps[slot];
+        size_t olen, rlen;
+        char *old = adapt_eol(s, jo->s, jo->slen, &olen), *neu = adapt_eol(s, jn->s, jn->slen, &rlen);
+        bool all = ja && ja->k == J_BOOL && ja->b;
+        size_t count = 0;
+        for (size_t i = 0; i + olen <= s->len; i++) {
+            if (memcmp(s->text + i, old, olen) != 0) continue;
+            if (count == 0 || all) {
+                size_t a = utf8_cp_count(s->text, i);
+                cs_add(&sets[slot], a, a + utf8_cp_count(old, olen), neu, rlen);
+                total++;
+            }
+            count++;
+            i += olen - 1;
+        }
+        if (count == 0) rc = na_fail("text_not_found: edits[%zu]: %s does not contain the given text", e, jp->s);
+        else if (count > 1 && !all) rc = na_fail("ambiguous_text: edits[%zu]: %zu matches in %s (add context or set all)", e, count, jp->s);
+        free(old);
+        free(neu);
+    }
+    for (size_t k = 0; rc == 0 && k < n; k++) {
+        cs_sort(&sets[k]);
+        if (cs_validate(&sets[k]) != 0) rc = na_fail("overlapping_edits: %s", names[k]);
+    }
+    EditResult res;
+    if (rc == 0)
+        rc = store_edit(r->store, (const char *const *)names, sets, n, if_rev, label ? label : "patch",
+                        r->session ? r->session : "jsonrpc", validator_of(r), &res);
+    for (size_t k = 0; k < n; k++) {
+        free(names[k]);
+        cs_free(&sets[k]);
+        snap_free(snaps[k]);
+    }
+    free(names);
+    free(snaps);
+    free(sets);
+    if (rc != 0) return -1;
+    *out = edit_result_json(&res);
+    j_set(*out, "replacements", j_int((int64_t)total));
+    edit_result_free(&res);
+    return 0;
+}
+
 static int m_find_symbols(Rpc *r, const J *p, J **out) {
     const char *query, *kind;
     int64_t limit;
@@ -647,7 +758,7 @@ static int m_lsp_servers(Rpc *r, const J *p, J **out) {
 
 static const Method METHODS[] = {
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
-    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"edit", m_edit},      {"history", m_history},
+    {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"lsp_servers", m_lsp_servers},
@@ -733,6 +844,10 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"replacement\":{\"type\":\"string\"},\"if_rev\":{\"type\":\"integer\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"name\",\"replacement\",\"if_rev\"]}"));
     j_push(arr, tool_def("replace_text", "Replace literal text in a document (unique match unless all is set).",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"target\",\"old\",\"new\"]}"));
+    j_push(arr, tool_def("search", "Grep the workspace: one hit per line with optional context (query is literal text).",
+                         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"word\":{\"type\":\"boolean\"},\"ignore_case\":{\"type\":\"boolean\"},\"context\":{\"type\":\"integer\"},\"path\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("patch", "Apply several literal replacements across files as one revision: edits [{path, old, new, all}].",
+                         "{\"type\":\"object\",\"properties\":{\"edits\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"old\":{\"type\":\"string\"},\"new\":{\"type\":\"string\"},\"all\":{\"type\":\"boolean\"}},\"required\":[\"path\",\"old\",\"new\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"edits\"]}"));
     j_push(arr, tool_def("edit", "Apply codepoint-range edits across files in one atomic revision.",
                          "{\"type\":\"object\",\"properties\":{\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"start\":{\"type\":\"integer\"},\"end\":{\"type\":\"integer\"},\"text\":{\"type\":\"string\"}},\"required\":[\"path\",\"start\",\"end\",\"text\"]}},\"if_rev\":{\"type\":\"integer\"},\"label\":{\"type\":\"string\"}},\"required\":[\"ops\"]}"));
     j_push(arr, tool_def("history", "Revision log, undo (optionally of a given rev) or redo.",

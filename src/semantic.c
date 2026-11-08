@@ -463,6 +463,83 @@ int sem_add_param(Sem *s, const char *function, const char *param, const char *d
     return rc;
 }
 
+/* ---- search: grep over the indexed workspace (all languages the index covers) ---- */
+static bool word_char(unsigned char c) { return isalnum(c) || c == '_' || c >= 0x80; }
+
+static J *lines_json(const char *text, const size_t *starts, size_t nl, size_t from, size_t to) {
+    J *arr = j_arr();
+    for (size_t k = from; k < to && k < nl; k++) {
+        size_t a = starts[k], b = k + 1 < nl ? starts[k + 1] : strlen(text);
+        while (b > a && (text[b - 1] == '\n' || text[b - 1] == '\r')) b--;
+        J *o = j_obj();
+        j_set(o, "line", j_int((int64_t)k + 1));
+        j_set(o, "text", j_strn(text + a, b - a));
+        j_push(arr, o);
+    }
+    return arr;
+}
+
+int sem_search(Sem *s, const char *query, bool word, bool ignore_case, size_t context, const char *path_filter,
+               size_t limit, J **out) {
+    size_t qn = strlen(query);
+    if (qn == 0) return na_fail("invalid parameter: query must not be empty");
+    if (limit == 0 || limit > 1000) limit = 100;
+    if (context > 20) context = 20;
+    if (wsi_refresh(s->ix) != 0) return -1;
+    J *arr = j_arr();
+    bool truncated = false;
+    for (size_t f = 0; f < wsi_nfiles(s->ix) && !truncated; f++) {
+        const char *rel = wsi_path(s->ix, f);
+        if (path_filter && *path_filter && !strstr(rel, path_filter)) continue;
+        char *text = NULL;
+        size_t len;
+        if (store_snapshot_text(s->st, rel, &text, &len) != 0 || !utf8_valid(text, len)) {
+            if (text) free(text);
+            continue;
+        }
+        size_t nl = 1, *starts = na_alloc((len + 2) * sizeof *starts);
+        for (size_t i = 0; i < len; i++)
+            if (text[i] == '\n' && i + 1 < len) starts[nl++] = i + 1;
+        size_t line = 0, last_line = (size_t)-1;
+        for (size_t i = 0; i + qn <= len; i++) {
+            while (line + 1 < nl && starts[line + 1] <= i) line++;
+            bool eq = true;
+            for (size_t k = 0; k < qn && eq; k++) {
+                unsigned char a = (unsigned char)text[i + k], b = (unsigned char)query[k];
+                eq = ignore_case ? tolower(a) == tolower(b) : a == b;
+            }
+            if (!eq) continue;
+            if (word && ((i > 0 && word_char((unsigned char)text[i - 1])) || (i + qn < len && word_char((unsigned char)text[i + qn]))))
+                continue;
+            if (line == last_line) continue; /* one hit per line */
+            last_line = line;
+            if (arr->n >= limit) {
+                truncated = true;
+                break;
+            }
+            size_t a = starts[line], b = line + 1 < nl ? starts[line + 1] : len;
+            while (b > a && (text[b - 1] == '\n' || text[b - 1] == '\r')) b--;
+            J *o = j_obj();
+            j_set(o, "path", j_str(rel));
+            j_set(o, "line", j_int((int64_t)line + 1));
+            j_set(o, "text", j_strn(text + a, b - a));
+            if (context) {
+                j_set(o, "before", lines_json(text, starts, nl, line >= context ? line - context : 0, line));
+                j_set(o, "after", lines_json(text, starts, nl, line + 1, line + 1 + context));
+            }
+            j_push(arr, o);
+        }
+        free(starts);
+        free(text);
+    }
+    J *o = j_obj();
+    j_set(o, "count", j_int((int64_t)arr->n));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "matches", arr);
+    *out = o;
+    return 0;
+}
+
 /* ---- find_symbols ---- */
 
 static bool contains_ci(const char *hay, const char *needle) {

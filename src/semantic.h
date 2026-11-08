@@ -22,6 +22,9 @@ int sem_rename(Sem *s, const char *name, const char *kind, const char *scope, co
 int sem_add_param(Sem *s, const char *function, const char *param, const char *default_arg, int64_t position,
                   const char *kind, const char *scope, const char *path, int64_t if_rev, const char *label,
                   const char *session, const Validator *validator, EditResult *res, RfCounts *counts);
+/* Text search over every indexed file (one hit per line, optional context lines). */
+int sem_search(Sem *s, const char *query, bool word, bool ignore_case, size_t context, const char *path_filter,
+               size_t limit, J **out);
 /* Symbols of the whole workspace whose name contains `query` (case-insensitive). */
 int sem_find_symbols(Sem *s, const char *query, const char *kind, size_t limit, J **out);
 

@@ -108,7 +108,13 @@ nextagent --root example sync            # writes demo.c to disk
 ```
 nextagent [--root DIR] [--version] <command>
 
-view PATH                        text and current revision
+view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
+search QUERY [--word] [-i] [--context N]         grep over the workspace index
+replace PATH --old S --new S [--all]              literal replacement
+replace-symbol PATH NAME --new-file F             rewrite one symbol
+patch [FILE|-]                    edits [{path,old,new,all}] across files, one revision
+references/rename/add-param/find semantic through language servers (serve --lsp)
+global: --brief (compact output), --no-sync (do not write to disk)
 outline PATH [--nested]          top-level symbols (+ tagged types and fields)
 select PATH NAME [--kind K] [--scope S]
 edit [--request FILE]            JSON request from file or stdin

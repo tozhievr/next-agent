@@ -1016,7 +1016,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 14);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 16);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1529,6 +1529,57 @@ static void test_live_semantic(void) {
     free(ws);
 }
 
+static void test_agent_tools(void) {
+    g_test = "agent_tools";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "int f(void) {\r\n  return 1;\r\n}\r\nint g(void) {\r\n  return 2;\r\n}\r\n");
+    put_file(ws, "b.c", "int h(void) { return f() + g(); }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"view\",\"params\":{\"target\":\"a.c\",\"symbol\":\"g\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strncmp(j_get(res, "text")->s, "int g(void)", 11) == 0 && j_get(res, "start_line")->i == 4);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"view\",\"params\":{\"target\":\"a.c\",\"start_line\":2,\"end_line\":3}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strstr(j_get(res, "text")->s, "return 1;") && !strstr(j_get(res, "text")->s, "int g"));
+    json_free(a);
+
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"search\",\"params\":{\"query\":\"return\",\"context\":1}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 3);
+    CHECK(res && j_get(j_get(res, "matches")->items[0], "before")->n == 1);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"search\",\"params\":{\"query\":\"f\",\"word\":true,\"path\":\"b.c\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 1); /* only the call f(), not 'return' or 'int' */
+    json_free(a);
+
+    int64_t head = store_head(st);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"patch\",\"params\":{\"edits\":["
+                 "{\"path\":\"a.c\",\"old\":\"return 1;\",\"new\":\"return 10;\"},"
+                 "{\"path\":\"a.c\",\"old\":\"int g(void) {\\n  return 2;\",\"new\":\"int g(void) {\\n  return 20;\"},"
+                 "{\"path\":\"b.c\",\"old\":\"f() + g()\",\"new\":\"f() * g()\"}]}}");
+    res = a ? j_get(a, "result") : NULL;
+    if (!res) printf("patch error: %s\n", err_of(a));
+    CHECK(res && j_get(res, "rev")->i == head + 1 && j_get(res, "replacements")->i == 3);
+    json_free(a);
+    char *va = view_text(st, "a.c"), *vb = view_text(st, "b.c");
+    CHECK(strstr(va, "return 10;\r\n") && strstr(va, "return 20;\r\n")); /* LF in the request became CRLF */
+    CHECK(strstr(vb, "f() * g()"));
+    free(va);
+    free(vb);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"old\":\"return\",\"new\":\"RET\"}]}}");
+    CHECK(strstr(err_of(a), "ambiguous_text") != NULL);
+    json_free(a);
+    CHECK(store_head(st) == head + 1); /* a rejected patch changes nothing */
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
     {
@@ -1562,6 +1613,7 @@ int main(int argc, char **argv) {
     RUN(test_lsp_hub);
     RUN(test_semantic);
     RUN(test_live_semantic);
+    RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
