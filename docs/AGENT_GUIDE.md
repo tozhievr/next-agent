@@ -194,7 +194,7 @@ nextagent view PATH --lines 10-40 --raw                  # a line window as plai
 nextagent sub OLD NEW a.c b.c [--all]                    # ONE-LINERS (one revision each) for small changes, any number of files
 nextagent line PATH 12 'text'   |   line PATH 12-14 'text'   # replace line(s)      nextagent del PATH 12-14
 nextagent ins PATH 12 'text'    |   append PATH 'text'       # insert before line / add at the end
-#   a backslash that your shell would halve: write \ (replaced in every argument and in apply scripts)
+#   a backslash that your shell would halve: write @BS@ (replaced in every argument and in apply scripts)
 nextagent apply script.txt                               # BEST for several edits: ONE call, ONE revision, no quoting. Script:
 #   @@@ replace PATH [all]   / old text / @@@ with / new text      @@@ lines PATH A-B   / new lines
 #   @@@ insert PATH before-symbol NAME|after-symbol NAME|before-line N|after-line N / text
@@ -219,7 +219,7 @@ Every command that changes text writes the result to disk immediately (`--no-syn
 
 ## 13. What does not exist
 
-Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, a file-watcher thread (outside changes are noticed by size and mtime on the next call), socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C use a language server found on PATH (started on demand by one-shot CLI calls, kept warm by `serve --lsp`; `NEXTAGENT_NO_LSP=1` disables it; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

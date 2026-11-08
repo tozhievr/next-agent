@@ -8,6 +8,7 @@
 
 struct Embedder {
     char *model, *api_env;
+    char *doc_prefix, *query_prefix; /* text put before every chunk / query (models such as nomic-embed-text need them) */
     bool use_cmd;
     /* http */
     char *host, *path;
@@ -164,6 +165,12 @@ Embedder *embed_open(const char *root, char **error) {
     const char *url = jstr(cfg, "url"), *cmd = jstr(cfg, "command");
     e->model = na_strdup(jstr(cfg, "model") ? jstr(cfg, "model") : "");
     e->api_env = jstr(cfg, "api_key_env") ? na_strdup(jstr(cfg, "api_key_env")) : NULL;
+    {
+        bool nomic = strstr(e->model, "nomic-embed") != NULL; /* trained with task prefixes; worse without them */
+        const char *dp = jstr(cfg, "doc_prefix"), *qp = jstr(cfg, "query_prefix");
+        e->doc_prefix = na_strdup(dp ? dp : nomic ? "search_document: " : "");
+        e->query_prefix = na_strdup(qp ? qp : nomic ? "search_query: " : "");
+    }
     e->batch = (size_t)jint(cfg, "batch", 16);
     if (e->batch < 1 || e->batch > 256) e->batch = 16;
     e->max_chars = (size_t)jint(cfg, "max_chars", 1500);
@@ -204,6 +211,8 @@ void embed_close(Embedder *e) {
     embed_flush(e);
     if (e->proc) pf_proc_close(e->proc, 300);
     free(e->model);
+    free(e->doc_prefix);
+    free(e->query_prefix);
     free(e->api_env);
     free(e->host);
     free(e->path);
@@ -219,6 +228,8 @@ void embed_close(Embedder *e) {
 
 const char *embed_model(const Embedder *e) { return e->use_cmd ? (e->model[0] ? e->model : e->cmd) : e->model; }
 size_t embed_max_chars(const Embedder *e) { return e->max_chars; }
+const char *embed_doc_prefix(const Embedder *e) { return e->doc_prefix; }
+const char *embed_query_prefix(const Embedder *e) { return e->query_prefix; }
 size_t embed_dim(const Embedder *e) { return e->dim; }
 
 uint64_t embed_key(const Embedder *e, const char *text, size_t n) {

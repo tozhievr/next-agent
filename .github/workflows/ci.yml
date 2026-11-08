@@ -35,3 +35,5 @@ jobs:
         run: python build.py test --target ${{ matrix.target }}
       - name: Cross-platform parity
         run: python tests/parity.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
+      - name: Skill package
+        run: python skill/package.py build/skill

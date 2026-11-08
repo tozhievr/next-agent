@@ -121,6 +121,9 @@ typedef struct LspHub LspHub;
  * replaces the C/C++ server command. */
 LspHub *lsp_hub_new(const char *root, const char *clangd_exe, int timeout_ms);
 void lsp_hub_free(LspHub *h);
+/* C-family files keep using the built-in scanner (no clangd): for one-shot CLI calls, where starting clangd costs
+ * more than it brings. Other languages still go to their servers. */
+void lsp_hub_scanner_for_c(LspHub *h);
 LspOps lsp_hub_ops(LspHub *h);
 bool lsp_hub_handles(LspHub *h, const char *path); /* a configured, installable server exists */
 bool lsp_hub_configured(LspHub *h, const char *path); /* an entry for this extension exists (nothing is started) */

@@ -2,264 +2,246 @@
 
 [![CI](https://github.com/tozhievr/next-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tozhievr/next-agent/actions/workflows/ci.yml)
 
-**A headless, transactional code editor for AI coding agents.**
-Agents edit by *symbol* or *codepoint range* instead of re-reading whole files, counting line numbers or generating throw-away scripts. Every change is an atomic, undoable revision, and can optionally be vetted by clangd before it is committed.
+**A headless, transactional code editor for AI coding agents, with the search and navigation around it.**
+One small binary (about 170 KB, no runtime, no SDK), the same behaviour on Windows and Linux.
 
-Written in **C23**, built with the **nextc** compiler for Windows x86-64. No Windows SDK, Visual Studio, Python or SQLite is required: the result is a single `nextagent.exe` (~170 KB) that talks only to kernel32.
+A coding agent normally reads whole files, counts line numbers and sends one edit per place. NextAgent lets it:
 
-> **Status: 0.24.0, early development.** Version 0.20.0 was a full rewrite of the former Python implementation (see [Upgrading](#upgrading-from-019)). The design follows the *aed architecture v1.1* specification; `aed` is only the historical name of that document.
+- **read less**: one function (`view --symbol`), a ranked answer to a question (`locate`, `context`), the callers of a
+  function (`callers`);
+- **change many places in one call**: a plain-text script (`apply`), one-liners (`sub`, `line`, `append`), or a rename
+  across the workspace (`rename`), each one revision;
+- **undo anything**: every change is an entry of an append-only, checksummed history (`undo`, `redo`, `history`);
+- **share the files with people and git**: changes made outside nextagent are merged (three-way), not overwritten.
+
+It works from a shell tool (CLI), as an MCP server, or as a JSON-RPC server, and ships a Claude Code skill.
+
+> **Version 0.42.0.** Written in C23 (clang + a vendored libc23). 407 checks on Windows, 395 on Linux, plus a
+> byte-for-byte cross-platform parity test. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
-- [Why](#why) · [Features](#features) · [Build](#build) · [Quick start](#quick-start)
-- [CLI reference](#cli-reference) · [JSON-RPC](#json-rpc-server) · [MCP](#mcp-bridge)
-- [clangd diagnostic gate](#clangd-diagnostic-gate) · [Storage model](#storage-model) · [Source layout](#source-layout)
-- [Upgrading](#upgrading-from-019) · [Limitations](#limitations-and-not-implemented) · [License](#license)
-- [Install](#install) · **For AI models:** [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) — how to drive the editor
+[What it saves](#what-it-saves) · [Install](#install) · [Quick start](#quick-start) · [Commands](#commands) ·
+[Languages](#languages-and-language-servers) · [Search](#search-by-meaning) · [Use it from an AI tool](#use-it-from-an-ai-tool) ·
+[Safety and storage](#safety-and-storage) · [clangd gate](#clangd-diagnostic-gate) · [Build](#build) ·
+[Source layout](#source-layout) · [Limitations](#limitations)
 
-## Why
+## What it saves
 
-Typical agent edit loops are wasteful and fragile: read a file, guess line numbers, write a patch script, hope nothing changed in between. NextAgent replaces that with:
+A modelled benchmark on QuickJS (88 000 lines of C, six tasks; [docs/BENCHMARK.md](docs/BENCHMARK.md) states the
+method): what the model has to write plus read, with Grep/Read/Edit-style tools against nextagent.
 
-- **Stable addressing** – Unicode *codepoint* offsets or C symbol names, never byte offsets or line numbers.
-- **Transactions** – a batch touching many files commits as one revision or not at all.
-- **Optimistic concurrency** – pass `if_rev`; stale edits are rejected instead of clobbering newer work.
-- **Reversibility** – append-only history with undo of any revision and redo.
-- **Safety net** – an optional gate refuses edits that introduce new compiler diagnostics.
+| task | calls | tokens (generic tools) | tokens (nextagent) |
+|---|---|---|---|
+| find where something lives | 2 -> 1 | 1415 | 180 |
+| read one function | 3 -> 1 | 2501 | 930 |
+| rename a function, 23 sites in 4 files | 9 -> 1 | 3066 | 35 |
+| six insertions in three files | 9 -> 1 | 2182 | 115 |
+| **all six tasks** | **29 -> 6** | **13 403** | **5 208** |
 
-## Features
-
-| Area | What you get |
-| --- | --- |
-| Documents | Immutable snapshots, codepoint-offset changesets, inversion, position mapping, BLAKE2b-16 hashes. CRLF preserved exactly. |
-| Store | Append-only checksummed journal, torn-tail recovery, exclusive cross-process write lock, `stale_rev` / `stale_snapshot` / `disk_conflict` protection. |
-| History | `log`, `undo` of the head or of any revision (rebased over later edits, `undo_conflict` on overlap), `redo`. |
-| C23 navigation | Built-in tolerant scanner: `outline`, `--nested` struct/union/enum fields, `select` by name/kind/scope, guarded `replace_symbol`. Syntax only, no name resolution. |
-| Interfaces | CLI, JSON-RPC 2.0 over newline-delimited stdio, MCP stdio bridge. |
-| Languages | `serve --lsp`: Python, Rust, Go, TypeScript, ... via language servers (symbols and diagnostic gate); incremental C23 outline cache. |
-| clangd gate | Pre-commit diagnostics comparison, literal-include dependent discovery, `compile_commands.json` include dirs, fail-closed freshness, build-state recheck inside the write lock. |
-| Sync | Explicit `sync` writes committed text to disk with baseline conflict checks. |
+About 2.6x fewer tokens overall; the gain is in changes that touch many places, reading tasks gain 1.6-8x and a
+budgeted `context` pack costs the same as reading the code. It is a model, not a measurement of a live agent, and a
+careful shell one-liner (`grep | xargs sed`) is cheaper for a rename, but it checks nothing and cannot be undone.
 
 ## Install
 
-One line (PowerShell, Windows x64): downloads the latest release, verifies its SHA-256 and adds it to your user `PATH`.
+**Binary.** Windows x64 (PowerShell) downloads the latest release, verifies its SHA-256 and adds it to your user `PATH`:
 
 ```powershell
 irm https://raw.githubusercontent.com/tozhievr/next-agent/main/install.ps1 | iex
 ```
 
-Linux x86-64: `curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/main/install.sh | sh` (installs to `~/.local/bin`; `NEXTAGENT_VERSION`, `NEXTAGENT_DIR` work too).
+Linux x86-64: `curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/main/install.sh | sh` (installs to
+`~/.local/bin`). `NEXTAGENT_VERSION` (a tag such as `v0.40.0`) and `NEXTAGENT_DIR` choose another version or directory.
+Releases are published by [`release.yml`](.github/workflows/release.yml) when a `v*` tag is pushed; the tag must equal
+`NA_VERSION` in `src/util.h`.
 
-A specific version or directory: `$env:NEXTAGENT_VERSION = "v0.24.0"; $env:NEXTAGENT_DIR = "C:\tools\nextagent"` before running. Releases are published automatically when a `v*` tag is pushed (see [`release.yml`](.github/workflows/release.yml)); the tag must equal `NA_VERSION` in `src/util.h`.
+**Claude Code skill.** The release also carries `nextagent-skill-<version>.zip` (`SKILL.md` + command reference +
+installers). Unpack it and run `install-skill.sh` or `install-skill.ps1` (user-wide, or `--project` / `-Project` for one
+repository); see [skill/README.md](skill/README.md). The skill needs nextagent 0.39 or newer.
 
-## Build
-
-**Recommended (Windows and Linux, identical behaviour):** clang + the vendored libc23, no system libc or SDK:
-
-```sh
-python build.py test --target windows   # or linux (WSL runs the tests when on Windows)
-python tests/parity.py build/linux/nextagent   # output must equal tests/parity.golden
-```
-
-Needs clang, lld, llvm and ninja. CI builds and tests both targets and publishes `windows-x64.zip` and `linux-x64.tar.gz` on every `v*` tag.
-
-Alternative Windows builds:
-
-Two compilers are supported; both produce the same `build/nextagent.exe`.
-
-| Compiler | Needs | Select |
-| --- | --- | --- |
-| **nextc** (default) | only nextc and its bundled libc23; no Windows SDK / Visual Studio | `./build.ps1` |
-| **clang** | clang plus the Windows SDK/MSVC runtime (e.g. Visual Studio Build Tools) | `./build.ps1 -Compiler clang` |
-
-```powershell
-./build.ps1                       # -> build/nextagent.exe (nextc)
-./build.ps1 test                  # builds and runs build/tests.exe
-./build.ps1 test -Compiler clang  # same with clang (release builds use this)
-```
-
-```sh
-./build.sh [test]                 # Git Bash / MSYS; NA_COMPILER=clang to use clang
-```
-
-If a compiler is not on `PATH`, point to it: `$env:NEXTC = "D:\nextc\src\.build\nextc.exe"` or `$env:CLANG = "C:\Program Files\LLVM\bin\clang.exe"`.
-The clang path is verified here only by a syntax/warnings check; the full link runs in CI.
-The suite has 298 checks; the live-clangd ones are skipped when `clangd` is missing.
+Check: `nextagent --version`. Add `.aed/` to the `.gitignore` of every project you use it in.
 
 ## Quick start
 
-```powershell
-mkdir example; "int add(int a, int b) { return a + b; }`n" | Set-Content example/demo.c
+```sh
+printf 'int add(int a, int b) {\n    return a + b;\n}\n\nint main(void) {\n    return add(1, 2);\n}\n' > demo.c
 
-nextagent --root example outline demo.c
-# {"symbols":[{"name":"add","kind":"function","start":0,"end":39,...}]}
+nextagent --brief outline demo.c            # 1 function add / 5 function main
+nextagent view demo.c --symbol add --raw    # only that function
+nextagent rename add sum                    # {"rev":1,"paths":["demo.c"],"sites":2,"source":"syntax"}
 
-'{"if_rev":0,"label":"rename","ops":[{"path":"demo.c","start":4,"end":7,"text":"sum"}]}' | nextagent --root example edit
-# {"rev":1,"paths":["demo.c"]}
+nextagent apply - <<'EOF'                   # several edits, one revision, no quoting
+@@@ replace demo.c
+return a + b;
+@@@ with
+return a + b + 0;
+@@@ insert demo.c before-symbol main
+/* entry point */
+EOF
 
-nextagent --root example view demo.c     # shows the edited text (not on disk yet)
-nextagent --root example undo            # revision 2 = inverse of revision 1
-nextagent --root example redo            # revision 3 = re-applies it
-nextagent --root example sync            # writes demo.c to disk
+nextagent sub 'return sum' 'return -sum' demo.c    # one-liner
+nextagent undo                                     # revision 4 = the inverse of revision 3
 ```
 
-## CLI reference
+Every command that changes text writes the result to disk at once and prints a few bytes. `--brief` (or
+`NEXTAGENT_BRIEF=1`) prints compact text instead of JSON, which costs fewer tokens. `--root DIR` points at another
+project. Text that contains a backslash can be hard to pass through some shells (they halve `\\`): write `@BS@` for a
+single backslash that must arrive; it is replaced in every argument and in `apply` scripts (not in `--new-file` files).
 
-```
-nextagent [--root DIR] [--version] <command>
+## Commands
 
-view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
-merge [PATH...] [--ours|--theirs] [--dry-run]   reconcile files changed outside nextagent (3-way merge)
-callers NAME [--depth N] / callees NAME         call graph (callers via references, callees from the index)
-context QUERY [--budget TOKENS]                   best code for a question as one pack
-locate QUERY [--limit N]                        ranked hybrid search (BM25 + names + phrase)
-search QUERY [--word] [-i] [--context N]         grep over the workspace index
-apply [FILE|-]                                   many edits, one revision, plain-text script (@@@ replace/lines/insert/symbol/create)
-create PATH --new-file F / insert PATH --before-symbol NAME --new-file F
-replace PATH --old S --new S [--all]              literal replacement
-replace PATH --lines A-B --new-file F             replace whole lines
-replace-symbol PATH NAME --new-file F             rewrite one symbol
-patch [FILE|-]                    edits [{path,old,new,all}] across files, one revision
-references/rename/add-param/find semantic through language servers (serve --lsp)
-global: --brief (compact output), --no-sync (do not write to disk)
-outline PATH [--nested]          top-level symbols (+ tagged types and fields)
-select PATH NAME [--kind K] [--scope S]
-edit [--request FILE]            JSON request from file or stdin
-undo [--rev N]                   undo head, or revision N
-redo                             re-apply the last undone head
-history [--limit N]              revision log, newest first
-sync [PATH...]                   flush to disk (all documents by default)
-serve [--clangd[=EXE]]           JSON-RPC server on stdio
-mcp   [--clangd[=EXE]]           MCP server on stdio
-```
+`nextagent --help` lists them; a wrong command line prints only that command's synopsis.
 
-`edit` request: `{"ops":[{"path","start","end","text"}...], "if_rev": N?, "label": "..."?}`.
-Offsets are zero-based Unicode codepoints and every op refers to the *original* text, so ops in one batch must not overlap. Output is compact JSON on stdout, errors go to stderr with exit code 1.
+| Purpose | Commands |
+|---|---|
+| **Read** | `view PATH [--lines A-B \| --symbol NAME] [--raw]`, `outline PATH [--nested]`, `select PATH NAME` |
+| **Search** | `search QUERY` (text), `find QUERY` (symbol names), `locate QUERY` (by meaning), `context QUERY --budget N` (code pack for a question), `callers NAME`, `callees NAME` |
+| **Edit, many places** | `apply [FILE\|-]` (script: `@@@ replace / lines / symbol / insert / create`), `patch [FILE\|-]` (JSON) |
+| **Edit, small** | `sub OLD NEW PATH...`, `line PATH A[-B] TEXT`, `del PATH A[-B]`, `ins PATH N TEXT`, `append PATH TEXT` |
+| **Edit, one place** | `replace PATH --old S --new S`, `replace PATH --lines A-B --new-file F`, `replace-symbol PATH NAME --new-file F`, `insert PATH --before-symbol NAME ...`, `create PATH --new-file F`, `edit` (codepoint offsets) |
+| **Refactor** | `rename OLD NEW`, `references NAME`, `add-param FUNC "int x" --default 0`, `add-include TARGET HEADER` |
+| **History** | `history`, `undo [--rev N]`, `redo` |
+| **Files changed outside** | `sync [PATH...]`, `merge [PATH...] [--ours\|--theirs] [--dry-run]` |
+| **Servers** | `serve`, `mcp` (with `--clangd` or `--lsp`) |
 
-## JSON-RPC server
+Prefer symbol or text anchors (`before-symbol`, `append`, `sub`) to line numbers: a number taken from an earlier read
+drifts as soon as anything above it changes. Details, error messages and the JSON forms are in
+[docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) and in the skill's `reference.md`.
 
-`nextagent --root DIR serve` reads **one JSON object per line** and writes one reply per line. This is *not* LSP Content-Length framing.
+## Languages and language servers
 
-```json
-{"jsonrpc":"2.0","id":1,"method":"open"}
-{"jsonrpc":"2.0","id":2,"method":"edit","params":{"if_rev":0,"ops":[{"path":"src/main.c","start":0,"end":0,"text":"int main(void) { return 0; }\n"}]}}
-{"jsonrpc":"2.0","id":3,"method":"select","params":{"target":"src/main.c","name":"main","kind":"function"}}
-{"jsonrpc":"2.0","id":4,"method":"replace_symbol","params":{"target":"src/main.c","name":"main","replacement":"int main(void) { return 1; }","if_rev":1}}
-{"jsonrpc":"2.0","id":5,"method":"history","params":{"op":"undo","rev":1}}
-{"jsonrpc":"2.0","id":6,"method":"sync"}
-```
+C and C++ work out of the box (a built-in tolerant scanner). Other languages use a language server, started on first
+use and found on `PATH`:
 
-| Method | Params | Result |
-| --- | --- | --- |
-| `open` | – | `{name, version, rev}` |
-| `view` | `target` | `{rev, path, text}` |
-| `outline` | `target`, `nested?` | `{symbols}` |
-| `select` | `target`, `name`, `kind?`, `scope?` | one symbol |
-| `replace_symbol` | `target`, `name`, `replacement`, `if_rev` (= head), `kind?`, `scope?`, `label?` | `{rev, paths}` |
-| `edit` | `ops`, `if_rev?`, `label?` | `{rev, paths}` |
-| `history` | `op` = `log` (`n?`) \| `undo` (`rev?`) \| `redo` | log array or `{rev, paths}` |
-| `sync` | `paths?` | `{ok, written}` |
-
-Errors: `-32700` parse, `-32600` invalid request, `-32601` unknown method, `-32602` invalid params or a domain error (`stale_rev`, `symbol_not_found`, `ambiguous_symbol`, `undo_conflict`, `disk_conflict`, `diagnostics_regression`, ...). Requests without `id` are notifications and get no reply.
-
-## MCP bridge
-
-`nextagent --root DIR mcp` speaks the Model Context Protocol over stdio (newline-delimited JSON): `initialize`, `tools/list`, `tools/call`, `ping`. Tools: `view`, `outline`, `select`, `replace_symbol`, `edit`, `history`, `sync`, with the same parameters as above. Failures are returned as tool results with `isError: true`.
-
-Example client configuration:
-
-```json
-{ "mcpServers": { "nextagent": { "command": "D:/next-agent/build/nextagent.exe",
-                                  "args": ["--root", "D:/project", "mcp", "--clangd"] } } }
-```
-
-## Other languages (language servers)
-
-`serve --lsp` / `mcp --lsp` start a *language server hub*. Files are routed by extension to a server that is started on first use:
-
-| Languages | Server (first one found on `PATH`) |
-| --- | --- |
-| C, C++ | `clangd` |
+| Languages | Server (first one found) |
+|---|---|
+| C, C++ | `clangd` (long-lived modes; one-shot CLI calls use the scanner) |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` |
 | Rust | `rust-analyzer` |
 | Go | `gopls` |
 | TypeScript, JavaScript | `typescript-language-server` |
 | Zig, Lua | `zls`, `lua-language-server` |
 
-With the hub, `outline`, `select` and `replace_symbol` work on non-C files through `textDocument/documentSymbol` (`nested` returns children with `scope`), and the pre-commit diagnostic gate also vets edits to those files. Edits reach the server as ranged `didChange` notifications when it supports incremental sync. `lsp_servers` lists what is configured, installed and running.
+One-shot CLI commands that address symbols or refactor (`outline`, `select`, `view`, `replace-symbol`, `insert`,
+`apply`, `patch`, `replace`, `rename`, `references`, `add-param`) use these servers for non-C files;
+`NEXTAGENT_NO_LSP=1` turns that off. Index-wide commands (`find`, `locate`, `context`, `callers`) stay on the cheap path.
+`serve --lsp` and `mcp --lsp` use servers for everything, including `find_symbols` and the diagnostic gate.
+
+**Verified live** (`tests/lspcheck.py`: outline, find, references, rename, in both modes): clangd, pyright and
+typescript-language-server. rust-analyzer, gopls, zls and lua-language-server are wired the same way but have not been
+tried here. A TypeScript project needs `typescript` 5.x in its `node_modules` (the server refuses TypeScript 7).
+
 Add or override servers in `<root>/.aed/lsp.json`:
 
 ```json
-{"servers": [{"name": "mypy", "command": "pylsp", "args": "", "extensions": [".py"], "language": "python"}]}
+{"servers": [{"name": "pyright", "command": "node", "args": "/path/to/pyright/langserver.index.js --stdio", "extensions": [".py"]}]}
 ```
 
-Servers installed as `.cmd`/`.bat` shims (typical for npm packages on Windows) must be wrapped, e.g. `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
+On Windows an npm-installed server is a `.cmd` shim that cannot be spawned directly: start it as
+`node <js entry> --stdio`, or wrap it as `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
 
-### Embedding model (optional)
+## Search by meaning
 
-`locate` works without any model (BM25 plus embeddings learned from your own code). To add a real
-model, create `.aed/embed.json`:
+`locate "how are edits flushed"` ranks code chunks (symbols and 40-line windows, with their doc comments) by BM25 on the
+text and on the names, by embeddings learned from your own code, and by phrase matches. The index is cached in
+`.aed/index.cache`, so after the first call a 1500-file workspace answers in under half a second (5.5 s cold).
+
+An embedding model sharpens it for questions that share no words with the code. Create `.aed/embed.json`:
 
 ```
-{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "nomic-embed-text"}   # Ollama, llama.cpp server, LM Studio, vLLM...
-{"command": "my-embedder", "args": "--fast"}                                    # any program: {"input":[...]} -> {"embeddings":[[...]]} per line
+{"url": "http://127.0.0.1:11434/v1/embeddings", "model": "nomic-embed-text"}    # Ollama, llama.cpp server, LM Studio, vLLM
+{"command": "my-embedder", "args": "--fast"}                                     # any program: {"input":[...]} -> {"embeddings":[[...]]}
 ```
 
-Plain HTTP only, no DNS and no TLS (put a local proxy in front of a remote or https service, or use
-`command`). Each chunk is sent once and cached in `.aed/embed.cache`; `locate --embed N` caps new chunks per query.
+and run `nextagent locate "question" --embed 100000` once to embed the workspace (cached in `.aed/embed.cache`).
+Plain HTTP only (no DNS, no TLS): put a local proxy in front of a remote or https service, or use `command`.
+Optional keys: `doc_prefix`, `query_prefix` (set to `search_document: ` / `search_query: ` for nomic models by default),
+`batch`, `timeout_ms`, `max_chars`, `api_key_env`.
 
-## clangd diagnostic gate
+Measured on 28 questions about QuickJS with one known answer each ([docs/BENCHMARK.md](docs/BENCHMARK.md)): the right
+function is in the top ten in 13 cases without a model and 18 with `nomic-embed-text`, and first in 2 and 5. Treat
+`locate` as a way to narrow the search, not as an oracle.
 
+## Use it from an AI tool
 
+- **Claude Code**: install the skill (above). The model then reaches for `apply`, `view --symbol` and `locate` by itself.
+- **Any agent with a shell tool**: put the CLI cheat sheet of [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (section 12) in
+  its instructions.
+- **MCP**: `nextagent --root DIR mcp [--clangd | --lsp]` speaks the Model Context Protocol over stdio (21 tools: `view`,
+  `outline`, `select`, `replace_symbol`, `replace_text`, `patch`, `edit`, `references`, `rename`, `locate`, `context`, ...).
 
-With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` is validated **before** it is committed:
+  ```json
+  { "mcpServers": { "nextagent": { "command": "nextagent", "args": ["--root", "/path/to/project", "mcp", "--lsp"] } } }
+  ```
+- **JSON-RPC**: `nextagent --root DIR serve` reads one JSON object per line and writes one reply per line (not LSP
+  Content-Length framing); the methods are the MCP tools. Errors are `-32602` with a message such as `stale_rev`,
+  `symbol_not_found` or `disk_conflict`.
 
-1. Changed C/C++ files and *literal-include dependents* (found from `#include "..."` with `-I`, `-iquote`, `/I` from `compile_commands.json` in the root or `build/`) are opened in clangd with their old text; unflushed headers are overlaid.
-2. Diagnostics are collected, the new text is applied, diagnostics are collected again.
-3. Diagnostics are compared as multisets by (severity, code, message). Any *added* diagnostic at warning severity or worse rejects the edit with `diagnostics_regression`.
-4. Reports must carry the expected document version, otherwise the gate fails closed (`diagnostics_unavailable_or_stale`).
-5. Inside the write lock the compilation database and dependency state are hashed again; a change rejects the commit as `stale_validation`.
+## Safety and storage
 
-Nothing is written on rejection. Plain `serve` is unvalidated.
+- **Transactions.** A batch touching many files commits as one revision or not at all. `--if-rev N` rejects a write if
+  the workspace moved on since you looked (`stale_rev`).
+- **History.** Append-only: `undo` of the head or of any revision (rebased over later edits, `undo_conflict` on overlap)
+  is a new revision, and `redo` undoes the undo.
+- **Outside changes.** If a person, git or a formatter edits a file between calls, the next call merges it three-way with
+  the journal (changes on touching lines conflict like in git) instead of failing; `nextagent merge` does it explicitly.
+- **Paths.** `..` escapes, `.git` and `.aed` components, drive/stream (`:`) components and symlink or junction targets
+  are rejected. CRLF is preserved exactly.
+- **Workspace files.** State lives in `<root>/.aed/`: `journal.aedj` (checksummed records, torn tails detected and
+  discarded, an exclusive lock so several processes can share a workspace), `index.cache`, `embed.cache`, `lsp.json`,
+  `embed.json`. Only the first holds anything you cannot rebuild.
 
-## Storage model
+### clangd diagnostic gate
 
-State lives in `<root>/.aed/`:
+With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` of C/C++ is vetted before it
+is committed: the changed files and the files that `#include` them are diagnosed by clangd before and after the change,
+and any *added* warning or error rejects the edit (`diagnostics_regression`). Reports must carry the expected document
+version, otherwise the gate fails closed; the compilation database is hashed again inside the write lock. Nothing is
+written on rejection. See [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) section 8 for the exact rules and their limits.
 
-- `journal.aedj` – header `AEDJ1\n`, then records `[u32 length][JSON payload][8-byte BLAKE2b prefix checksum]`. Record types: *base* (disk baseline), *commit* (one revision with per-document forward/inverse edits), *flush*. A torn tail is detected by the checksum and discarded on the next write.
-- `journal.lock` – exclusive lock file; writers take it, replay the journal tail and only then append, so several processes can share a workspace.
+## Build
 
-`.git` and `.aed` components, drive/stream (`:`) components, `..` escapes and symlink/junction targets are rejected. Workspace files are only modified by `sync`.
+Needs clang, lld, llvm, ninja and Python 3 (the libc23 it links against is vendored in `vendor/libc23`):
+
+```sh
+python build.py test --target windows        # or --target linux
+python tests/parity.py build/linux/nextagent  # output must equal tests/parity.golden
+python skill/package.py build/skill           # the Claude Code skill package
+```
+
+CI builds, tests and runs the parity check on both targets for every push, and publishes `windows-x64.zip`,
+`linux-x64.tar.gz` and the skill package on every `v*` tag. Legacy Windows scripts (`build.ps1`, `build.sh`) remain for
+the nextc compiler. The live-clangd tests are skipped when `clangd` is not on `PATH`.
 
 ## Source layout
 
 ```
-src/util.*      buffers, errors, UTF-8, BLAKE2b, path rules
-src/json.*      JSON DOM and compact writer
-src/platform.*  Windows layer: files, atomic write, lock, processes and pipes
-src/core.*      snapshots and changesets
-src/store.*     journal store, history, flush
-src/c23.*       C23 scanner: outline / select / replace_symbol
-src/lsp_*.c     position codec, framing, diagnostics, compilation DB, clangd client, gate
-src/rpc.*       JSON-RPC and MCP
-src/main.c      CLI
-tests/tests.c   test suite
+src/util.*      buffers, errors, UTF-8, BLAKE2b, path rules          src/bin.h      binary cache encoding
+src/json.*      JSON DOM and writer                                  src/merge.*    three-way merge
+src/platform*   files, locks, processes, sockets (Windows / POSIX)   src/index.*    workspace index and its cache
+src/core.*      snapshots and changesets                             src/hybrid.c   locate: BM25 + embeddings
+src/store.*     journal, history, flush, merge of outside changes    src/embed.*    external embedding model client
+src/c23.*       C23 scanner                                          src/semantic.* references, rename, call graph
+src/lsp_*.c     LSP client, hub, diagnostics gate                    src/refactor.* token-based C refactors
+src/rpc.*       JSON-RPC and MCP                                     src/main.c     CLI
+tests/          tests.c, parity.py, lspcheck.py, locate_eval.py, bench.py          skill/   the Claude Code skill
 ```
 
-## Upgrading from 0.19
+## Limitations
 
-- State moved from `.aed/state.sqlite3` to `.aed/journal.aedj`. **Old SQLite state is not read or migrated** – run `sync` with the old version first.
-- CRLF is preserved exactly (the Python version normalised it).
-- The Python package, `pyproject.toml` and pytest suite are gone; use `build.ps1`.
+- Not implemented: branches of the history, a file-watcher thread (outside changes are found by size and mtime on the
+  next call), an async writer, a socket transport.
+- The C scanner is tolerant rather than a full parser; exotic declarators may be misreported, and `select` is syntax
+  only. `add-param` and `add-include` are C-only and token-based.
+- The clangd gate misses a semantic change of a header (for example a signature) in an *unchanged* dependent; macro
+  includes, conditional compilation, system include paths and generated headers are not followed.
+- `locate` skips files over 8 MB and reads only UTF-8. The embedding client speaks plain HTTP only.
+- Language servers other than clangd, pyright and typescript-language-server are untested here.
+- State from 0.19 and earlier (`.aed/state.sqlite3`) is not read; run `sync` with the old version first.
 
-## Limitations and not implemented
-
-- **Not implemented:** branches, offline brain, three-way merge and file watcher, async writer, socket transport, M5b.
-- The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
-- clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
-- `references` / `rename` / `find_symbols` are semantic through language servers (`serve --lsp`); `add_param` and `add_include` are still C-only and token-based. Without a server, C falls back to token search; other languages need a server.
-
-See [CHANGELOG.md](CHANGELOG.md) and [docs/agent-plan.md](docs/agent-plan.md).
+See [CHANGELOG.md](CHANGELOG.md), [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) and
+[docs/agent-plan.md](docs/agent-plan.md).
 
 ## License
 

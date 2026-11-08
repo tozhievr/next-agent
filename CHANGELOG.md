@@ -1,6 +1,53 @@
 # Changelog
 
 All product versions follow [Semantic Versioning](https://semver.org/).
+## 0.42.0 - 2026-11-09
+
+### Added
+- **One-shot CLI uses language servers.** `outline`, `select`, `view`, `replace-symbol`, `insert`, `apply`, `patch`,
+  `replace`, `rename`, `references` and `add-param` start the server of a non-C language (pyright, typescript-language-server,
+  rust-analyzer, gopls, ...) on demand, so Python/TypeScript refactors no longer need `serve --lsp`. C/C++ keep the
+  built-in scanner (no clangd start-up). `NEXTAGENT_NO_LSP=1` turns it off. Verified live with pyright and
+  typescript-language-server (`tests/lspcheck.py`).
+
+### Changed
+- README rewritten: current commands, numbers, language servers, search, build and layout.
+
+## 0.41.0 - 2026-11-09
+
+### Added
+- **Claude Code skill package.** `skill/` holds `nextagent/SKILL.md` (when and how to use the tool, with a checked
+  `apply` example and the rules that saved the most time), `nextagent/reference.md` (every command, errors, `.aed/`
+  files), `install-skill.sh` / `install-skill.ps1` (user-wide or per project) and `package.py`, which builds the
+  reproducible `nextagent-skill-<version>.zip` (+ `.sha256`) after validating the front matter. CI builds it on every
+  push; the release workflow publishes it next to the binaries.
+- `locate` quality evaluation: `tests/locate_eval.py` (28 questions with known answers on QuickJS) and the results in
+  `docs/BENCHMARK.md`.
+- `.aed/embed.json` keys `doc_prefix` / `query_prefix`; for models whose name contains `nomic-embed` they default to
+  `search_document: ` / `search_query: `, as the model was trained.
+
+### Changed
+- `locate` searches files up to 8 MB (was 2 MB; a larger file was skipped without a word, and `quickjs.c`, 2.2 MB, holds
+  most of QuickJS). Top-10 hits of the evaluation went from 4/28 to 13/28 without a model and 18/28 with one.
+- The external embedding model weighs 3.0 in the rank fusion (was 1.6).
+
+### Fixed
+- Documentation: the guide and README no longer say that three-way merge does not exist, and the backslash-token line
+  of the cheat sheet and of 0.39.0 is correct again.
+
+## 0.40.2 - 2026-11-09
+
+### Added
+- `tests/bench.py` and `docs/BENCHMARK.md`: a modelled comparison of generic Grep/Read/Edit tools and nextagent on six tasks (about 2.6x fewer tokens and 29 -> 6 calls overall; 88x on a 23-site rename, 19x on six batched edits, about 1x on `context`). The limits of the model are stated in the document.
+
+## 0.40.1 - 2026-11-09
+
+### Fixed
+- Language servers now get `workspaceFolders` in `initialize`. Without it pyright limited `rename` to the file the symbol is defined in (a rename of a function used in another module changed only the definition and left the callers broken).
+- `references`/`rename` no longer burn 8 s per candidate file waiting for diagnostics that lazy servers (pyright, typescript-language-server) never publish before a request: the wait ends when the server is silent for 1.5 s, and a server that never published anything gets one short wait only. 16 s became 3 s on a two-file workspace; clangd (which publishes eagerly) is unaffected.
+
+### Added
+- `tests/lspcheck.py`: live check of language servers through `serve --lsp` (outline, find_symbols, references, rename). Verified with clangd, pyright 1.1.x and typescript-language-server 5.x + TypeScript 5.9 (TypeScript 7 is not supported by that server).
 
 ## 0.40.0 - 2026-11-09
 
@@ -15,7 +62,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 - One-line edit commands for small changes, all built on `patch` (one revision each): `sub OLD NEW PATH... [--all]`, `line PATH A[-B] TEXT`, `del PATH A[-B]`, `ins PATH N TEXT`, `append PATH TEXT`.
-- `\` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
+- `@BS@` is replaced with a single backslash in every command-line argument and in `apply` scripts, so text containing `\n` or `\` can be written even when the agent's shell halves backslashes. Files given with `--new-file`/`--old-file` stay verbatim.
 - `patch` locator `at_end` (insert after the last line).
 
 ## 0.38.0 - 2026-11-09

@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag such as v0.25.0 to build, test and publish a GitHub release with
-# nextagent-<version>-windows-x64.zip, nextagent-<version>-linux-x64.tar.gz and SHA256SUMS.txt.
+# nextagent-<version>-windows-x64.zip, nextagent-<version>-linux-x64.tar.gz, nextagent-skill-<version>.zip (the Claude Code skill) and SHA256SUMS.txt.
 # The tag must match NA_VERSION in src/util.h.
 
 on:
@@ -100,6 +100,7 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           ver=${TAG#v}
+          python skill/package.py dist
           cat dist/*.sha256 > dist/SHA256SUMS.txt
           rm dist/*.sha256
           awk -v v="$ver" '$0 ~ "^## \[?"v"\]?" {f=1; next} /^## / {f=0} f' CHANGELOG.md > notes.md
