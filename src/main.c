@@ -547,6 +547,23 @@ int main(int argc, char **argv) {
     rpc.store = store;
     rpc.session = "cli";
     int code = 0;
+    /* One-shot commands that address symbols or refactor use the language servers of non-C languages (started on
+     * first use). Index-wide commands (find, locate, context, callers, callees) stay on the cheap scanner path: a
+     * server would have to outline every file first. NEXTAGENT_NO_LSP=1 turns this off. */
+    LspHub *cli_hub = NULL;
+    {
+        static const char *const lsp_cmds[] = {"outline", "select",     "view",   "replace-symbol", "insert", "apply",
+                                               "patch",   "replace",    "rename", "references",     "add-param", NULL};
+        bool want = !getenv("NEXTAGENT_NO_LSP");
+        bool listed = false;
+        for (int k = 0; lsp_cmds[k]; k++)
+            if (strcmp(cmd, lsp_cmds[k]) == 0) listed = true;
+        if (want && listed) {
+            cli_hub = lsp_hub_new(store_root(store), NULL, 20000);
+            lsp_hub_scanner_for_c(cli_hub);
+            rpc.hub = cli_hub;
+        }
+    }
 
     if (strcmp(cmd, "view") == 0) {
         if (nargs < 1) goto bad;
@@ -1004,11 +1021,13 @@ int main(int argc, char **argv) {
     }
 done:
     rpc_release(&rpc);
+    lsp_hub_free(cli_hub);
     store_close(store);
     return code;
 bad:
     usage_for(cmd);
     rpc_release(&rpc);
+    lsp_hub_free(cli_hub);
     store_close(store);
     return 2;
 }

@@ -95,3 +95,44 @@ def run_case(label, wsdir, files, sname, sargs, exts, main_file, sym, newsym, us
 
 for c in CASES:
     run_case(*c)
+
+
+# ---- one-shot CLI (no `serve`): symbols and refactorings go through the language servers too ----
+def cli_case(label, wsdir, files, sname, sargs, exts, main_file, sym, newsym, user_file):
+    ws = os.path.join(SCR, wsdir + "_cli")
+    shutil.rmtree(os.path.join(ws, ".aed"), ignore_errors=True)
+    os.makedirs(os.path.join(ws, ".aed"), exist_ok=True)
+    for n, t in files.items():
+        with open(os.path.join(ws, n), "w", newline="\n") as f:
+            f.write(t)
+    with open(os.path.join(ws, ".aed", "lsp.json"), "w") as f:
+        json.dump({"servers": [{"name": sname, "command": "node", "args": sargs, "extensions": exts}]}, f)
+    nm = os.path.join(SCR, wsdir)
+    if os.path.isdir(os.path.join(nm, "node_modules")) and not os.path.exists(os.path.join(ws, "node_modules")):
+        try:
+            os.symlink(os.path.join(nm, "node_modules"), os.path.join(ws, "node_modules"), target_is_directory=True)
+        except OSError:
+            shutil.copytree(os.path.join(nm, "node_modules"), os.path.join(ws, "node_modules"))
+    print("== %s, one-shot CLI" % label)
+
+    def cli(name, ok_fn, *args):
+        t0 = time.time()
+        r = subprocess.run([NA, "--root", ws, "--brief", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        dt = int((time.time() - t0) * 1000)
+        ok, info = ok_fn(r.stdout, r.stderr, r.returncode)
+        print("  %-5s %-22s %6d ms  %s" % ("OK" if ok else "FAIL", name, dt, info))
+
+    cli("outline", lambda o, e, c: (sym in o, o.strip().replace("\n", " | ")[:80] or e[:100]), "outline", main_file)
+    cli("view --symbol", lambda o, e, c: (sym in o, o.strip()[:60].replace("\n", " ") or e[:100]), "view", main_file, "--symbol", sym, "--raw")
+    cli("references", lambda o, e, c: (user_file in o and main_file in o, o.strip().replace("\n", " | ")[:100] or e[:100]), "references", sym)
+    cli("rename", lambda o, e, c: (c == 0, (o or e).strip()[:100]), "rename", sym, newsym)
+    with open(os.path.join(ws, user_file), encoding="utf-8") as f:
+        u = f.read()
+    with open(os.path.join(ws, main_file), encoding="utf-8") as f:
+        m = f.read()
+    ok = newsym in u and sym not in u and newsym in m and sym not in m
+    print("  %-5s %-22s %6s     %s" % ("OK" if ok else "FAIL", "files on disk", "", "both files renamed" if ok else "not renamed"))
+
+
+for c in CASES:
+    cli_case(*c)

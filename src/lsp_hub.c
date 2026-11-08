@@ -28,6 +28,8 @@ struct LspHub {
     size_t n, cap;
     UriMap *uris;
     size_t nuris, capuris;
+    size_t clangd_idx; /* the built-in C/C++ entry */
+    bool scanner_c;    /* C-family files stay with the built-in scanner (one-shot CLI) */
 };
 
 static Server *add_server(LspHub *h, const char *name, const char *lang) {
@@ -98,6 +100,7 @@ LspHub *lsp_hub_new(const char *root, const char *clangd_exe, int timeout_ms) {
     static const char *const go_exts[] = {".go", NULL};
     static const char *const zig_exts[] = {".zig", NULL};
     static const char *const lua_exts[] = {".lua", NULL};
+    h->clangd_idx = h->n;
     Server *s = add_server(h, "clangd", NULL);
     cand(s, clangd_exe ? clangd_exe : "clangd", "--log=error --background-index=false --header-insertion=never");
     exts(s, c_exts);
@@ -143,10 +146,14 @@ void lsp_hub_free(LspHub *h) {
     free(h);
 }
 
+void lsp_hub_scanner_for_c(LspHub *h) { h->scanner_c = true; }
+
 static Server *match(LspHub *h, const char *path) {
-    for (size_t i = 0; i < h->n; i++)
+    for (size_t i = 0; i < h->n; i++) {
+        if (h->scanner_c && i == h->clangd_idx) continue;
         for (size_t k = 0; k < h->v[i].exts.n; k++)
             if (path_has_suffix_ci(path, h->v[i].exts.v[k])) return &h->v[i];
+    }
     return NULL;
 }
 

@@ -64,7 +64,7 @@ on since you looked.
 | `already_exists` | `create` on an existing path | use `replace` or pick another path |
 | `stale_rev` | the workspace moved since `--if-rev` | look again, then repeat |
 | `disk_conflict` | a file changed outside nextagent and could not be merged | `nextagent merge PATH` and resolve |
-| `no_language_server` | rename/references needs a server for this language | use `serve --lsp` / `mcp --lsp` |
+| `no_language_server` | rename/references needs a server for this language | install a server (see `.aed/lsp.json`); `NEXTAGENT_NO_LSP` must be unset |
 | `invalid parameter` / `missing parameter` | wrong command line | the message shows the synopsis |
 
 A failed call never applies part of an edit; it is always safe to repeat after fixing the cause.

@@ -219,7 +219,7 @@ Every command that changes text writes the result to disk immediately (`--no-syn
 
 ## 13. What does not exist
 
-Do not call or promise: branches, a file-watcher thread (outside changes are noticed by size and mtime on the next call), socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, a file-watcher thread (outside changes are noticed by size and mtime on the next call), socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C use a language server found on PATH (started on demand by one-shot CLI calls, kept warm by `serve --lsp`; `NEXTAGENT_NO_LSP=1` disables it; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

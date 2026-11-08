@@ -1,6 +1,17 @@
 # Changelog
 
 All product versions follow [Semantic Versioning](https://semver.org/).
+## 0.42.0 - 2026-11-09
+
+### Added
+- **One-shot CLI uses language servers.** `outline`, `select`, `view`, `replace-symbol`, `insert`, `apply`, `patch`,
+  `replace`, `rename`, `references` and `add-param` start the server of a non-C language (pyright, typescript-language-server,
+  rust-analyzer, gopls, ...) on demand, so Python/TypeScript refactors no longer need `serve --lsp`. C/C++ keep the
+  built-in scanner (no clangd start-up). `NEXTAGENT_NO_LSP=1` turns it off. Verified live with pyright and
+  typescript-language-server (`tests/lspcheck.py`).
+
+### Changed
+- README rewritten: current commands, numbers, language servers, search, build and layout.
 
 ## 0.41.0 - 2026-11-09
 

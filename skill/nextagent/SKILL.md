@@ -71,7 +71,7 @@ nextagent append PATH 'text'              # add at the end of the file
 
 **Semantic changes across the workspace:** `nextagent rename OLD NEW`, `nextagent references NAME`,
 `nextagent add-param FUNC "int x" --default 0`. In one-shot CLI calls C/C++ work out of the box (token-accurate
-syntax mode); for other languages these three need a language-server session (see below).
+syntax mode); for other languages the one-shot CLI starts the language server found on PATH (about 3 s for references/rename; NEXTAGENT_NO_LSP=1 disables it).
 
 ## Rules that save time
 
@@ -93,8 +93,7 @@ syntax mode); for other languages these three need a language-server session (se
 
 ## Other languages (language servers)
 
-Symbols, `rename`, `references` and `add-param` for non-C languages use a language server, which runs in the
-long-lived modes: `nextagent mcp --lsp` (MCP) or `nextagent serve --lsp` (JSON-RPC over stdio; methods `outline`,
+Symbols, `rename`, `references` and `add-param` for non-C languages use a language server: one-shot CLI calls start it on demand; for repeated calls keep it warm in the long-lived modes: `nextagent mcp --lsp` (MCP) or `nextagent serve --lsp` (JSON-RPC over stdio; methods `outline`,
 `find_symbols`, `references`, `rename`, ... take the same arguments as the CLI). Servers found on PATH are used
 automatically (clangd, pyright, rust-analyzer, gopls, typescript-language-server, ...). Add or override servers in
 `.aed/lsp.json`:
