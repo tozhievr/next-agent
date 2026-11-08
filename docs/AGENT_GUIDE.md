@@ -199,7 +199,7 @@ Every command that changes text writes the result to disk immediately (`--no-syn
 
 ## 13. What does not exist
 
-Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, embedding-based semantic search (`locate` is lexical BM25 over code words and names, `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms; `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

@@ -29,6 +29,8 @@ struct WsIndex {
     size_t n, cap;
     Interner in;
     size_t extracted;
+    void *user;
+    void (*user_free)(void *);
 };
 
 static uint64_t fnv(const char *p, size_t n) {
@@ -89,6 +91,7 @@ static void entry_free(Entry *e) {
 
 void wsi_free(WsIndex *ix) {
     if (!ix) return;
+    if (ix->user && ix->user_free) ix->user_free(ix->user);
     for (size_t i = 0; i < ix->n; i++) entry_free(&ix->v[i]);
     free(ix->v);
     for (size_t i = 0; i < ix->in.n; i++) free(ix->in.names[i]);
@@ -279,6 +282,12 @@ int wsi_refresh(WsIndex *ix) {
 }
 
 size_t wsi_extracted(const WsIndex *ix) { return ix->extracted; }
+uint64_t wsi_hash(const WsIndex *ix, size_t i) { return ix->v[i].hash; }
+void *wsi_user(const WsIndex *ix) { return ix->user; }
+void wsi_set_user(WsIndex *ix, void *p, void (*free_fn)(void *)) {
+    ix->user = p;
+    ix->user_free = free_fn;
+}
 size_t wsi_nfiles(const WsIndex *ix) { return ix->n; }
 const char *wsi_path(const WsIndex *ix, size_t i) { return ix->v[i].path; }
 const SymbolList *wsi_symbols(const WsIndex *ix, size_t i) { return &ix->v[i].syms; }

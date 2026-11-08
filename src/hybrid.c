@@ -1,8 +1,16 @@
-/* Hybrid code search: BM25 over the identifier words of code chunks, BM25 over symbol and path
- * names, and an exact-phrase signal, fused with reciprocal rank fusion. Chunks follow the symbols
- * of the workspace index (every symbol starts a chunk; long stretches are cut into windows), so a
- * hit is "this function" rather than "this line". Everything is deterministic integer/IEEE
- * arithmetic with no libm, so results are identical on every platform. */
+/* Hybrid code search over a persistent in-memory index.
+ *
+ * Signals, fused with weighted reciprocal rank fusion:
+ *   1. BM25 over the words of each chunk (identifiers are split into camelCase / snake_case words
+ *      and light-stemmed, the whole identifier is kept too),
+ *   2. BM25 over the names (symbol, scope, path) of each chunk,
+ *   3. kNN over local embeddings: "random indexing" learns, from the workspace itself, which words
+ *      occur in the same code (a word's vector is the sum of the sparse random codes of everything it
+ *      co-occurs with), so `flush` ends up near `write`, `disk`, `sync` of THIS code base. Chunk and
+ *      query vectors are weighted sums of word vectors; similarity is the cosine.
+ * A chunk is a symbol (or a 40-line window of a long stretch). Per-file chunks are cached by content
+ * hash, so a query after a small edit re-tokenizes only the changed files. All arithmetic is plain
+ * IEEE with no libm and a fixed evaluation order, so results are identical on every platform. */
 #include "semantic.h"
 #include <ctype.h>
 #include <stdlib.h>
@@ -10,25 +18,15 @@
 
 #define WINDOW 40
 #define MAX_FILE_BYTES (2u << 20)
+#define DIM 128
+#define MIN_DL 48
 
+/* ---- string dictionary: word -> dense id ---- */
 typedef struct {
-    char *key;
-    uint32_t *ch, *tf;
-    size_t n, cap;
-} Term;
-
-typedef struct {
-    Term *t;
-    size_t n, cap;
-    uint32_t *slots; /* term index + 1 */
-    size_t scap;
-} Inv;
-
-typedef struct {
-    uint32_t file, first, last; /* 1-based inclusive lines */
-    const Symbol *sym;
-    bool phrase;
-} Chunk;
+    char **k;
+    uint32_t *slots; /* id + 1 */
+    size_t n, cap, scap;
+} Dict;
 
 static uint64_t fnv(const char *p, size_t n) {
     uint64_t h = 1469598103934665603ull;
@@ -36,87 +34,138 @@ static uint64_t fnv(const char *p, size_t n) {
     return h;
 }
 
-static void inv_free(Inv *v) {
-    for (size_t i = 0; i < v->n; i++) {
-        free(v->t[i].key);
-        free(v->t[i].ch);
-        free(v->t[i].tf);
-    }
-    free(v->t);
-    free(v->slots);
-    memset(v, 0, sizeof *v);
-}
-
-static void inv_rehash(Inv *v) {
-    size_t cap = v->scap ? v->scap * 2 : 1024;
-    free(v->slots);
-    v->slots = na_alloc(cap * sizeof *v->slots);
-    memset(v->slots, 0, cap * sizeof *v->slots);
-    v->scap = cap;
-    for (size_t i = 0; i < v->n; i++) {
-        size_t h = fnv(v->t[i].key, strlen(v->t[i].key)) & (cap - 1);
-        while (v->slots[h]) h = (h + 1) & (cap - 1);
-        v->slots[h] = (uint32_t)i + 1;
+static void dict_rehash(Dict *d) {
+    size_t cap = d->scap ? d->scap * 2 : 4096;
+    free(d->slots);
+    d->slots = na_alloc(cap * sizeof *d->slots);
+    memset(d->slots, 0, cap * sizeof *d->slots);
+    d->scap = cap;
+    for (size_t i = 0; i < d->n; i++) {
+        size_t h = fnv(d->k[i], strlen(d->k[i])) & (cap - 1);
+        while (d->slots[h]) h = (h + 1) & (cap - 1);
+        d->slots[h] = (uint32_t)i + 1;
     }
 }
 
-static Term *inv_find(Inv *v, const char *s, size_t n, bool add) {
-    if (v->scap == 0) {
-        if (!add) return NULL;
-        inv_rehash(v);
+/* id of the word, or (uint32_t)-1 when absent and !add */
+static uint32_t dict_id(Dict *d, const char *s, size_t n, bool add) {
+    if (d->scap == 0) {
+        if (!add) return (uint32_t)-1;
+        dict_rehash(d);
     }
-    size_t h = fnv(s, n) & (v->scap - 1);
-    while (v->slots[h]) {
-        Term *t = &v->t[v->slots[h] - 1];
-        if (strlen(t->key) == n && memcmp(t->key, s, n) == 0) return t;
-        h = (h + 1) & (v->scap - 1);
+    size_t h = fnv(s, n) & (d->scap - 1);
+    while (d->slots[h]) {
+        const char *k = d->k[d->slots[h] - 1];
+        if (strlen(k) == n && memcmp(k, s, n) == 0) return d->slots[h] - 1;
+        h = (h + 1) & (d->scap - 1);
     }
-    if (!add) return NULL;
-    if (v->n == v->cap) {
-        v->cap = v->cap ? v->cap * 2 : 256;
-        v->t = na_realloc(v->t, v->cap * sizeof *v->t);
+    if (!add) return (uint32_t)-1;
+    if (d->n == d->cap) {
+        d->cap = d->cap ? d->cap * 2 : 1024;
+        d->k = na_realloc(d->k, d->cap * sizeof *d->k);
     }
-    Term *t = &v->t[v->n];
-    memset(t, 0, sizeof *t);
-    t->key = na_alloc(n + 1);
-    memcpy(t->key, s, n);
-    t->key[n] = 0;
-    v->slots[h] = (uint32_t)++v->n;
-    if (v->n * 2 > v->scap) {
-        inv_rehash(v);
-        return &v->t[v->n - 1];
-    }
-    return t;
+    char *c = na_alloc(n + 1);
+    memcpy(c, s, n);
+    c[n] = 0;
+    d->k[d->n] = c;
+    d->slots[h] = (uint32_t)++d->n;
+    if (d->n * 2 > d->scap) dict_rehash(d);
+    return (uint32_t)d->n - 1;
 }
 
-static void inv_add(Inv *v, const char *s, size_t n, uint32_t chunk) {
-    Term *t = inv_find(v, s, n, true);
-    if (t->n && t->ch[t->n - 1] == chunk) {
-        t->tf[t->n - 1]++;
-        return;
+/* ---- cache ---- */
+typedef struct {
+    uint32_t first, last; /* 1-based inclusive lines */
+    char *sym, *kind;     /* label, may be NULL */
+    uint32_t *bt, *nt;    /* sorted (term id, tf) pairs for the body / the names */
+    uint32_t nbt, nnt;    /* pair counts */
+    uint32_t blen, nlen;  /* token totals */
+    float *vec;           /* DIM floats, NULL when not (yet) embeddable */
+} HChunk;
+
+typedef struct {
+    char *path;
+    uint64_t hash;
+    HChunk *c;
+    size_t n;
+} HFile;
+
+typedef struct {
+    Dict terms;
+    HFile *f;
+    size_t nf;
+    uint64_t version, built; /* corpus changes / version the embeddings were built for */
+    float *W;                /* word vectors, one row per kept term */
+    int32_t *row;            /* term id -> row or -1 */
+    size_t nrow, rowcap;
+    uint32_t *df;
+    size_t dfcap;
+} Hyb;
+
+static void hfile_free(HFile *f) {
+    for (size_t i = 0; i < f->n; i++) {
+        free(f->c[i].sym);
+        free(f->c[i].kind);
+        free(f->c[i].bt);
+        free(f->c[i].nt);
+        free(f->c[i].vec);
     }
-    if (t->n == t->cap) {
-        t->cap = t->cap ? t->cap * 2 : 4;
-        t->ch = na_realloc(t->ch, t->cap * sizeof *t->ch);
-        t->tf = na_realloc(t->tf, t->cap * sizeof *t->tf);
-    }
-    t->ch[t->n] = chunk;
-    t->tf[t->n++] = 1;
+    free(f->c);
+    free(f->path);
 }
 
-/* ---- tokens: an identifier yields itself and its camelCase / snake_case words, lower-cased ---- */
+static void hyb_free(void *p) {
+    Hyb *h = p;
+    for (size_t i = 0; i < h->nf; i++) hfile_free(&h->f[i]);
+    free(h->f);
+    for (size_t i = 0; i < h->terms.n; i++) free(h->terms.k[i]);
+    free(h->terms.k);
+    free(h->terms.slots);
+    free(h->W);
+    free(h->row);
+    free(h->df);
+    free(h);
+}
+
+/* ---- tokens ---- */
+typedef struct {
+    uint32_t *v;
+    size_t n, cap;
+} U32;
+
+static void u32_push(U32 *u, uint32_t x) {
+    if (u->n == u->cap) {
+        u->cap = u->cap ? u->cap * 2 : 256;
+        u->v = na_realloc(u->v, u->cap * sizeof *u->v);
+    }
+    u->v[u->n++] = x;
+}
 
 typedef void (*Emit)(void *ctx, const char *w, size_t n);
 
 static bool idc(unsigned char c) { return isalnum(c) || c == '_' || c >= 0x80; }
 
+/* length after stripping a plural / participle suffix (words of 5+ letters only) */
+static size_t stem_len(const char *w, size_t n) {
+    if (n < 5) return n;
+    if (n >= 6 && memcmp(w + n - 3, "ing", 3) == 0) return n - 3;
+    if (n >= 6 && memcmp(w + n - 3, "ies", 3) == 0) return n - 3;
+    if (memcmp(w + n - 2, "ed", 2) == 0 || memcmp(w + n - 2, "es", 2) == 0) return n - 2;
+    if (w[n - 1] == 's' && w[n - 2] != 's' && w[n - 2] != 'u') return n - 1;
+    return n;
+}
+
+static void emit_word(const char *w, size_t n, Emit emit, void *ctx) {
+    emit(ctx, w, n);
+    size_t m = stem_len(w, n);
+    if (m != n && m >= 3) emit(ctx, w, m);
+}
+
 static void ident_words(const char *s, size_t n, Emit emit, void *ctx) {
     char low[96];
-    if (n < 2 || n >= sizeof low) {
-        if (n < 2) return;
-        n = sizeof low - 1; /* absurdly long identifiers: index a prefix */
-    }
-    size_t pieces = 0, a = 0;
+    if (n < 2) return;
+    if (n >= sizeof low) n = sizeof low - 1;
+    size_t a = 0;
     for (size_t i = 0; i < n; i++) low[i] = (char)tolower((unsigned char)s[i]);
     for (size_t i = 1; i <= n; i++) {
         bool cut = i == n || s[i] == '_' || s[i - 1] == '_';
@@ -129,15 +178,11 @@ static void ident_words(const char *s, size_t n, Emit emit, void *ctx) {
         if (cut) {
             size_t b = i;
             while (a < b && s[a] == '_') a++;
-            if (b > a) {
-                pieces++;
-                if (b - a >= 2 && (b - a != n)) emit(ctx, low + a, b - a);
-            }
+            if (b - a >= 2 && b - a != n) emit_word(low + a, b - a, emit, ctx);
             a = i;
         }
     }
-    emit(ctx, low, n); /* the whole identifier, so exact names rank first */
-    (void)pieces;
+    emit_word(low, n, emit, ctx); /* the whole identifier, so exact names rank first */
 }
 
 static void tokenize(const char *t, size_t n, Emit emit, void *ctx) {
@@ -156,17 +201,295 @@ static void tokenize(const char *t, size_t n, Emit emit, void *ctx) {
 }
 
 typedef struct {
-    Inv *inv;
-    uint32_t chunk;
-    size_t *len;
-} AddCtx;
+    Dict *d;
+    U32 ids;
+} Collect;
 
-static void add_emit(void *c, const char *w, size_t n) {
-    AddCtx *a = c;
-    inv_add(a->inv, w, n, a->chunk);
-    a->len[a->chunk]++;
+static void collect_emit(void *c, const char *w, size_t n) {
+    Collect *k = c;
+    u32_push(&k->ids, dict_id(k->d, w, n, true));
 }
 
+static int cmp_u32(const void *a, const void *b) {
+    uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* ids -> sorted (id, tf) pairs; returns the pair count, *total = number of tokens */
+static uint32_t compress(U32 *u, uint32_t **out, uint32_t *total) {
+    qsort(u->v, u->n, sizeof *u->v, cmp_u32);
+    *total = (uint32_t)u->n;
+    uint32_t *p = na_alloc((u->n ? u->n * 2 : 2) * sizeof *p);
+    uint32_t np = 0;
+    for (size_t i = 0; i < u->n;) {
+        size_t j = i;
+        while (j < u->n && u->v[j] == u->v[i]) j++;
+        p[np * 2] = u->v[i];
+        p[np * 2 + 1] = (uint32_t)(j - i);
+        np++;
+        i = j;
+    }
+    *out = p;
+    u->n = 0;
+    return np;
+}
+
+static uint32_t pair_tf(const uint32_t *p, uint32_t np, uint32_t id) {
+    size_t lo = 0, hi = np;
+    while (lo < hi) {
+        size_t m = (lo + hi) / 2;
+        if (p[m * 2] < id) lo = m + 1;
+        else hi = m;
+    }
+    return lo < np && p[lo * 2] == id ? p[lo * 2 + 1] : 0;
+}
+
+/* ---- math without libm ---- */
+static double dlog(double x) {
+    const double ln2 = 0.6931471805599453;
+    int e = 0;
+    while (x > 1.5) x /= 2, e++;
+    while (x < 0.75) x *= 2, e--;
+    double y = (x - 1) / (x + 1), y2 = y * y, term = y, sum = 0;
+    for (int k = 1; k < 40; k += 2) {
+        sum += term / k;
+        term *= y2;
+    }
+    return 2 * sum + e * ln2;
+}
+
+static double dsqrt(double x) {
+    if (x <= 0) return 0;
+    double g = (x + 1) / 2;
+    for (int i = 0; i < 60; i++) g = 0.5 * (g + x / g);
+    return g;
+}
+
+/* ---- building the per-file cache ---- */
+static bool boundary_symbol(const Symbol *y) { return y->line >= 1; }
+
+static void build_file(Hyb *h, Sem *s, HFile *hf, size_t fi) {
+    hf->c = NULL;
+    hf->n = 0;
+    const char *rel = hf->path;
+    char *text = NULL;
+    size_t len;
+    if (store_snapshot_text(s->st, rel, &text, &len) != 0 || len > MAX_FILE_BYTES || !utf8_valid(text, len)) {
+        free(text);
+        return;
+    }
+    size_t nl = 1;
+    for (size_t i = 0; i + 1 < len; i++)
+        if (text[i] == '\n') nl++;
+    size_t *ls = na_alloc((nl + 2) * sizeof *ls);
+    ls[0] = 0;
+    size_t k = 1;
+    for (size_t i = 0; i + 1 < len; i++)
+        if (text[i] == '\n') ls[k++] = i + 1;
+    ls[nl] = len;
+    const Symbol **label = na_alloc((nl + 2) * sizeof *label);
+    memset(label, 0, (nl + 2) * sizeof *label);
+    const SymbolList *sl = wsi_symbols(s->ix, fi);
+    for (size_t i = 0; i < sl->n; i++)
+        if (boundary_symbol(&sl->v[i]) && sl->v[i].line <= nl) label[sl->v[i].line] = &sl->v[i];
+
+    /* a doc comment directly above a symbol belongs to that symbol */
+    for (size_t L = 2; L <= nl; L++) {
+        if (!label[L]) continue;
+        size_t top = L;
+        while (top > 1 && !label[top - 1]) {
+            const char *p = text + ls[top - 2], *end = text + ls[top - 1];
+            while (p < end && (*p == ' ' || *p == '\t')) p++;
+            bool cm = (end - p >= 2 && ((p[0] == '/' && (p[1] == '/' || p[1] == '*')) || (p[0] == '*' && (p[1] == ' ' || p[1] == '/' || p[1] == '\r' || p[1] == '\n'))));
+            if (!cm) break;
+            top--;
+        }
+        if (top < L) {
+            label[top] = label[L];
+            label[L] = NULL;
+        }
+    }
+    Collect col = {&h->terms, {0}};
+    size_t cap = 0;
+    const Symbol *cur = NULL;
+    size_t first = 1;
+    for (size_t line = 2; line <= nl + 1; line++) {
+        if (!(line == nl + 1 || label[line] || line - first >= WINDOW)) continue;
+        if (label[first]) cur = label[first];
+        if (hf->n == cap) {
+            cap = cap ? cap * 2 : 8;
+            hf->c = na_realloc(hf->c, cap * sizeof *hf->c);
+        }
+        HChunk *c = &hf->c[hf->n++];
+        memset(c, 0, sizeof *c);
+        c->first = (uint32_t)first;
+        c->last = (uint32_t)(line - 1);
+        if (cur) {
+            c->sym = na_strdup(cur->name);
+            c->kind = na_strdup(cur->kind);
+        }
+        size_t a = ls[first - 1], e = ls[line - 1];
+        tokenize(text + a, e - a, collect_emit, &col);
+        c->nbt = compress(&col.ids, &c->bt, &c->blen);
+        if (cur) {
+            tokenize(cur->name, strlen(cur->name), collect_emit, &col);
+            if (cur->scope) tokenize(cur->scope, strlen(cur->scope), collect_emit, &col);
+        }
+        tokenize(rel, strlen(rel), collect_emit, &col);
+        c->nnt = compress(&col.ids, &c->nt, &c->nlen);
+        first = line;
+    }
+    free(col.ids.v);
+    free(label);
+    free(ls);
+    free(text);
+    (void)h;
+}
+
+static void refresh_cache(Hyb *h, Sem *s) {
+    size_t n = wsi_nfiles(s->ix), j = 0;
+    HFile *nv = na_alloc((n ? n : 1) * sizeof *nv);
+    for (size_t i = 0; i < n; i++) {
+        const char *p = wsi_path(s->ix, i);
+        while (j < h->nf && strcmp(h->f[j].path, p) < 0) {
+            hfile_free(&h->f[j++]);
+            h->version++;
+        }
+        if (j < h->nf && strcmp(h->f[j].path, p) == 0) {
+            if (h->f[j].hash == wsi_hash(s->ix, i)) {
+                nv[i] = h->f[j++];
+                continue;
+            }
+            hfile_free(&h->f[j++]);
+        }
+        memset(&nv[i], 0, sizeof nv[i]);
+        nv[i].path = na_strdup(p);
+        nv[i].hash = wsi_hash(s->ix, i);
+        build_file(h, s, &nv[i], i);
+        h->version++;
+    }
+    while (j < h->nf) {
+        hfile_free(&h->f[j++]);
+        h->version++;
+    }
+    free(h->f);
+    h->f = nv;
+    h->nf = n;
+}
+
+/* ---- local embeddings (random indexing) ---- */
+static void add_code(double *dst, const char *term, double w) {
+    uint64_t x = fnv(term, strlen(term)) | 1;
+    for (int k = 0; k < 8; k++) {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        dst[(x >> 8) % DIM] += (x & 1) ? w : -w;
+    }
+}
+
+static void unit(double *v) {
+    double s = 0;
+    for (int i = 0; i < DIM; i++) s += v[i] * v[i];
+    s = dsqrt(s);
+    if (s > 1e-9)
+        for (int i = 0; i < DIM; i++) v[i] /= s;
+}
+
+static double idf_of(double n, double df) { return dlog(1 + n / df); }
+
+static void build_embeddings(Hyb *h) {
+    size_t N = 0;
+    for (size_t f = 0; f < h->nf; f++) N += h->f[f].n;
+    size_t nt = h->terms.n;
+    if (h->dfcap < nt) {
+        h->dfcap = nt;
+        h->df = na_realloc(h->df, (nt ? nt : 1) * sizeof *h->df);
+    }
+    memset(h->df, 0, nt * sizeof *h->df);
+    for (size_t f = 0; f < h->nf; f++)
+        for (size_t i = 0; i < h->f[f].n; i++)
+            for (uint32_t k = 0; k < h->f[f].c[i].nbt; k++) h->df[h->f[f].c[i].bt[k * 2]]++;
+    free(h->row);
+    h->row = na_alloc((nt ? nt : 1) * sizeof *h->row);
+    size_t rows = 0;
+    for (size_t t = 0; t < nt; t++) {
+        bool keep = h->df[t] >= 2 && (N < 8 || (uint64_t)h->df[t] * 2 <= N);
+        h->row[t] = keep ? (int32_t)rows++ : -1;
+    }
+    free(h->W);
+    h->W = na_alloc((rows ? rows * DIM : 1) * sizeof *h->W);
+    double *C = na_alloc((rows ? rows * DIM : 1) * sizeof *C);
+    memset(C, 0, (rows ? rows * DIM : 1) * sizeof *C);
+    h->nrow = rows;
+
+    /* pass 1: every kept word accumulates the (unit) code sum of each chunk it occurs in */
+    double raw[DIM];
+    for (size_t f = 0; f < h->nf; f++)
+        for (size_t i = 0; i < h->f[f].n; i++) {
+            const HChunk *c = &h->f[f].c[i];
+            memset(raw, 0, sizeof raw);
+            for (uint32_t k = 0; k < c->nbt; k++) {
+                uint32_t t = c->bt[k * 2];
+                if (h->row[t] < 0) continue;
+                add_code(raw, h->terms.k[t], idf_of((double)N, h->df[t]) * dsqrt((double)c->bt[k * 2 + 1]));
+            }
+            unit(raw);
+            for (uint32_t k = 0; k < c->nbt; k++) {
+                int32_t r = h->row[c->bt[k * 2]];
+                if (r < 0) continue;
+                double *dst = C + (size_t)r * DIM;
+                for (int d = 0; d < DIM; d++) dst[d] += raw[d];
+            }
+        }
+    /* remove the common direction, then normalise */
+    double mean[DIM];
+    memset(mean, 0, sizeof mean);
+    for (size_t r = 0; r < rows; r++) {
+        double *v = C + r * DIM;
+        unit(v);
+        for (int d = 0; d < DIM; d++) mean[d] += v[d];
+    }
+    for (int d = 0; d < DIM; d++) mean[d] = rows ? mean[d] / (double)rows : 0;
+    for (size_t r = 0; r < rows; r++) {
+        double *v = C + r * DIM;
+        for (int d = 0; d < DIM; d++) v[d] -= mean[d];
+        unit(v);
+        for (int d = 0; d < DIM; d++) h->W[r * DIM + d] = (float)v[d];
+    }
+    free(C);
+
+    /* pass 2: chunk vectors = weighted sums of word vectors (names count double) */
+    for (size_t f = 0; f < h->nf; f++)
+        for (size_t i = 0; i < h->f[f].n; i++) {
+            HChunk *c = &h->f[f].c[i];
+            free(c->vec);
+            c->vec = NULL;
+            double v[DIM];
+            memset(v, 0, sizeof v);
+            bool any = false;
+            for (int part = 0; part < 2; part++) {
+                const uint32_t *p = part ? c->nt : c->bt;
+                uint32_t np = part ? c->nnt : c->nbt;
+                for (uint32_t k = 0; k < np; k++) {
+                    uint32_t t = p[k * 2];
+                    int32_t r = h->row[t];
+                    if (r < 0) continue;
+                    double w = idf_of((double)N, h->df[t]) * dsqrt((double)p[k * 2 + 1]) * (part ? 2.0 : 1.0);
+                    const float *wv = h->W + (size_t)r * DIM;
+                    for (int d = 0; d < DIM; d++) v[d] += w * wv[d];
+                    any = true;
+                }
+            }
+            if (!any) continue;
+            unit(v);
+            c->vec = na_alloc(DIM * sizeof *c->vec);
+            for (int d = 0; d < DIM; d++) c->vec[d] = (float)v[d];
+        }
+    h->built = h->version;
+}
+
+/* ---- query ---- */
 typedef struct {
     char **w;
     size_t n, cap;
@@ -192,24 +515,10 @@ static void words_free(Words *l) {
 }
 
 static bool stop_word(const char *w) {
-    static const char *const s[] = {"the", "of", "to", "in", "for", "is", "and", "how", "does", "where", "what", "with", "an", "or", "do", "it", "on", "by"};
+    static const char *const s[] = {"the", "of", "to", "in", "for", "is", "and", "how", "does", "where", "what", "with", "an", "or", "do", "it", "on", "by", "we", "are", "be", "this", "that", "from"};
     for (size_t i = 0; i < sizeof s / sizeof *s; i++)
         if (strcmp(w, s[i]) == 0) return true;
     return false;
-}
-
-/* ---- deterministic natural log (series, no libm) ---- */
-static double dlog(double x) {
-    const double ln2 = 0.6931471805599453;
-    int e = 0;
-    while (x > 1.5) x /= 2, e++;
-    while (x < 0.75) x *= 2, e--;
-    double y = (x - 1) / (x + 1), y2 = y * y, term = y, sum = 0;
-    for (int k = 1; k < 40; k += 2) {
-        sum += term / k;
-        term *= y2;
-    }
-    return 2 * sum + e * ln2;
 }
 
 typedef struct {
@@ -223,36 +532,15 @@ static int cmp_rank(const void *a, const void *b) {
     return x->id < y->id ? -1 : x->id > y->id;
 }
 
-/* BM25 scores of every chunk for the query words against one field. Returns the number of scored chunks. */
-static size_t bm25(Inv *v, const Words *q, const size_t *dl, size_t nch, double k1, double b, double *score) {
-    double avg = 0;
-    for (size_t i = 0; i < nch; i++) avg += (double)dl[i];
-    avg = nch ? avg / (double)nch : 1;
-    if (avg < 1) avg = 1;
-    size_t hit = 0;
-    for (size_t w = 0; w < q->n; w++) {
-        Term *t = inv_find(v, q->w[w], strlen(q->w[w]), false);
-        if (!t) continue;
-        double idf = dlog(1 + ((double)nch - (double)t->n + 0.5) / ((double)t->n + 0.5));
-        for (size_t k = 0; k < t->n; k++) {
-            double tf = (double)t->tf[k], len = (double)dl[t->ch[k]];
-            double add = idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len / avg));
-            if (score[t->ch[k]] == 0) hit++;
-            score[t->ch[k]] += add;
-        }
-    }
-    return hit;
-}
-
-static void ranks_of(const double *score, size_t nch, double *rank_out) {
-    Rank *r = na_alloc((nch ? nch : 1) * sizeof *r);
-    size_t n = 0;
-    for (size_t i = 0; i < nch; i++) {
+static void ranks_of(const double *score, size_t n, double min, double *rank_out) {
+    Rank *r = na_alloc((n ? n : 1) * sizeof *r);
+    size_t m = 0;
+    for (size_t i = 0; i < n; i++) {
         rank_out[i] = 0;
-        if (score[i] > 0) r[n++] = (Rank){score[i], (uint32_t)i};
+        if (score[i] > min) r[m++] = (Rank){score[i], (uint32_t)i};
     }
-    qsort(r, n, sizeof *r, cmp_rank);
-    for (size_t i = 0; i < n; i++) rank_out[r[i].id] = (double)i + 1; /* 0 = unranked */
+    qsort(r, m, sizeof *r, cmp_rank);
+    for (size_t i = 0; i < m; i++) rank_out[r[i].id] = (double)i + 1; /* 0 = unranked */
     free(r);
 }
 
@@ -266,15 +554,43 @@ static bool contains_ci(const char *hay, size_t hn, const char *needle, size_t n
     return false;
 }
 
-static void path_words(const char *path, Emit emit, void *ctx) {
-    tokenize(path, strlen(path), emit, ctx);
+static double kind_factor(const HChunk *c) {
+    double small = c->last - c->first < 2 ? 0.75 : 1.0; /* one-liners (getters, prototypes) match too easily */
+    if (!c->sym) return 0.7 * small;
+    static const char *const good[] = {"function", "method", "class", "struct", "union", "enum", "typedef", "interface", "trait", "module", "type", "constructor", "namespace"};
+    for (size_t i = 0; i < sizeof good / sizeof *good; i++)
+        if (strcmp(c->kind, good[i]) == 0) return small;
+    return 0.8 * small;
 }
+
+typedef struct {
+    uint32_t file, idx;
+} Ref;
 
 int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit, J **out) {
     size_t qn = strlen(query);
     if (qn == 0) return na_fail("invalid parameter: query must not be empty");
     if (limit == 0 || limit > 100) limit = 10;
     if (wsi_refresh(s->ix) != 0) return -1;
+    Hyb *h = wsi_user(s->ix);
+    if (!h) {
+        h = na_alloc(sizeof *h);
+        memset(h, 0, sizeof *h);
+        wsi_set_user(s->ix, h, hyb_free);
+    }
+    refresh_cache(h, s);
+    if (h->built != h->version || !h->row) build_embeddings(h);
+
+    /* flat view of the chunks that pass the path filter */
+    size_t total = 0;
+    for (size_t f = 0; f < h->nf; f++) total += h->f[f].n;
+    Ref *ref = na_alloc((total ? total : 1) * sizeof *ref);
+    size_t nch = 0;
+    for (size_t f = 0; f < h->nf; f++) {
+        if (path_filter && *path_filter && !strstr(h->f[f].path, path_filter)) continue;
+        for (size_t i = 0; i < h->f[f].n; i++) ref[nch++] = (Ref){(uint32_t)f, (uint32_t)i};
+    }
+#define CH(i) (&h->f[ref[i].file].c[ref[i].idx])
 
     Words q = {0};
     {
@@ -287,87 +603,125 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
     char *lq = na_alloc(qn + 1);
     for (size_t i = 0; i < qn; i++) lq[i] = (char)tolower((unsigned char)query[i]);
     lq[qn] = 0;
-
-    Inv body = {0}, name = {0};
-    Chunk *ch = NULL;
-    size_t nch = 0, cch = 0, *blen = NULL, *nlen = NULL;
-    size_t nf = wsi_nfiles(s->ix);
-    for (size_t f = 0; f < nf; f++) {
-        const char *rel = wsi_path(s->ix, f);
-        if (path_filter && *path_filter && !strstr(rel, path_filter)) continue;
-        char *text = NULL;
-        size_t len;
-        if (store_snapshot_text(s->st, rel, &text, &len) != 0 || len > MAX_FILE_BYTES || !utf8_valid(text, len)) {
-            free(text);
-            continue;
-        }
-        size_t nl = 1;
-        for (size_t i = 0; i + 1 < len; i++)
-            if (text[i] == '\n') nl++;
-        size_t *ls = na_alloc((nl + 2) * sizeof *ls);
-        ls[0] = 0;
-        size_t k = 1;
-        for (size_t i = 0; i + 1 < len; i++)
-            if (text[i] == '\n') ls[k++] = i + 1;
-        ls[nl] = len;
-        const Symbol **label = na_alloc((nl + 2) * sizeof *label);
-        memset(label, 0, (nl + 2) * sizeof *label);
-        const SymbolList *sl = wsi_symbols(s->ix, f);
-        for (size_t i = 0; i < sl->n; i++)
-            if (sl->v[i].line >= 1 && sl->v[i].line <= nl) label[sl->v[i].line] = &sl->v[i];
-
-        const Symbol *cur = NULL;
-        size_t first = 1;
-        for (size_t line = 2; line <= nl + 1; line++) {
-            if (!(line == nl + 1 || label[line] || line - first >= WINDOW)) continue;
-            if (label[first]) cur = label[first];
-            if (nch == cch) {
-                cch = cch ? cch * 2 : 256;
-                ch = na_realloc(ch, cch * sizeof *ch);
-                blen = na_realloc(blen, cch * sizeof *blen);
-                nlen = na_realloc(nlen, cch * sizeof *nlen);
-            }
-            size_t last = line - 1, a = ls[first - 1], e = ls[last];
-            ch[nch] = (Chunk){(uint32_t)f, (uint32_t)first, (uint32_t)last, cur, qn >= 3 && contains_ci(text + a, e - a, lq, qn)};
-            blen[nch] = nlen[nch] = 0;
-            AddCtx bc = {&body, (uint32_t)nch, blen};
-            tokenize(text + a, e - a, add_emit, &bc);
-            AddCtx nc = {&name, (uint32_t)nch, nlen};
-            if (cur) {
-                tokenize(cur->name, strlen(cur->name), add_emit, &nc);
-                if (cur->scope) tokenize(cur->scope, strlen(cur->scope), add_emit, &nc);
-            }
-            path_words(rel, add_emit, &nc);
-            nch++;
-            first = line;
-        }
-        free(label);
-        free(ls);
-        free(text);
+    uint32_t *qid = na_alloc((q.n + 1) * sizeof *qid);
+    size_t nq = 0;
+    for (size_t i = 0; i < q.n; i++) {
+        uint32_t id = dict_id(&h->terms, q.w[i], strlen(q.w[i]), false);
+        if (id != (uint32_t)-1) qid[nq++] = id;
     }
 
-    double *sb = na_alloc((nch + 1) * sizeof *sb), *sn = na_alloc((nch + 1) * sizeof *sn);
-    double *rb = na_alloc((nch + 1) * sizeof *rb), *rn = na_alloc((nch + 1) * sizeof *rn);
-    for (size_t i = 0; i < nch; i++) sb[i] = sn[i] = 0;
-    bm25(&body, &q, blen, nch, 1.2, 0.75, sb);
-    bm25(&name, &q, nlen, nch, 1.2, 0.3, sn);
-    ranks_of(sb, nch, rb);
-    ranks_of(sn, nch, rn);
+    /* BM25 on both fields */
+    double *score[2];
+    for (int fld = 0; fld < 2; fld++) {
+        score[fld] = na_alloc((nch + 1) * sizeof(double));
+        for (size_t i = 0; i < nch; i++) score[fld][i] = 0;
+        double avg = 0;
+        uint32_t *dfq = na_alloc((nq + 1) * sizeof *dfq);
+        memset(dfq, 0, (nq + 1) * sizeof *dfq);
+        for (size_t i = 0; i < nch; i++) {
+            const HChunk *c = CH(i);
+            avg += fld ? c->nlen : (c->blen < MIN_DL ? MIN_DL : c->blen);
+            for (size_t k = 0; k < nq; k++)
+                if (pair_tf(fld ? c->nt : c->bt, fld ? c->nnt : c->nbt, qid[k])) dfq[k]++;
+        }
+        avg = nch ? avg / (double)nch : 1;
+        if (avg < 1) avg = 1;
+        const double k1 = 1.2, b = fld ? 0.3 : 0.7;
+        for (size_t i = 0; i < nch; i++) {
+            const HChunk *c = CH(i);
+            double len = fld ? c->nlen : (c->blen < MIN_DL ? MIN_DL : c->blen);
+            for (size_t k = 0; k < nq; k++) {
+                uint32_t tfi = pair_tf(fld ? c->nt : c->bt, fld ? c->nnt : c->nbt, qid[k]);
+                if (!tfi) continue;
+                double tf = tfi, idf = dlog(1 + ((double)nch - dfq[k] + 0.5) / (dfq[k] + 0.5));
+                score[fld][i] += idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * len / avg));
+            }
+        }
+        free(dfq);
+    }
+
+    /* kNN: cosine between the query vector and each chunk vector */
+    double *sem = na_alloc((nch + 1) * sizeof(double));
+    for (size_t i = 0; i < nch; i++) sem[i] = 0;
+    {
+        double qv[DIM];
+        memset(qv, 0, sizeof qv);
+        bool any = false;
+        for (size_t k = 0; k < nq; k++) {
+            int32_t r = h->row[qid[k]];
+            if (r < 0) continue;
+            double w = idf_of((double)total, h->df[qid[k]]);
+            for (int d = 0; d < DIM; d++) qv[d] += w * h->W[(size_t)r * DIM + d];
+            any = true;
+        }
+        if (any) {
+            unit(qv);
+            for (size_t i = 0; i < nch; i++) {
+                const HChunk *c = CH(i);
+                if (!c->vec) continue;
+                double dot = 0;
+                for (int d = 0; d < DIM; d++) dot += qv[d] * c->vec[d];
+                sem[i] = dot;
+            }
+        }
+    }
+
+    double *rb = na_alloc((nch + 1) * sizeof *rb), *rn = na_alloc((nch + 1) * sizeof *rn), *re = na_alloc((nch + 1) * sizeof *re);
+    ranks_of(score[0], nch, 0, rb);
+    ranks_of(score[1], nch, 0, rn);
+    ranks_of(sem, nch, 0.15, re);
     Rank *fin = na_alloc((nch + 1) * sizeof *fin);
     size_t nfin = 0;
     for (size_t i = 0; i < nch; i++) {
         double v = 0;
         if (rb[i] > 0) v += 1.0 / (60.0 + rb[i]);
-        if (rn[i] > 0) v += 1.0 / (60.0 + rn[i]);
-        if (ch[i].phrase) v += 1.0 / 60.0;
-        if (v > 0) fin[nfin++] = (Rank){v, (uint32_t)i};
+        if (rn[i] > 0) v += 1.5 / (60.0 + rn[i]);
+        if (re[i] > 0) v += 0.8 / (60.0 + re[i]);
+        if (v <= 0) continue;
+        const HChunk *c = CH(i);
+        v *= kind_factor(c);
+        if (c->sym && strcmp(c->sym, query) == 0) v += 0.05; /* the query IS the symbol name */
+        fin[nfin++] = (Rank){v, (uint32_t)i};
     }
     qsort(fin, nfin, sizeof *fin, cmp_rank);
 
+    /* exact phrase: checked on the best candidates only (needs the file text) */
+    size_t cand = nfin < 60 ? nfin : 60;
+    if (qn >= 3) {
+        char *cached = NULL;
+        size_t cached_len = 0;
+        uint32_t cached_file = (uint32_t)-1;
+        for (size_t r = 0; r < cand; r++) {
+            const Ref *rf = &ref[fin[r].id];
+            const HChunk *c = &h->f[rf->file].c[rf->idx];
+            if (rf->file != cached_file) {
+                free(cached);
+                cached = NULL;
+                if (store_snapshot_text(s->st, h->f[rf->file].path, &cached, &cached_len) != 0) {
+                    free(cached);
+                    cached = NULL;
+                }
+                cached_file = rf->file;
+            }
+            if (!cached) continue;
+            size_t line = 1, a = 0;
+            while (line < c->first && a < cached_len)
+                if (cached[a++] == '\n') line++;
+            size_t e = a;
+            while (line <= c->last && e < cached_len) {
+                if (cached[e++] == '\n') line++;
+            }
+            if (contains_ci(cached + a, e - a, lq, qn)) fin[r].s += 1.0 / 60.0;
+        }
+        free(cached);
+        qsort(fin, cand, sizeof *fin, cmp_rank);
+    }
+
     J *arr = j_arr();
     for (size_t r = 0; r < nfin && r < limit; r++) {
-        const Chunk *c = &ch[fin[r].id];
-        const char *rel = wsi_path(s->ix, c->file);
+        const Ref *rf = &ref[fin[r].id];
+        const HChunk *c = &h->f[rf->file].c[rf->idx];
+        const char *rel = h->f[rf->file].path;
         char *text = NULL;
         size_t len;
         if (store_snapshot_text(s->st, rel, &text, &len) != 0) {
@@ -390,9 +744,8 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
             line++;
         }
         size_t a = 0, ln = 1;
-        while (ln < best_line && a < len) {
+        while (ln < best_line && a < len)
             if (text[a++] == '\n') ln++;
-        }
         size_t e = a;
         while (e < len && text[e] != '\n' && text[e] != '\r') e++;
         if (e - a > 200) {
@@ -406,8 +759,8 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
         j_set(o, "start_line", j_int((int64_t)c->first));
         j_set(o, "end_line", j_int((int64_t)c->last));
         if (c->sym) {
-            j_set(o, "symbol", j_str(c->sym->name));
-            j_set(o, "kind", j_str(c->sym->kind));
+            j_set(o, "symbol", j_str(c->sym));
+            j_set(o, "kind", j_str(c->kind));
         }
         j_set(o, "score", j_int((int64_t)(fin[r].s * 10000.0 + 0.5)));
         j_push(arr, o);
@@ -421,16 +774,16 @@ int sem_hybrid(Sem *s, const char *query, const char *path_filter, size_t limit,
     *out = o;
 
     free(fin);
-    free(sb);
-    free(sn);
+    free(score[0]);
+    free(score[1]);
+    free(sem);
     free(rb);
     free(rn);
-    free(ch);
-    free(blen);
-    free(nlen);
+    free(re);
+    free(qid);
+    free(ref);
     free(lq);
     words_free(&q);
-    inv_free(&body);
-    inv_free(&name);
     return 0;
+#undef CH
 }

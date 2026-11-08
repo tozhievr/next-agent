@@ -1554,6 +1554,20 @@ static void test_hybrid(void) {
     res = a ? j_get(a, "result") : NULL;
     CHECK(res && j_get(res, "count")->i == 0);
     json_free(a);
+    /* the cache follows edits: a new function is found by the next query, a removed one is gone */
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"replace_text\",\"params\":{\"target\":\"notes.c\",\"old\":\"int unrelated(void) { return 0; }\",\"new\":\"/* adds up the bytes of a buffer */\\nint compute_checksum(const char *buf, int n) {\\n  int s = 0;\\n  for (int i = 0; i < n; i++) s += buf[i];\\n  return s;\\n}\"}}");
+    if (!a || !j_get(a, "result")) printf("replace_text: %s\n", err_of(a));
+    CHECK(a && j_get(a, "result"));
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"hybrid_search\",\"params\":{\"query\":\"sum the bytes of a buffer\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    m = res ? j_get(res, "matches") : NULL;
+    CHECK(m && m->n >= 1 && strcmp(j_get(m->items[0], "symbol")->s, "compute_checksum") == 0); /* the doc comment is part of the chunk */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"hybrid_search\",\"params\":{\"query\":\"unrelated\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 0);
+    json_free(a);
     store_close(st);
     free(ws);
 }

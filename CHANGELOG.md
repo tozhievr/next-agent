@@ -2,7 +2,17 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.31.0 - 2026-11-09
+
+### Added
+- `locate` / `hybrid_search` now has a third signal: kNN over local embeddings. "Random indexing" learns from the workspace itself which words occur in the same code (no model, no network, deterministic), chunk and query vectors are weighted sums of word vectors, similarity is the cosine; fused with BM25 over code words and BM25 over symbol/path names by weighted reciprocal rank fusion.
+- Persistent search cache (kept with the workspace index in `serve`/`mcp`): chunks are cached per file by content hash, so a query after an edit re-tokenizes only the changed files.
+
+### Changed
+- Ranking: doc comments belong to the symbol below them, light stemming (`flushing` ~ `flush`), one-liners and non-symbol chunks are down-weighted, exact symbol name and exact phrase get a bonus.
+
 ## 0.30.0 - 2026-11-08
+
 
 ### Added
 - Hybrid search: `locate QUERY` (RPC/MCP `hybrid_search`) ranks functions and code chunks for a natural-language or identifier query. BM25 over code words (camelCase and snake_case are split, so `drawButton` finds `draw_button`), BM25 over symbol and path names and an exact-phrase signal are fused with reciprocal rank fusion. Deterministic, no libm, identical on Windows and Linux. No embeddings or model needed.
