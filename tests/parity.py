@@ -80,7 +80,7 @@ def main():
     with open(GOLDEN, encoding="utf-8", newline="") as f:
         want = f.read()
     if out != want:
-        sys.stdout.write(out)
+        sys.stdout.buffer.write(out.encode("utf-8"))
         print("PARITY MISMATCH against tests/parity.golden", file=sys.stderr)
         return 1
     print("parity ok (%d lines)" % len(lines))

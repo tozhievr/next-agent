@@ -249,10 +249,13 @@ static int validate_cb(void *ctx, const ValidateDoc *docs, size_t n) {
         if (g->ops.wait_diagnostics(g->ops.ctx, t[i].uri, 1, &report) != 0) goto done;
         before[i] = report;
     }
-    for (size_t i = 0; i < nt; i++) {
-        if (!t[i].after) continue;
-        if (g->ops.change_document(g->ops.ctx, t[i].uri, t[i].after, t[i].alen, 2) != 0) goto done;
-    }
+    /* Headers first: a source file's preamble is built from the headers as they are when its own change
+     * arrives. */
+    for (int pass = 0; pass < 2; pass++)
+        for (size_t i = 0; i < nt; i++) {
+            if (!t[i].after || is_header(t[i].rel) != (pass == 0)) continue;
+            if (g->ops.change_document(g->ops.ctx, t[i].uri, t[i].after, t[i].alen, 2) != 0) goto done;
+        }
     for (size_t i = 0; i < nt; i++) {
         if (t[i].after || !t[i].report) continue;
         /* clangd keeps a stale preamble for an unchanged dependent when only an

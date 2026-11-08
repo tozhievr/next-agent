@@ -182,20 +182,23 @@ Run the build. If it fails and you want to back out: `{"method":"history","param
 ## 12. CLI cheat sheet (one-shot)
 
 ```
-nextagent --root DIR view PATH
-nextagent --root DIR outline PATH [--nested]
-nextagent --root DIR select PATH NAME [--kind K] [--scope S]
-echo '{"if_rev":N,"ops":[...]}' | nextagent --root DIR edit        # or --request FILE
-nextagent --root DIR history [--limit N]
-nextagent --root DIR undo [--rev N]
-nextagent --root DIR redo
-nextagent --root DIR sync [PATH...]
+nextagent --brief search QUERY [--word] [-i] [--context N] [--path SUBSTR]   # grep: path:line: text
+nextagent --brief find QUERY [--kind K]                  # symbols by name, all indexed languages
+nextagent --brief outline PATH [--nested]                # line kind scope::name
+nextagent view PATH --symbol NAME [--raw]                # only that symbol's text
+nextagent view PATH --lines 10-40 --raw                  # a line window as plain text
+nextagent replace PATH --old S --new S [--all]           # literal replacement, unique match required
+nextagent replace-symbol PATH NAME --new-file F          # rewrite a whole function/type
+nextagent patch FILE|-                                   # [{path,old,new,all}] across files, ONE revision
+nextagent references NAME [--path P] | rename NAME NEW | add-param FUNC "int x" --default 0
+echo '{"if_rev":N,"ops":[...]}' | nextagent edit         # codepoint-offset edits
+nextagent history [--limit N] | undo [--rev N] | redo
 ```
-Output is one JSON document on stdout; errors go to stderr with exit code 1. The CLI has no `replace_symbol`; use `serve`/`mcp` for it, or `select` + `edit`.
+Every command that changes text writes the result to disk immediately (`--no-sync` keeps it in the journal only). `--brief` (or `NEXTAGENT_BRIEF=1`) prints compact text instead of JSON, which costs far fewer tokens. LF text passed to `replace`/`patch`/`replace-symbol` is converted to CRLF in CRLF files, so line endings never get mixed. Errors go to stderr with exit code 1 and name the fix (similar symbol names, the candidate list for an ambiguous one).
 
 ## 13. What does not exist
 
-Do not call or promise: branches, rename/find-references/add-parameter refactorings, three-way merge, file watching, socket transport, automatic formatting, symbol resolution across files, or any language other than C/C++ for `outline`/`select`/`replace_symbol` (plain `view`/`edit`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected).
+Do not call or promise: branches, three-way merge, file watching, socket transport, automatic formatting, embeddings/semantic-similarity search (`search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C need a language server (`serve --lsp`; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 

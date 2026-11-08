@@ -1,12 +1,14 @@
 /* NextAgent test suite (C23, built with nextc). Run: build.ps1 test */
 #include "../src/c23.h"
 #include "../src/core.h"
+#include "../src/index.h"
 #include "../src/json.h"
 #include "../src/lsp.h"
 #include "../src/platform.h"
 #include "../src/refactor.h"
 #include "../src/rpc.h"
 #include "../src/store.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1014,7 +1016,7 @@ static void test_rpc(void) {
     /* MCP bridge */
     J *q = parse("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}");
     a = rpc_mcp_dispatch(&r, q);
-    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 13);
+    CHECK(a && j_get(j_get(a, "result"), "tools")->n == 16);
     json_free(a);
     json_free(q);
     q = parse("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"view\",\"arguments\":{\"target\":\"../nope.c\"}}}");
@@ -1181,6 +1183,71 @@ static J *fake_symbols(const char *text) {
     return top;
 }
 
+
+static bool fake_wordc(char c) { return isalnum((unsigned char)c) || c == '_'; }
+
+/* references / rename: whole-word occurrences of the word under the cursor in every open document */
+static J *fake_word_query(FakeDoc *docs, size_t nd, const J *params, const char *newname) {
+    const J *td = j_get(params, "textDocument"), *pos = j_get(params, "position");
+    char *word = NULL;
+    size_t wl = 0;
+    for (size_t i = 0; i < nd && !word; i++) {
+        if (strcmp(docs[i].uri, j_get(td, "uri")->s) != 0) continue;
+        size_t len = strlen(docs[i].text), off;
+        if (lsp_position_to_offset(docs[i].text, len, (size_t)j_get(pos, "line")->i, (size_t)j_get(pos, "character")->i,
+                                   ENC_UTF16, &off) != 0)
+            break;
+        size_t b = cp_to_byte(docs[i].text, len, off), s = b, e = b;
+        while (s > 0 && fake_wordc(docs[i].text[s - 1])) s--;
+        while (e < len && fake_wordc(docs[i].text[e])) e++;
+        if (e > s) {
+            word = na_strndup(docs[i].text + s, e - s);
+            wl = e - s;
+        }
+    }
+    if (!word) return j_null();
+    J *list = j_arr(), *changes = j_obj();
+    for (size_t i = 0; i < nd; i++) {
+        J *edits = j_arr();
+        size_t line = 0, col = 0;
+        const char *t = docs[i].text;
+        for (size_t k = 0; t[k]; k++) {
+            if (t[k] == '\n') {
+                line++;
+                col = 0;
+                continue;
+            }
+            bool start = (k == 0 || !fake_wordc(t[k - 1])) && strncmp(t + k, word, wl) == 0 && !fake_wordc(t[k + wl]);
+            if (start) {
+                J *rg = fake_range(line, col, line, col + wl);
+                if (newname) {
+                    J *te = j_obj();
+                    j_set(te, "range", rg);
+                    j_set(te, "newText", j_str(newname));
+                    j_push(edits, te);
+                } else {
+                    J *loc = j_obj();
+                    j_set(loc, "uri", j_str(docs[i].uri));
+                    j_set(loc, "range", rg);
+                    j_push(list, loc);
+                }
+            }
+            col++;
+        }
+        if (newname && edits->n) j_set(changes, docs[i].uri, edits);
+        else json_free(edits);
+    }
+    free(word);
+    if (!newname) {
+        json_free(changes);
+        return list;
+    }
+    json_free(list);
+    J *we = j_obj();
+    j_set(we, "changes", changes);
+    return we;
+}
+
 static int fake_lsp(void) {
     FakeDoc docs[8];
     size_t nd = 0;
@@ -1269,6 +1336,10 @@ static int fake_lsp(void) {
                     res = fake_symbols(docs[i].text);
                 }
             fake_send(fake_reply(id, res));
+        } else if (strcmp(m, "textDocument/references") == 0) {
+            fake_send(fake_reply(id, fake_word_query(docs, nd, params, NULL)));
+        } else if (strcmp(m, "textDocument/rename") == 0) {
+            fake_send(fake_reply(id, fake_word_query(docs, nd, params, j_get(params, "newName")->s)));
         } else if (id) {
             fake_send(fake_reply(id, j_null()));
         }
@@ -1339,6 +1410,176 @@ static void test_lsp_hub(void) {
     free(ws);
 }
 
+static const char *err_of(const J *reply) {
+    const J *e = reply ? j_get(reply, "error") : NULL, *m = e ? j_get(e, "message") : NULL;
+    return j_is_str(m) ? m->s : "";
+}
+
+static void test_semantic(void) {
+    g_test = "semantic";
+    char *ws = new_ws();
+    char cfg[1500];
+    snprintf(cfg, sizeof cfg,
+             "{\"servers\":[{\"name\":\"fake\",\"command\":\"%s\",\"args\":\"--fake-lsp\",\"extensions\":[\".py\"],\"language\":\"python\"}]}",
+             g_self);
+    put_file(ws, ".aed/lsp.json", cfg);
+    put_file(ws, "a.py", "def compute(x):\n    return x\n");
+    put_file(ws, "b.py", "from a import compute\n\ndef run():\n    return compute(1)\n\ndef other():\n    return compute(2)\n");
+    Store *st = store_open(ws);
+    LspHub *hub = lsp_hub_new(ws, NULL, 5000);
+
+    /* the index re-extracts only what changed */
+    WsIndex *ix = wsi_new(st, hub);
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 2 && wsi_nfiles(ix) == 2);
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 0);
+    CHECK(wsi_has_ident(ix, 0, "compute") && !wsi_has_ident(ix, 0, "run") && wsi_has_ident(ix, 1, "run"));
+    CHECK(edit1(st, "b.py", 0, 0, "# note\n", STORE_NO_REV, NULL, NULL) == 0);
+    CHECK(wsi_refresh(ix) == 0 && wsi_extracted(ix) == 1);
+    wsi_free(ix);
+
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.hub = hub;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"find_symbols\",\"params\":{\"query\":\"COMP\"}}");
+    const J *syms = a ? j_get(j_get(a, "result"), "symbols") : NULL;
+    CHECK(syms && syms->n == 1 && strcmp(j_get(syms->items[0], "path")->s, "a.py") == 0);
+    json_free(a);
+
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"references\",\"params\":{\"name\":\"compute\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 4);
+    CHECK(res && strcmp(j_get(res, "source")->s, "lsp") == 0);
+    CHECK(res && strcmp(j_get(j_get(res, "definition"), "path")->s, "a.py") == 0);
+    json_free(a);
+
+    int64_t head = store_head(st);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"rename\",\"params\":{\"name\":\"compute\",\"new_name\":\"measure\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "sites")->i == 4 && j_get(res, "rev")->i == head + 1);
+    json_free(a);
+    char *va = view_text(st, "a.py"), *vb = view_text(st, "b.py");
+    CHECK(strstr(va, "def measure(x)") && strstr(vb, "import measure") && strstr(vb, "measure(2)") && !strstr(vb, "compute"));
+    free(va);
+    free(vb);
+
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"history\",\"params\":{\"op\":\"undo\"}}");
+    json_free(a);
+    vb = view_text(st, "b.py");
+    CHECK(strstr(vb, "compute(2)") && !strstr(vb, "measure"));
+    free(vb);
+
+    /* a second definition the server lists among the references is the same entity, not an ambiguity */
+    put_file(ws, "c.py", "def compute():\n    pass\n");
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"references\",\"params\":{\"name\":\"compute\"}}");
+    CHECK(a && j_get(a, "result") && j_get(j_get(a, "result"), "count")->i == 5);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"references\",\"params\":{\"name\":\"compute\",\"path\":\"c.py\"}}");
+    CHECK(a && j_get(a, "result") != NULL);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"rename\",\"params\":{\"name\":\"nothing_here\",\"new_name\":\"x\"}}");
+    CHECK(strstr(err_of(a), "symbol_not_found") != NULL);
+    json_free(a);
+
+    lsp_hub_free(hub);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+/* add_param through a real language server: only the occurrences clangd resolves to this function change. */
+static void test_live_semantic(void) {
+    g_test = "clangd-semantic";
+    char *exe = pf_which("clangd");
+    if (!exe) {
+        printf("  skip: clangd not on PATH\n");
+        return;
+    }
+    free(exe);
+    char *ws = new_ws();
+    put_file(ws, "compile_flags.txt", "-xc\n-std=c23\n"); /* headers are C here, not clangd's default C++ */
+    put_file(ws, "a.h", "int add(int a, int b);\n");
+    put_file(ws, "a.c", "#include \"a.h\"\nint add(int a, int b) { return a + b; }\n");
+    put_file(ws, "b.c", "#include \"a.h\"\nint use(void) { return add(1, 2); }\n");
+    put_file(ws, "c.c", "static int add(int x) { return x; }\nint other(void) { return add(3); }\n");
+    Store *st = store_open(ws);
+    LspHub *hub = lsp_hub_new(ws, NULL, 30000);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    r.hub = hub;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"add_param\",\"params\":{\"function\":\"add\",\"param\":\"int c\",\"default\":\"0\"}}");
+    CHECK(strstr(err_of(a), "ambiguous_symbol") != NULL); /* the header's add and c.c's static add are different symbols */
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"add_param\",\"params\":{\"function\":\"add\",\"param\":\"int c\",\"default\":\"0\",\"path\":\"a.h\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strcmp(j_get(res, "source")->s, "lsp") == 0);
+    CHECK(res && j_get(res, "calls")->i == 1 && j_get(res, "declarations")->i == 2);
+    json_free(a);
+    char *vb = view_text(st, "b.c"), *vc = view_text(st, "c.c"), *vh = view_text(st, "a.h");
+    CHECK(strstr(vb, "add(1, 2, 0)") != NULL);
+    CHECK(strstr(vc, "add(3)") != NULL && !strstr(vc, "int c"));
+    CHECK(strstr(vh, "int add(int a, int b, int c)") != NULL);
+    free(vb);
+    free(vc);
+    free(vh);
+    lsp_hub_free(hub);
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
+static void test_agent_tools(void) {
+    g_test = "agent_tools";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "int f(void) {\r\n  return 1;\r\n}\r\nint g(void) {\r\n  return 2;\r\n}\r\n");
+    put_file(ws, "b.c", "int h(void) { return f() + g(); }\n");
+    Store *st = store_open(ws);
+    Rpc r;
+    memset(&r, 0, sizeof r);
+    r.store = st;
+    J *a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"view\",\"params\":{\"target\":\"a.c\",\"symbol\":\"g\"}}");
+    const J *res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strncmp(j_get(res, "text")->s, "int g(void)", 11) == 0 && j_get(res, "start_line")->i == 4);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"view\",\"params\":{\"target\":\"a.c\",\"start_line\":2,\"end_line\":3}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && strstr(j_get(res, "text")->s, "return 1;") && !strstr(j_get(res, "text")->s, "int g"));
+    json_free(a);
+
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"search\",\"params\":{\"query\":\"return\",\"context\":1}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 3);
+    CHECK(res && j_get(j_get(res, "matches")->items[0], "before")->n == 1);
+    json_free(a);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"search\",\"params\":{\"query\":\"f\",\"word\":true,\"path\":\"b.c\"}}");
+    res = a ? j_get(a, "result") : NULL;
+    CHECK(res && j_get(res, "count")->i == 1); /* only the call f(), not 'return' or 'int' */
+    json_free(a);
+
+    int64_t head = store_head(st);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"patch\",\"params\":{\"edits\":["
+                 "{\"path\":\"a.c\",\"old\":\"return 1;\",\"new\":\"return 10;\"},"
+                 "{\"path\":\"a.c\",\"old\":\"int g(void) {\\n  return 2;\",\"new\":\"int g(void) {\\n  return 20;\"},"
+                 "{\"path\":\"b.c\",\"old\":\"f() + g()\",\"new\":\"f() * g()\"}]}}");
+    res = a ? j_get(a, "result") : NULL;
+    if (!res) printf("patch error: %s\n", err_of(a));
+    CHECK(res && j_get(res, "rev")->i == head + 1 && j_get(res, "replacements")->i == 3);
+    json_free(a);
+    char *va = view_text(st, "a.c"), *vb = view_text(st, "b.c");
+    CHECK(strstr(va, "return 10;\r\n") && strstr(va, "return 20;\r\n")); /* LF in the request became CRLF */
+    CHECK(strstr(vb, "f() * g()"));
+    free(va);
+    free(vb);
+    a = call(&r, "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"patch\",\"params\":{\"edits\":[{\"path\":\"a.c\",\"old\":\"return\",\"new\":\"RET\"}]}}");
+    CHECK(strstr(err_of(a), "ambiguous_text") != NULL);
+    json_free(a);
+    CHECK(store_head(st) == head + 1); /* a rejected patch changes nothing */
+    rpc_release(&r);
+    store_close(st);
+    free(ws);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "--fake-lsp") == 0) return fake_lsp();
     {
@@ -1370,6 +1611,9 @@ int main(int argc, char **argv) {
     RUN(test_gate_dependents);
     RUN(test_rpc);
     RUN(test_lsp_hub);
+    RUN(test_semantic);
+    RUN(test_live_semantic);
+    RUN(test_agent_tools);
     RUN(test_live_clangd);
     printf("%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;

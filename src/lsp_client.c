@@ -40,6 +40,7 @@ char *lsp_path_to_uri(const char *abs_path) {
     Buf b;
     buf_init(&b);
     char *norm = path_normalize(abs_path);
+    if (norm[0] >= 'A' && norm[0] <= 'Z' && norm[1] == ':') norm[0] = (char)(norm[0] - 'A' + 'a'); /* clangd keys overlays by lowercase drive */
     buf_puts(&b, "file://");
     if (norm[0] != '/') buf_putc(&b, '/');    for (const unsigned char *p = (const unsigned char *)norm; *p; p++) {
         unsigned char c = *p;
@@ -61,6 +62,11 @@ static int send_msg(LspClient *c, J *msg) {
     Buf frame;
     buf_init(&frame);
     int rc = lsp_frame_message(msg, &frame);
+    if (getenv("NA_LSP_TRACE")) { /* debugging aid: every message to the server */
+        char *d = json_dump(msg);
+        fprintf(stderr, ">> %.600s\n", d);
+        free(d);
+    }
     json_free(msg);
     if (rc == 0 && pf_proc_write(c->proc, frame.p, frame.len) != 0) rc = na_fail("clangd stdin closed");
     buf_free(&frame);
@@ -126,6 +132,11 @@ static int pump(LspClient *c, int timeout_ms, int64_t want_id, J **response) {
     if (rc == 0) return 0;
     if (rc == 2) return na_fail("clangd closed the stream");
     if (rc < 0) return -1;
+    if (getenv("NA_LSP_TRACE")) {
+        char *d = json_dump(msg);
+        fprintf(stderr, "<< %.600s\n", d);
+        free(d);
+    }
     const J *method = j_get(msg, "method"), *id = j_get(msg, "id");
     if (j_is_str(method)) {
         if (id) { /* server -> client request: acknowledge with null */
@@ -442,7 +453,30 @@ int lsp_client_sync(LspClient *c, const char *abs_path, const char *text, size_t
     return 0;
 }
 
+/* Best effort: waits until the server has analysed the latest synced text of a document (it publishes
+ * diagnostics for that version), so cross-file queries see it. True when settled within the budget. */
+bool lsp_client_settle(LspClient *c, const char *abs_path, int budget_ms) {
+    char *uri = lsp_path_to_uri(abs_path);
+    OpenDoc *d = find_doc(c, uri);
+    int64_t want = d ? d->version : 0;
+    uint64_t deadline = pf_now_ms() + (uint64_t)(budget_ms < c->timeout_ms ? budget_ms : c->timeout_ms);
+    bool ok = false;
+    while (d) {
+        J *r = find_report(c, uri);
+        const J *ver = r ? j_get(r, "version") : NULL;
+        if (j_is_int(ver) && ver->i >= want) {
+            ok = true;
+            break;
+        }
+        uint64_t now = pf_now_ms();
+        if (now >= deadline || pump(c, (int)(deadline - now), -1, NULL) < 0) break;
+    }
+    free(uri);
+    return ok;
+}
+
 static int op_wait(void *ctx, const char *uri, int64_t version, J **report) {
+
     LspClient *c = ctx;
     uint64_t deadline = pf_now_ms() + (uint64_t)c->timeout_ms;
     while (true) {

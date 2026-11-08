@@ -682,6 +682,7 @@ static void emit_symbol(SymbolList *out, const CpMap *m, const BSym *b) {
     s->scope = na_strdup(b->scope);
     s->start = cpmap_cp(m, b->bs);
     s->end = cpmap_cp(m, b->be);
+    s->sel = (size_t)-1;
     size_t line = 1, col = 0;
     snap_position(m->snap, s->start, &line, &col);
     s->line = line;
@@ -717,16 +718,42 @@ int c23_outline(const Snapshot *snap, bool nested, SymbolList *out) {
 int symbols_select(const SymbolList *all, const char *name, const char *kind, const char *scope, Symbol *out) {
     long found = -1;
     size_t count = 0;
+    Buf cand;
+    buf_init(&cand);
     for (size_t i = 0; i < all->n; i++) {
         const Symbol *s = &all->v[i];
         if (strcmp(s->name, name) != 0) continue;
         if (kind && strcmp(s->kind, kind) != 0) continue;
         if (scope && strcmp(s->scope, scope) != 0) continue;
         if (count == 0) found = (long)i;
+        if (count < 6) buf_printf(&cand, "%s%s%s%s@%zu", count ? ", " : "", s->scope[0] ? s->scope : "", s->scope[0] ? "::" : "", s->kind, s->line);
         count++;
     }
-    if (count == 0) return na_fail("symbol_not_found: %s", name);
-    if (count != 1) return na_fail("ambiguous_symbol: %s (%zu matches)", name, count);
+    if (count == 0) {
+        /* help the caller: names that contain the query */
+        size_t shown = 0, n = strlen(name);
+        for (size_t i = 0; i < all->n && shown < 5; i++) {
+            const char *h = all->v[i].name;
+            for (size_t k = 0; h[k]; k++) {
+                size_t j = 0;
+                while (j < n && h[k + j] && tolower((unsigned char)h[k + j]) == tolower((unsigned char)name[j])) j++;
+                if (j == n) {
+                    buf_printf(&cand, "%s%s", shown ? ", " : "", h);
+                    shown++;
+                    break;
+                }
+            }
+        }
+        int rc = shown ? na_fail("symbol_not_found: %s (similar: %s)", name, cand.p) : na_fail("symbol_not_found: %s", name);
+        buf_free(&cand);
+        return rc;
+    }
+    if (count != 1) {
+        int rc = na_fail("ambiguous_symbol: %s (%zu matches: %s; narrow with kind or scope)", name, count, cand.p);
+        buf_free(&cand);
+        return rc;
+    }
+    buf_free(&cand);
     const Symbol *s = &all->v[found];
     *out = *s;
     out->name = na_strdup(s->name);
@@ -734,6 +761,7 @@ int symbols_select(const SymbolList *all, const char *name, const char *kind, co
     out->scope = na_strdup(s->scope);
     return 0;
 }
+
 
 int c23_select_cached(OutlineCache *c, const Snapshot *snap, const char *name, const char *kind, const char *scope,
                       Symbol *out) {

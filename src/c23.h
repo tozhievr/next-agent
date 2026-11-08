@@ -9,6 +9,7 @@
 typedef struct {
     char *name, *kind, *scope;
     size_t start, end; /* codepoint offsets */
+    size_t sel;        /* codepoint offset of the name token, or (size_t)-1 when unknown */
     size_t line, column;
 } Symbol;
 

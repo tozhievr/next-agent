@@ -108,7 +108,13 @@ nextagent --root example sync            # writes demo.c to disk
 ```
 nextagent [--root DIR] [--version] <command>
 
-view PATH                        text and current revision
+view PATH [--lines A-B|--symbol NAME] [--raw]   text and current revision
+search QUERY [--word] [-i] [--context N]         grep over the workspace index
+replace PATH --old S --new S [--all]              literal replacement
+replace-symbol PATH NAME --new-file F             rewrite one symbol
+patch [FILE|-]                    edits [{path,old,new,all}] across files, one revision
+references/rename/add-param/find semantic through language servers (serve --lsp)
+global: --brief (compact output), --no-sync (do not write to disk)
 outline PATH [--nested]          top-level symbols (+ tagged types and fields)
 select PATH NAME [--kind K] [--scope S]
 edit [--request FILE]            JSON request from file or stdin
@@ -229,7 +235,7 @@ tests/tests.c   test suite
 - **Not implemented:** branches, offline brain, three-way merge and file watcher, async writer, socket transport, M5b.
 - The scanner is tolerant rather than a full parser; exotic declarators may be misreported. `select` is syntax-only, with no cross-file resolution.
 - clangd gate: with clangd 23 an *unchanged* dependent is not re-diagnosed when an overlay header changes *semantically* (e.g. a signature), so only errors in the edited documents or syntax errors in headers are caught. Macro includes, conditional compilation, system include paths and generated headers are not followed.
-- Refactorings (`references`, `rename`, `add_param`) are token-based and C-only; for other languages only outline/select/replace and the diagnostic gate go through LSP.
+- `references` / `rename` / `find_symbols` are semantic through language servers (`serve --lsp`); `add_param` and `add_include` are still C-only and token-based. Without a server, C falls back to token search; other languages need a server.
 
 See [CHANGELOG.md](CHANGELOG.md) and [docs/agent-plan.md](docs/agent-plan.md).
 
