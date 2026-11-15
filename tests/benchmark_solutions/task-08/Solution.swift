@@ -1,0 +1,1 @@
+func encodeRuns(_ text: String) -> [(Character, Int)] {var result: [(Character,Int)]=[];for c in text {if let last=result.last,last.0==c {result[result.count-1].1 += 1}else{result.append((c,1))}};return result}

@@ -1,0 +1,1023 @@
+[
+  {
+    "language": "antlrv4_lx",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [],
+    "seconds": 0.002357,
+    "sample": "grammar Demo; start: ID EOF; ID: [a-z]+; WS: [ \\t\\r\\n]+ -> skip;\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "c",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "Point",
+        "kind": "struct",
+        "start": 11,
+        "end": 56,
+        "line": 2,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "field",
+        "start": 34,
+        "end": 40,
+        "line": 2,
+        "column": 23,
+        "scope": "Point"
+      },
+      {
+        "name": "y",
+        "kind": "field",
+        "start": 41,
+        "end": 47,
+        "line": 2,
+        "column": 30,
+        "scope": "Point"
+      },
+      {
+        "name": "probe",
+        "kind": "function",
+        "start": 57,
+        "end": 86,
+        "line": 3,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.00616,
+    "sample": "// café 😀\r\ntypedef struct Point { int x; int y; } Point;\nint probe(int x){return x+1;}\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "cpp",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "Point",
+        "kind": "struct",
+        "start": 11,
+        "end": 34,
+        "line": 2,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "probe",
+        "kind": "function",
+        "start": 36,
+        "end": 65,
+        "line": 3,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.05048,
+    "sample": "// café 😀\r\nstruct Point { int x; };\nint probe(int x){return x+1;}\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "csharp",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "Demo",
+        "kind": "variable",
+        "start": 6,
+        "end": 10,
+        "line": 1,
+        "column": 6,
+        "scope": ""
+      },
+      {
+        "name": "Probe",
+        "kind": "variable",
+        "start": 24,
+        "end": 29,
+        "line": 1,
+        "column": 24,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 34,
+        "end": 35,
+        "line": 1,
+        "column": 34,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.088419,
+    "sample": "class Demo { public int Probe(int x) { return x+1; } }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "css3",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 1,
+        "end": 6,
+        "line": 1,
+        "column": 1,
+        "scope": ""
+      },
+      {
+        "name": "color",
+        "kind": "variable",
+        "start": 9,
+        "end": 14,
+        "line": 1,
+        "column": 9,
+        "scope": ""
+      },
+      {
+        "name": "red",
+        "kind": "variable",
+        "start": 16,
+        "end": 19,
+        "line": 1,
+        "column": 16,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.0031,
+    "sample": ".probe { color: red; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "ecmascript",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "function",
+        "start": 0,
+        "end": 33,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 15,
+        "end": 16,
+        "line": 1,
+        "column": 15,
+        "scope": "probe"
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 27,
+        "end": 28,
+        "line": 1,
+        "column": 27,
+        "scope": "probe"
+      }
+    ],
+    "seconds": 0.002012,
+    "sample": "function probe(x) { return x+1; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "expr",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 12,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.001557,
+    "sample": "probe = 1+2;\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "glsl",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "location",
+        "kind": "variable",
+        "start": 20,
+        "end": 30,
+        "line": 2,
+        "column": 7,
+        "scope": ""
+      },
+      {
+        "name": "color",
+        "kind": "variable",
+        "start": 41,
+        "end": 46,
+        "line": 2,
+        "column": 28,
+        "scope": ""
+      },
+      {
+        "name": "main",
+        "kind": "function",
+        "start": 48,
+        "end": 59,
+        "line": 3,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "color",
+        "kind": "variable",
+        "start": 60,
+        "end": 65,
+        "line": 3,
+        "column": 12,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.009407,
+    "sample": "#version 450\nlayout(location=0) out vec4 color;\nvoid main(){color=vec4(1.0);}\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "go",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "main",
+        "kind": "variable",
+        "start": 8,
+        "end": 12,
+        "line": 1,
+        "column": 8,
+        "scope": ""
+      },
+      {
+        "name": "probe",
+        "kind": "function",
+        "start": 13,
+        "end": 49,
+        "line": 2,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 24,
+        "end": 26,
+        "line": 2,
+        "column": 11,
+        "scope": "probe"
+      },
+      {
+        "name": "int",
+        "kind": "variable",
+        "start": 26,
+        "end": 29,
+        "line": 2,
+        "column": 13,
+        "scope": "probe"
+      },
+      {
+        "name": "int",
+        "kind": "variable",
+        "start": 31,
+        "end": 34,
+        "line": 2,
+        "column": 18,
+        "scope": "probe"
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 44,
+        "end": 45,
+        "line": 2,
+        "column": 31,
+        "scope": "probe"
+      }
+    ],
+    "seconds": 0.003778,
+    "sample": "package main\nfunc probe(x int) int { return x+1 }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "haskell",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [],
+    "seconds": 0.009031,
+    "sample": "module Demo where\nprobe x = x + 1\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "html5",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [],
+    "seconds": 0.003465,
+    "sample": "<!doctype html><html><head><title>Demo</title></head><body><p id=\"probe\">Hello</p></body></html>\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "indent",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 27,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 25,
+        "end": 26,
+        "line": 2,
+        "column": 11,
+        "scope": "probe"
+      }
+    ],
+    "seconds": 0.001246,
+    "sample": "def probe(x):\n    return x\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "javascript",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 9,
+        "end": 14,
+        "line": 1,
+        "column": 9,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 15,
+        "end": 16,
+        "line": 1,
+        "column": 15,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 27,
+        "end": 28,
+        "line": 1,
+        "column": 27,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.00269,
+    "sample": "function probe(x) { return x+1; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "json",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "\"probe\"",
+        "kind": "property",
+        "start": 1,
+        "end": 10,
+        "line": 1,
+        "column": 1,
+        "scope": ""
+      },
+      {
+        "name": "\"items\"",
+        "kind": "property",
+        "start": 11,
+        "end": 30,
+        "line": 1,
+        "column": 11,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.001057,
+    "sample": "{\"probe\":1,\"items\":[true,null]}\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "json5",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 1,
+        "end": 6,
+        "line": 1,
+        "column": 1,
+        "scope": ""
+      },
+      {
+        "name": "items",
+        "kind": "variable",
+        "start": 10,
+        "end": 15,
+        "line": 1,
+        "column": 10,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.00111,
+    "sample": "{probe:1, items:[true,null,],}\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "kotlin",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 4,
+        "end": 9,
+        "line": 1,
+        "column": 4,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 10,
+        "end": 11,
+        "line": 1,
+        "column": 10,
+        "scope": ""
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 13,
+        "end": 16,
+        "line": 1,
+        "column": 13,
+        "scope": ""
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 19,
+        "end": 22,
+        "line": 1,
+        "column": 19,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.021306,
+    "sample": "fun probe(x: Int): Int { return x + 1 }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "labels",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 37,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 9,
+        "end": 15,
+        "line": 1,
+        "column": 9,
+        "scope": "probe"
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 12,
+        "end": 15,
+        "line": 1,
+        "column": 12,
+        "scope": "probe::x"
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 20,
+        "end": 23,
+        "line": 1,
+        "column": 20,
+        "scope": "probe"
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 33,
+        "end": 34,
+        "line": 1,
+        "column": 33,
+        "scope": "probe"
+      }
+    ],
+    "seconds": 0.001228,
+    "sample": "fn probe(x: Int) -> Int { return x; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "lean",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 4,
+        "end": 10,
+        "line": 1,
+        "column": 4,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 10,
+        "end": 19,
+        "line": 1,
+        "column": 10,
+        "scope": ""
+      },
+      {
+        "name": "Nat",
+        "kind": "variable",
+        "start": 15,
+        "end": 18,
+        "line": 1,
+        "column": 15,
+        "scope": "x"
+      },
+      {
+        "name": "Nat",
+        "kind": "variable",
+        "start": 22,
+        "end": 26,
+        "line": 1,
+        "column": 22,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 29,
+        "end": 31,
+        "line": 1,
+        "column": 29,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.002142,
+    "sample": "def probe (x : Nat) : Nat := x + 1\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "lua",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "function",
+        "start": 9,
+        "end": 14,
+        "line": 1,
+        "column": 9,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 15,
+        "end": 16,
+        "line": 1,
+        "column": 15,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 25,
+        "end": 26,
+        "line": 1,
+        "column": 25,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.001932,
+    "sample": "function probe(x) return x+1 end\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "mainlang",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 16,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.001333,
+    "sample": "const probe = 1;\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "mermaid",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [],
+    "seconds": 0.001607,
+    "sample": "classDiagram\n class Probe\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "nasm",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": ".text",
+        "kind": "variable",
+        "start": 8,
+        "end": 13,
+        "line": 1,
+        "column": 8,
+        "scope": ""
+      },
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 21,
+        "end": 26,
+        "line": 2,
+        "column": 7,
+        "scope": ""
+      },
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 27,
+        "end": 32,
+        "line": 3,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.007162,
+    "sample": "section .text\nglobal probe\nprobe:\n mov eax, 1\n ret\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "php",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [],
+    "seconds": 0.02932,
+    "sample": "<?php function probe($x) { return $x + 1; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "preds",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 16,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.0014,
+    "sample": "fn probe() { ; }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "python",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 14,
+        "end": 19,
+        "line": 2,
+        "column": 4,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 20,
+        "end": 21,
+        "line": 2,
+        "column": 10,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.004574,
+    "sample": "# café 😀\r\ndef probe(x):\n    return x + 1\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "rust",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 3,
+        "end": 8,
+        "line": 1,
+        "column": 3,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 9,
+        "end": 10,
+        "line": 1,
+        "column": 9,
+        "scope": ""
+      },
+      {
+        "name": "i32",
+        "kind": "variable",
+        "start": 12,
+        "end": 15,
+        "line": 1,
+        "column": 12,
+        "scope": ""
+      },
+      {
+        "name": "i32",
+        "kind": "variable",
+        "start": 20,
+        "end": 23,
+        "line": 1,
+        "column": 20,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 26,
+        "end": 27,
+        "line": 1,
+        "column": 26,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.004894,
+    "sample": "fn probe(x: i32) -> i32 { x+1 }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "splitparser",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 0,
+        "end": 16,
+        "line": 1,
+        "column": 0,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.001777,
+    "sample": "let probe = 1+2;\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "swift",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 5,
+        "end": 10,
+        "line": 1,
+        "column": 5,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 13,
+        "end": 14,
+        "line": 1,
+        "column": 13,
+        "scope": ""
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 16,
+        "end": 19,
+        "line": 1,
+        "column": 16,
+        "scope": ""
+      },
+      {
+        "name": "Int",
+        "kind": "variable",
+        "start": 24,
+        "end": 27,
+        "line": 1,
+        "column": 24,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 37,
+        "end": 38,
+        "line": 1,
+        "column": 37,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.007021,
+    "sample": "func probe(_ x: Int) -> Int { return x + 1 }\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "template",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 5,
+        "end": 10,
+        "line": 1,
+        "column": 5,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.00123,
+    "sample": "<p>${probe}</p>\n",
+    "incremental_stable": true
+  },
+  {
+    "language": "typescript",
+    "empty_sample": false,
+    "loaded": true,
+    "syntax_errors": 0,
+    "diagnostics": [],
+    "symbols": [
+      {
+        "name": "probe",
+        "kind": "variable",
+        "start": 16,
+        "end": 21,
+        "line": 1,
+        "column": 16,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 22,
+        "end": 23,
+        "line": 1,
+        "column": 22,
+        "scope": ""
+      },
+      {
+        "name": "x",
+        "kind": "variable",
+        "start": 50,
+        "end": 51,
+        "line": 1,
+        "column": 50,
+        "scope": ""
+      }
+    ],
+    "seconds": 0.011808,
+    "sample": "export function probe(x: number): number { return x+1; }\n",
+    "incremental_stable": true
+  }
+]

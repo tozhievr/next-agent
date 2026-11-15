@@ -1,0 +1,34 @@
+{
+  "incremental_edit_outline": {
+    "rounds": 25,
+    "median_ms": 74.82481199999924,
+    "p95_ms": 81.57774700000076
+  },
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+  "corpus_bytes": 4980,
+  "symbols": 100,
+  "cold_outline_ms": 4132.858899999999,
+  "full_view": {
+    "rounds": 25,
+    "median_ms": 4.921895000000731,
+    "p95_ms": 5.18099099999958,
+    "response_bytes": 5157
+  },
+  "symbol_view": {
+    "rounds": 25,
+    "median_ms": 7.737513999998669,
+    "p95_ms": 8.361229000000137,
+    "response_bytes": 142
+  },
+  "warm_outline": {
+    "rounds": 25,
+    "median_ms": 8.041901000000351,
+    "p95_ms": 8.913043999999815,
+    "response_bytes": 9648
+  },
+  "response_reduction": 36.316901408450704,
+  "notes": [
+    "Single process, sequential RPC, local filesystem; wall-clock timings include Python JSON transport.",
+    "No model requests, tokenizer estimates, API cost or comparison against another agent."
+  ]
+}

@@ -1,0 +1,2 @@
+#include "interfaces/api.hpp"
+std::optional<std::size_t> utf8_count(std::string_view s){std::size_t count=0;for(std::size_t i=0;i<s.size();++count){unsigned char c=s[i++];unsigned v;int n;if(c<128){continue;}else if(c>=0xc2&&c<=0xdf){v=c&31;n=1;}else if(c>=0xe0&&c<=0xef){v=c&15;n=2;}else if(c>=0xf0&&c<=0xf4){v=c&7;n=3;}else return {};if(s.size()-i<std::size_t(n))return {};int width=n;while(n--){unsigned char d=s[i++];if((d&0xc0)!=0x80)return {};v=(v<<6)|(d&63);}if((width==2&&v<0x800)||(width==3&&v<0x10000)||(v>=0xd800&&v<=0xdfff)||v>0x10ffff)return {};}return count;}

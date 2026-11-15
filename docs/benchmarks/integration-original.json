@@ -1,0 +1,302 @@
+[
+  {
+    "id": "task-01",
+    "language": "C++",
+    "title": "Checked integer arithmetic",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 4.9074,
+    "output": ""
+  },
+  {
+    "id": "task-02",
+    "language": "C++",
+    "title": "UTF-8 code point counter",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 134,
+    "seconds": 0.6397,
+    "output": "nextagent_test_439: tests/test.cpp:3: int main(): Assertion `utf8_count(\"Ã©\")==1' failed.\ntests/run.sh: line 6:   448 Aborted                    /tmp/nextagent_test_$$\n"
+  },
+  {
+    "id": "task-03",
+    "language": "C++",
+    "title": "LRU cache",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.6878,
+    "output": ""
+  },
+  {
+    "id": "task-04",
+    "language": "C++",
+    "title": "Thread-safe bounded queue",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.6834,
+    "output": ""
+  },
+  {
+    "id": "task-05",
+    "language": "Kotlin",
+    "title": "Balanced delimiters",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 1,
+    "seconds": 2.9521,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\nSolution.kt:1:1: error: conflicting overloads: public fun balanced(input: String): Boolean defined in root package in file Solution.kt, public fun balanced(input: String): Boolean defined in root package in file API.kt\nfun balanced(input: String): Boolean { val stack=java.util.ArrayDeque<Char>(); for(c in input){when(c){'(','[','{'->stack.push(c);')',']','}'->{if(stack.isEmpty())return false;val a=stack.pop();if((c==')'&&a!='(')||(c==']'&&a!='[')||(c=='}'&&a!='{'))return false}}};return stack.isEmpty() }\n^\ninterfaces/API.kt:1:1: error: conflicting overloads: public fun balanced(input: String): Boolean defined in root package in file Solution.kt, public fun balanced(input: String): Boolean defined in root package in file API.kt\nfun balanced(input: String): Boolean\n^\ninterfaces/API.kt:1:1: error: function 'balanced' must have a body\nfun balanced(input: String): Boolean\n^\ntests/Test.kt:1:18: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                 ^\ntests/Test.kt:1:38: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                                     ^\ntests/Test.kt:1:66: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                                                                 ^\ntests/Test.kt:1:91: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                                                                                          ^\ntests/Test.kt:1:114: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                                                                                                                 ^\ntests/Test.kt:1:135: error: overload resolution ambiguity: \npublic fun balanced(input: String): Boolean defined in root package in file Solution.kt\npublic fun balanced(input: String): Boolean defined in root package in file API.kt\nfun main(){check(balanced(\"\"));check(balanced(\"{[()] }\"));check(!balanced(\"([)]\"));check(!balanced(\"((\"));check(!balanced(\"]\"));check(balanced(\"x + (y[0])\"))}\n                                                                                                                                      ^\n"
+  },
+  {
+    "id": "task-06",
+    "language": "Kotlin",
+    "title": "Stable event aggregation",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 3.1059,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\n"
+  },
+  {
+    "id": "task-07",
+    "language": "Kotlin",
+    "title": "Dependency topological sort",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 2.8826,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\n"
+  },
+  {
+    "id": "task-08",
+    "language": "Swift",
+    "title": "Run-length encoding",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.3036,
+    "output": ""
+  },
+  {
+    "id": "task-09",
+    "language": "Swift",
+    "title": "Interval union",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.9154,
+    "output": ""
+  },
+  {
+    "id": "task-10",
+    "language": "Swift",
+    "title": "JSON Pointer resolver",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.9892,
+    "output": ""
+  },
+  {
+    "id": "task-11",
+    "language": "Haskell",
+    "title": "Safe list rotation",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.529,
+    "output": ""
+  },
+  {
+    "id": "task-12",
+    "language": "Haskell",
+    "title": "Expression AST evaluator",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.3799,
+    "output": ""
+  },
+  {
+    "id": "task-13",
+    "language": "Haskell",
+    "title": "Dijkstra shortest paths",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.3388,
+    "output": ""
+  },
+  {
+    "id": "task-14",
+    "language": "TypeScript",
+    "title": "Typed result combinators",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.0318,
+    "output": ""
+  },
+  {
+    "id": "task-15",
+    "language": "TypeScript",
+    "title": "Deep immutable merge",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.9445,
+    "output": ""
+  },
+  {
+    "id": "task-16",
+    "language": "TypeScript",
+    "title": "Promise pool",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.0077,
+    "output": ""
+  },
+  {
+    "id": "task-17",
+    "language": "TypeScript",
+    "title": "Discriminated event reducer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.9261,
+    "output": ""
+  },
+  {
+    "id": "task-18",
+    "language": "JavaScript",
+    "title": "Query-string parser",
+    "difficulty": "Easy",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.2329,
+    "output": ""
+  },
+  {
+    "id": "task-19",
+    "language": "JavaScript",
+    "title": "Event emitter",
+    "difficulty": "Medium",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.2341,
+    "output": ""
+  },
+  {
+    "id": "task-20",
+    "language": "JavaScript",
+    "title": "Retry with exponential backoff",
+    "difficulty": "Hard",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.2517,
+    "output": ""
+  },
+  {
+    "id": "task-21",
+    "language": "GLSL",
+    "title": "Grayscale fragment shader",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.2433,
+    "output": ""
+  },
+  {
+    "id": "task-22",
+    "language": "GLSL",
+    "title": "Normal transformation vertex shader",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.2415,
+    "output": ""
+  },
+  {
+    "id": "task-23",
+    "language": "GLSL",
+    "title": "Cook-Torrance BRDF function",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.2534,
+    "output": ""
+  },
+  {
+    "id": "task-24",
+    "language": "HTML",
+    "title": "Accessible signup form",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.1579,
+    "output": ""
+  },
+  {
+    "id": "task-25",
+    "language": "HTML",
+    "title": "Accessible data table",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.1447,
+    "output": ""
+  },
+  {
+    "id": "task-26",
+    "language": "HTML",
+    "title": "Accessible modal dialog markup",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.1425,
+    "output": ""
+  },
+  {
+    "id": "task-27",
+    "language": "CSS",
+    "title": "Responsive card grid",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.1555,
+    "output": ""
+  },
+  {
+    "id": "task-28",
+    "language": "CSS",
+    "title": "Accessible focus and reduced motion",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.1397,
+    "output": ""
+  },
+  {
+    "id": "task-29",
+    "language": "CSS",
+    "title": "Container-query component",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.149,
+    "output": ""
+  },
+  {
+    "id": "task-30",
+    "language": "C++",
+    "title": "Arithmetic expression lexer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 134,
+    "seconds": 0.9856,
+    "output": "nextagent_test_1184: tests/test.cpp:10: int main(): Assertion `(t[8] == Token{TokenKind::RParen, \")\", 11})' failed.\ntests/run.sh: line 6:  1193 Aborted                    /tmp/nextagent_test_$$\n"
+  }
+]

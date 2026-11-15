@@ -1,0 +1,3 @@
+#include "interfaces/api.hpp"
+#include <stdexcept>
+std::vector<Token> lex(std::string_view s){std::vector<Token> result;for(std::size_t i=0;i<s.size();){const char c=s[i];if(c==' '||c=='\t'||c=='\n'||c=='\r'||c=='\f'||c=='\v'){++i;continue;}auto start=i;TokenKind kind;if(c>='0'&&c<='9'){kind=TokenKind::Number;while(i<s.size()&&s[i]>='0'&&s[i]<='9')++i;}else{++i;switch(c){case '+':kind=TokenKind::Plus;break;case '-':kind=TokenKind::Minus;break;case '*':kind=TokenKind::Star;break;case '/':kind=TokenKind::Slash;break;case '(':kind=TokenKind::LParen;break;case ')':kind=TokenKind::RParen;break;default:throw std::invalid_argument("Invalid character at byte "+std::to_string(start));}}result.push_back({kind,std::string(s.substr(start,i-start)),start});}return result;}

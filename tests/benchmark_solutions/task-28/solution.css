@@ -1,0 +1,4 @@
+.action { transition: background-color 150ms ease; }
+.action:hover { background-color: #eee; }
+.action:focus-visible { outline: 3px solid #315bd6; outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .action { transition: none; animation: none; } }

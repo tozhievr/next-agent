@@ -76,7 +76,10 @@ jobs:
             chmod +x dist/$name/nextagent dist/$name/nextagent-harness-cli
             cp -R build/linux/plugins dist/$name/
           fi
-          cp README.md LICENSE CHANGELOG.md docs/AGENT_GUIDE.md docs/HARNESS.md dist/$name/
+          cp README.md LICENSE CHANGELOG.md dist/$name/
+          mkdir -p dist/$name/docs
+          cp docs/AGENT_GUIDE.md docs/HARNESS.md dist/$name/docs/
+          cp -R docs/benchmarks dist/$name/docs/
           cd dist
           if [ "${{ matrix.target }}" = windows ]; then
             python -c "import shutil,sys; shutil.make_archive('$name','zip','.','$name')"

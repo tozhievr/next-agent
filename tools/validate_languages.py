@@ -54,6 +54,9 @@ with AgentIO(ROOT / "build" / "language-validation" / ("windows" if os.name=="nt
             after=agent.call('outline',{'target':target,'nested':True})
             assert [(x['name'],x['kind']) for x in after['symbols']]==[(x['name'],x['kind']) for x in outline['symbols']]
             updated=agent.call('analyze',{'target':target});assert updated['version']>report['version'];assert updated['snapshot_version']>report['snapshot_version'];assert updated['diagnostics']==diagnostics
+            with AgentIO(ROOT / 'build' / 'language-validation' / ('windows' if os.name=='nt' else 'linux'),native=True,executable=args.executable) as fresh:
+                cold=fresh.call('outline',{'target':target,'nested':True})
+                assert cold['symbols']==after['symbols'], (lang,'incremental differs from full parse')
             row['incremental_stable']=True
         except Exception as exc:row=dict(language=lang,loaded=False,error=repr(exc))
         rows.append(row);print(lang,row.get('syntax_errors'),row.get('error',''),flush=True)

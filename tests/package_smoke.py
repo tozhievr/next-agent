@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
     assert len(list(plugins.glob("*.lxmanifest.json"))) == 30
     assert len(list(plugins.glob("*" + extension))) == 30
     assert not list(exe.parent.rglob("lxserver.exe"))
+    subprocess.run([sys.executable, str(ROOT / "tools/validate_languages.py"), "--executable", str(exe), "--report", "build/package-language-test.json"], check=True)
     for script in ("bundled_lsp.py", "parity.py"):
         subprocess.run([sys.executable, str(ROOT / "tests" / script), str(exe)], check=True)
 print("Packaged binary, all 30 native plugins, parity and SHA-256 passed after relocation")

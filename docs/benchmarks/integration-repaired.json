@@ -1,0 +1,302 @@
+[
+  {
+    "id": "task-01",
+    "language": "C++",
+    "title": "Checked integer arithmetic",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 7.6955,
+    "output": ""
+  },
+  {
+    "id": "task-02",
+    "language": "C++",
+    "title": "UTF-8 code point counter",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.5528,
+    "output": ""
+  },
+  {
+    "id": "task-03",
+    "language": "C++",
+    "title": "LRU cache",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 2.0601,
+    "output": ""
+  },
+  {
+    "id": "task-04",
+    "language": "C++",
+    "title": "Thread-safe bounded queue",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 3.9897,
+    "output": ""
+  },
+  {
+    "id": "task-05",
+    "language": "Kotlin",
+    "title": "Balanced delimiters",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 4.9972,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\n"
+  },
+  {
+    "id": "task-06",
+    "language": "Kotlin",
+    "title": "Stable event aggregation",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 4.5746,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\n"
+  },
+  {
+    "id": "task-07",
+    "language": "Kotlin",
+    "title": "Dependency topological sort",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 5.2138,
+    "output": "OpenJDK 64-Bit Server VM warning: Options -Xverify:none and -noverify were deprecated in JDK 13 and will likely be removed in a future release.\nWARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: sun.misc.Unsafe::objectFieldOffset has been called by com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: Please consider reporting this to the maintainers of class com.intellij.util.containers.ConcurrentIntObjectHashMap\nWARNING: sun.misc.Unsafe::objectFieldOffset will be removed in a future release\nWARNING: A restricted method in java.lang.System has been called\nWARNING: java.lang.System::load has been called by com.sun.jna.Native in an unnamed module\nWARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module\nWARNING: Restricted methods will be blocked in a future release unless native access is enabled\n\n"
+  },
+  {
+    "id": "task-08",
+    "language": "Swift",
+    "title": "Run-length encoding",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.8387,
+    "output": ""
+  },
+  {
+    "id": "task-09",
+    "language": "Swift",
+    "title": "Interval union",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.1735,
+    "output": ""
+  },
+  {
+    "id": "task-10",
+    "language": "Swift",
+    "title": "JSON Pointer resolver",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.4042,
+    "output": ""
+  },
+  {
+    "id": "task-11",
+    "language": "Haskell",
+    "title": "Safe list rotation",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.755,
+    "output": ""
+  },
+  {
+    "id": "task-12",
+    "language": "Haskell",
+    "title": "Expression AST evaluator",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.4875,
+    "output": ""
+  },
+  {
+    "id": "task-13",
+    "language": "Haskell",
+    "title": "Dijkstra shortest paths",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.5002,
+    "output": ""
+  },
+  {
+    "id": "task-14",
+    "language": "TypeScript",
+    "title": "Typed result combinators",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.441,
+    "output": ""
+  },
+  {
+    "id": "task-15",
+    "language": "TypeScript",
+    "title": "Deep immutable merge",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.7771,
+    "output": ""
+  },
+  {
+    "id": "task-16",
+    "language": "TypeScript",
+    "title": "Promise pool",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.8189,
+    "output": ""
+  },
+  {
+    "id": "task-17",
+    "language": "TypeScript",
+    "title": "Discriminated event reducer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.7227,
+    "output": ""
+  },
+  {
+    "id": "task-18",
+    "language": "JavaScript",
+    "title": "Query-string parser",
+    "difficulty": "Easy",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.4203,
+    "output": ""
+  },
+  {
+    "id": "task-19",
+    "language": "JavaScript",
+    "title": "Event emitter",
+    "difficulty": "Medium",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.3913,
+    "output": ""
+  },
+  {
+    "id": "task-20",
+    "language": "JavaScript",
+    "title": "Retry with exponential backoff",
+    "difficulty": "Hard",
+    "run": "node tests/test.mjs",
+    "exit_code": 0,
+    "seconds": 0.3738,
+    "output": ""
+  },
+  {
+    "id": "task-21",
+    "language": "GLSL",
+    "title": "Grayscale fragment shader",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.5848,
+    "output": ""
+  },
+  {
+    "id": "task-22",
+    "language": "GLSL",
+    "title": "Normal transformation vertex shader",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.4325,
+    "output": ""
+  },
+  {
+    "id": "task-23",
+    "language": "GLSL",
+    "title": "Cook-Torrance BRDF function",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 0.4977,
+    "output": ""
+  },
+  {
+    "id": "task-24",
+    "language": "HTML",
+    "title": "Accessible signup form",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.3321,
+    "output": ""
+  },
+  {
+    "id": "task-25",
+    "language": "HTML",
+    "title": "Accessible data table",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.3537,
+    "output": ""
+  },
+  {
+    "id": "task-26",
+    "language": "HTML",
+    "title": "Accessible modal dialog markup",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.2719,
+    "output": ""
+  },
+  {
+    "id": "task-27",
+    "language": "CSS",
+    "title": "Responsive card grid",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.2027,
+    "output": ""
+  },
+  {
+    "id": "task-28",
+    "language": "CSS",
+    "title": "Accessible focus and reduced motion",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.2006,
+    "output": ""
+  },
+  {
+    "id": "task-29",
+    "language": "CSS",
+    "title": "Container-query component",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py",
+    "exit_code": 0,
+    "seconds": 0.2057,
+    "output": ""
+  },
+  {
+    "id": "task-30",
+    "language": "C++",
+    "title": "Arithmetic expression lexer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh",
+    "exit_code": 0,
+    "seconds": 1.9771,
+    "output": ""
+  }
+]

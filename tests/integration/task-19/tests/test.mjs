@@ -1,0 +1,1 @@
+import {Emitter} from '../solution.mjs';import assert from 'node:assert/strict';const e=new Emitter(),seen=[];const a=x=>{seen.push('a'+x);e.off('x',b)},b=x=>seen.push('b'+x);e.on('x',a);e.on('x',b);assert.equal(e.emit('x',1),2);assert.deepEqual(seen,['a1','b1']);assert.equal(e.emit('x',2),1);let n=0;e.once('y',()=>{n++;e.emit('y')});e.emit('y');assert.equal(n,1);

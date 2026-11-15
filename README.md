@@ -279,3 +279,6 @@ The desktop Harness combines next-agent, the embedded next-langserver, and the
 Arcade UI library from `arcade_ui_standalone`. Run `nextagent-harness.exe` on Windows,
 choose a workspace and configure an OpenRouter key and model. Linux includes
 `nextagent-harness-cli`. See [Harness setup and verification](docs/HARNESS.md).
+
+Measured native integration results, original fixture failures and reproducible commands:
+[verification report](docs/benchmarks/README.md).

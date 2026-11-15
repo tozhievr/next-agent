@@ -1,0 +1,1 @@
+func mergeIntervals(_ values: [Interval]) -> [Interval] {let sorted=values.filter{$0.start <= $0.end}.sorted{$0.start == $1.start ? $0.end < $1.end : $0.start < $1.start};var result: [Interval]=[];for i in sorted{if let last=result.last,i.start <= last.end {result[result.count-1]=Interval(start:last.start,end:max(last.end,i.end))}else{result.append(i)}};return result}

@@ -1,0 +1,1 @@
+fun balanced(input: String): Boolean { val stack=java.util.ArrayDeque<Char>(); for(c in input){when(c){'(','[','{'->stack.push(c);')',']','}'->{if(stack.isEmpty())return false;val a=stack.pop();if((c==')'&&a!='(')||(c==']'&&a!='[')||(c=='}'&&a!='{'))return false}}};return stack.isEmpty() }
