@@ -28,6 +28,11 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
         extension = ".so"
     assert len(executables) == 1, executables
     exe = executables[0]
+    cli = exe.with_name("nextagent-harness-cli" + (".exe" if extension == ".dll" else ""))
+    assert cli.is_file(), cli
+    if extension == ".dll":
+        assert exe.with_name("nextagent-harness.exe").is_file()
+    subprocess.run([str(cli), "--root", str(destination / "workspace"), "--state-dir", str(destination / "state"), "--offline", "--prompt", "package self-test", "--json"], check=True)
     plugins = exe.parent / "plugins"
     assert len(list(plugins.glob("*.lxmanifest.json"))) == 30
     assert len(list(plugins.glob("*" + extension))) == 30

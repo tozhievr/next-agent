@@ -42,7 +42,7 @@ jobs:
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y ninja-build
+          sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev
           curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
           sudo bash /tmp/llvm.sh 23
           echo "CLANG=clang-23" >> "$GITHUB_ENV"
@@ -69,13 +69,14 @@ jobs:
           name=nextagent-$ver-${{ matrix.target }}-x64
           mkdir -p dist/$name
           if [ "${{ matrix.target }}" = windows ]; then
-            cp build/windows/nextagent.exe dist/$name/
+            cp build/windows/nextagent.exe build/windows/nextagent-harness-cli.exe build/windows/nextagent-harness.exe dist/$name/
             cp -R build/windows/plugins dist/$name/
           else
-            cp build/linux/nextagent dist/$name/ && chmod +x dist/$name/nextagent
+            cp build/linux/nextagent build/linux/nextagent-harness-cli dist/$name/
+            chmod +x dist/$name/nextagent dist/$name/nextagent-harness-cli
             cp -R build/linux/plugins dist/$name/
           fi
-          cp README.md LICENSE CHANGELOG.md docs/AGENT_GUIDE.md dist/$name/
+          cp README.md LICENSE CHANGELOG.md docs/AGENT_GUIDE.md docs/HARNESS.md dist/$name/
           cd dist
           if [ "${{ matrix.target }}" = windows ]; then
             python -c "import shutil,sys; shutil.make_archive('$name','zip','.','$name')"

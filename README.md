@@ -165,7 +165,7 @@ function is in the top ten in 13 cases without a model and 18 with `nomic-embed-
 - **Claude Code**: install the skill (above). The model then reaches for `apply`, `view --symbol` and `locate` by itself.
 - **Any agent with a shell tool**: put the CLI cheat sheet of [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (section 12) in
   its instructions.
-- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (21 tools: `view`,
+- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (23 tools: `view`,
   `outline`, `select`, `replace_symbol`, `replace_text`, `patch`, `edit`, `references`, `rename`, `locate`, `context`, ...).
 
   ```json
@@ -272,3 +272,10 @@ the official binary into `build/toolchain` and prints its `bin` directory; add
 that directory to `PATH`. CI uses the same setup helper. Both platform plugin
 snapshots are included in the repository. To regenerate a snapshot from the
 sibling grammar projects, run `python3 tools/build_plugins.py --source ../next-langserver --cc clang-23`.
+
+## Harness
+
+The desktop Harness combines next-agent, the embedded next-langserver, and the
+Arcade UI library from `arcade_ui_standalone`. Run `nextagent-harness.exe` on Windows,
+choose a workspace and configure an OpenRouter key and model. Linux includes
+`nextagent-harness-cli`. See [Harness setup and verification](docs/HARNESS.md).

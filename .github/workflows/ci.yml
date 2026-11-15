@@ -26,7 +26,7 @@ jobs:
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y ninja-build
+          sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev
           curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
           sudo bash /tmp/llvm.sh 23
           echo "CLANG=clang-23" >> "$GITHUB_ENV"

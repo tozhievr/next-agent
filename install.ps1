@@ -39,7 +39,11 @@ try {
     $runtime = Join-Path $exe.DirectoryName "plugins"
     if (-not (Test-Path -LiteralPath $runtime -PathType Container)) { throw "bundled language plugins not found in archive" }
     Copy-Item -LiteralPath $runtime -Destination $dir -Recurse -Force
-    Copy-Item $exe.FullName (Join-Path $dir "nextagent.exe") -Force
+    foreach ($name in @("nextagent.exe", "nextagent-harness-cli.exe", "nextagent-harness.exe")) {
+        $source = Join-Path $exe.DirectoryName $name
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "$name not found in archive" }
+        Copy-Item -LiteralPath $source -Destination (Join-Path $dir $name) -Force
+    }
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
 }
