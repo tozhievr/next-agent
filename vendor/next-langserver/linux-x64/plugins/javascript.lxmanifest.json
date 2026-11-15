@@ -1,0 +1,14 @@
+{
+  "id": "javascript",
+  "display_name": "JavaScriptParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x46eaa8b150981c93",
+  "extensions": [
+    ".js",
+    ".mjs",
+    ".cjs",
+    ".jsx"
+  ],
+  "library": "libjavascript.so"
+}

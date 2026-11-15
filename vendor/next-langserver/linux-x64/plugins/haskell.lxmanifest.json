@@ -1,0 +1,13 @@
+{
+  "id": "haskell",
+  "display_name": "HaskellParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xa726c359391ebe2a",
+  "extensions": [
+    ".hs",
+    ".lhs",
+    ".haskell"
+  ],
+  "library": "libhaskell.so"
+}

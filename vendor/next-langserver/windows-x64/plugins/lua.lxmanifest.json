@@ -1,0 +1,11 @@
+{
+  "id": "lua",
+  "display_name": "LuaParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x855401fcb53be03b",
+  "extensions": [
+    ".lua"
+  ],
+  "library": "lua.dll"
+}

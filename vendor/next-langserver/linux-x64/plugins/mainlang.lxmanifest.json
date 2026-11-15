@@ -1,0 +1,11 @@
+{
+  "id": "mainlang",
+  "display_name": "MainLang",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x6826c5363feaf759",
+  "extensions": [
+    ".mainlang"
+  ],
+  "library": "libmainlang.so"
+}

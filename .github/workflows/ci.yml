@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build:
-    name: clang + libc23 / ${{ matrix.target }}
+    name: Clang 23 / C++26 / ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -21,9 +21,16 @@ jobs:
           - { os: ubuntu-latest, target: linux }
     steps:
       - uses: actions/checkout@v4
+      - name: Install CMake 4.5
+        run: python tools/setup_cmake.py
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build
+          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          sudo bash /tmp/llvm.sh 23
+          echo "CLANG=clang-23" >> "$GITHUB_ENV"
+          echo "CXX=clang++-23" >> "$GITHUB_ENV"
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -35,5 +42,7 @@ jobs:
         run: python build.py test --target ${{ matrix.target }}
       - name: Cross-platform parity
         run: python tests/parity.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
+      - name: Native language modules
+        run: python tests/bundled_lsp.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
       - name: Skill package
         run: python skill/package.py build/skill

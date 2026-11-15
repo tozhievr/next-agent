@@ -1,0 +1,14 @@
+{
+  "id": "typescript",
+  "display_name": "TypeScriptParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xaa1816946e93300c",
+  "extensions": [
+    ".ts",
+    ".tsx",
+    ".mts",
+    ".cts"
+  ],
+  "library": "libtypescript.so"
+}

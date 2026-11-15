@@ -21,5 +21,6 @@ fi
 tar -xzf "$tmp/pkg.tar.gz" -C "$tmp"
 mkdir -p "$dir"
 install -m 755 "$tmp"/nextagent-*/nextagent "$dir/nextagent"
+cp -R "$tmp"/nextagent-*/plugins "$dir/"
 echo "installed $("$dir/nextagent" --version) to $dir"
 case ":$PATH:" in *":$dir:"*) ;; *) echo "add $dir to your PATH" ;; esac

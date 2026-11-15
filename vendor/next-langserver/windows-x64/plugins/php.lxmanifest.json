@@ -1,0 +1,12 @@
+{
+  "id": "php",
+  "display_name": "PhpParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x4f6534f1f30efeb1",
+  "extensions": [
+    ".php",
+    ".phtml"
+  ],
+  "library": "php.dll"
+}

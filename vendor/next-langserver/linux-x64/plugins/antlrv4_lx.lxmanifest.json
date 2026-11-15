@@ -1,0 +1,12 @@
+{
+  "id": "antlrv4_lx",
+  "display_name": "ANTLRv4Parser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x3e3858500fef3d7e",
+  "extensions": [
+    ".g4",
+    ".antlrv4_lx"
+  ],
+  "library": "libantlrv4_lx.so"
+}

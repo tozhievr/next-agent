@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## Unreleased
+
+- Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.
+- Linked the own next-langserver host/engine directly into NextAgent; plugins are
+  selected lazily from file extensions and parsed in-process with persistent sessions.
+- Removed LSP Hub, subprocess language-server clients, the interim bridge DLL,
+  and the vendored libc23 runtime. Windows packages contain all 30 language plugins.
+- Added native-module integration tests and versioned diagnostic gate regression tests.
+- Added the Linux dlopen loader, all 30 native ELF plugins, tar.gz distribution and WSL2 verification.
+
 ## 0.44.0 - 2026-11-09
 
 ### Added

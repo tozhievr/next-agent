@@ -1,0 +1,16 @@
+{
+  "id": "cpp",
+  "display_name": "CPP23Parser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xfbd646a811c3461d",
+  "extensions": [
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".hpp",
+    ".hxx",
+    ".hh"
+  ],
+  "library": "libcpp.so"
+}

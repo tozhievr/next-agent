@@ -1,0 +1,11 @@
+{
+  "id": "labels",
+  "display_name": "Labels",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x83a1457fc78275ef",
+  "extensions": [
+    ".labels"
+  ],
+  "library": "labels.dll"
+}

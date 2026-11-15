@@ -1,0 +1,11 @@
+{
+  "id": "json",
+  "display_name": "Json",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xa6d58db84c19bc64",
+  "extensions": [
+    ".json"
+  ],
+  "library": "json.dll"
+}

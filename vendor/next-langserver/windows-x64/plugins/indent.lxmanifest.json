@@ -1,0 +1,11 @@
+{
+  "id": "indent",
+  "display_name": "Indent",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x086dc026822da093",
+  "extensions": [
+    ".indent"
+  ],
+  "library": "indent.dll"
+}

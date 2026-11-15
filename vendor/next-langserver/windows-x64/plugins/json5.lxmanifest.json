@@ -1,0 +1,11 @@
+{
+  "id": "json5",
+  "display_name": "JSON5",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x646ee395f8c23b25",
+  "extensions": [
+    ".json5"
+  ],
+  "library": "json5.dll"
+}

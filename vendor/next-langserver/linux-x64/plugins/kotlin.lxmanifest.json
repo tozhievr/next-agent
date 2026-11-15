@@ -1,0 +1,13 @@
+{
+  "id": "kotlin",
+  "display_name": "KotlinParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xdf9fc7e2f1929b1f",
+  "extensions": [
+    ".kt",
+    ".kts",
+    ".kotlin"
+  ],
+  "library": "libkotlin.so"
+}

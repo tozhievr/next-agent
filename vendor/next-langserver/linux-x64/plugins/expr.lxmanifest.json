@@ -1,0 +1,11 @@
+{
+  "id": "expr",
+  "display_name": "Expr",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xd22eccd8a8f0e11b",
+  "extensions": [
+    ".expr"
+  ],
+  "library": "libexpr.so"
+}

@@ -3,7 +3,7 @@
 [![CI](https://github.com/tozhievr/next-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/tozhievr/next-agent/actions/workflows/ci.yml)
 
 **A headless, transactional code editor for AI coding agents, with the search and navigation around it.**
-One small binary (about 170 KB, no runtime, no SDK), the same behaviour on Windows and Linux.
+The language engine is linked into the executable; Windows and Linux distributions include 30 native language plugins.
 
 A coding agent normally reads whole files, counts line numbers and sends one edit per place. NextAgent lets it:
 
@@ -16,14 +16,14 @@ A coding agent normally reads whole files, counts line numbers and sends one edi
 
 It works from a shell tool (CLI), as an MCP server, or as a JSON-RPC server, and ships a Claude Code skill.
 
-> **Version 0.44.0.** Written in C23 (clang + a vendored libc23). about 430 checks on Windows and 415 on Linux, plus a
-> byte-for-byte cross-platform parity test. See [CHANGELOG.md](CHANGELOG.md).
+> **Version 0.44.0, development tree.** C++26, Clang 23.1.3 and CMake 4.5.0-rc1.
+> Native next-langserver engine integration; no external language-server processes.
 
 ## Contents
 
 [What it saves](#what-it-saves) · [Install](#install) · [Quick start](#quick-start) · [Commands](#commands) ·
 [Languages](#languages-and-language-servers) · [Search](#search-by-meaning) · [Use it from an AI tool](#use-it-from-an-ai-tool) ·
-[Safety and storage](#safety-and-storage) · [clangd gate](#clangd-diagnostic-gate) · [Build](#build) ·
+[Safety and storage](#safety-and-storage) · [Diagnostic gate](#diagnostic-gate) · [Build](#build) ·
 [Source layout](#source-layout) · [Limitations](#limitations)
 
 ## What it saves
@@ -103,7 +103,7 @@ single backslash that must arrive; it is replaced in every argument and in `appl
 | **Refactor** | `rename OLD NEW`, `references NAME`, `add-param FUNC "int x" --default 0`, `add-include TARGET HEADER` |
 | **History** | `history`, `diff [REV]`, `undo [--rev N]`, `redo` |
 | **Files changed outside** | `sync [PATH...]`, `merge [PATH...] [--ours\|--theirs] [--dry-run]` |
-| **Servers** | `serve`, `mcp` (with `--clangd` or `--lsp`) |
+| **Servers** | `serve`, `mcp` (native modules enabled automatically) |
 
 Prefer symbol or text anchors (`before-symbol`, `append`, `sub`) to line numbers: a number taken from an earlier read
 drifts as soon as anything above it changes. Details, error messages and the JSON forms are in
@@ -111,35 +111,32 @@ drifts as soon as anything above it changes. Details, error messages and the JSO
 
 ## Languages and language servers
 
-C and C++ work out of the box (a built-in tolerant scanner). Other languages use a language server, started on first
-use and found on `PATH`:
+NextAgent links the `next-langserver` host and engine libraries directly into its
+C++26 core. `LanguageRegistry` chooses a module from the requested file extension
+and loads only the required native plugin (DLL on Windows, .so on Linux). No LSP Hub, `lxserver.exe`, Node.js, or
+external language server is involved.
 
-| Languages | Server (first one found) |
-|---|---|
-| C, C++ | `clangd` (long-lived modes; one-shot CLI calls use the scanner) |
-| Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp` |
-| Rust | `rust-analyzer` |
-| Go | `gopls` |
-| TypeScript, JavaScript | `typescript-language-server` |
-| Zig, Lua | `zls`, `lua-language-server` |
+Distributions contain `nextagent.exe` (Windows) or `nextagent` (Linux), plus
+`plugins/` with all 30 native libraries, manifests, and query resources. `outline file.py`, `select file.ts name`,
+plain `serve`, and plain `mcp` use the engine automatically. `language_modules`
+reports the registered modules and their lazy-load state (`lsp_servers` remains
+as a JSON-RPC compatibility alias).
 
-One-shot CLI commands that address symbols or refactor (`outline`, `select`, `view`, `replace-symbol`, `insert`,
-`apply`, `patch`, `replace`, `rename`, `references`, `add-param`) use these servers for non-C files;
-`NEXTAGENT_NO_LSP=1` turns that off. Index-wide commands (`find`, `locate`, `context`, `callers`) stay on the cheap path.
-`serve --lsp` and `mcp --lsp` use servers for everything, including `find_symbols` and the diagnostic gate.
+Sessions retain persistent syntax trees. Text changes become minimal byte edits
+at UTF-8 boundaries, followed by incremental Rope/ChangeSet reparsing. Native
+symbols are converted to NextAgent codepoint offsets; diagnostics retain document
+versions. C/C++ also retain the existing scanner's richer declaration ranges and
+syntax refactorings, after the native module parses the file.
 
-**Verified live** (`tests/lspcheck.py`: outline, find, references, rename, in both modes): clangd, pyright and
-typescript-language-server. rust-analyzer, gopls, zls and lua-language-server are wired the same way but have not been
-tried here. A TypeScript project needs `typescript` 5.x in its `node_modules` (the server refuses TypeScript 7).
+`NEXTAGENT_PLUGIN_DIR` selects a different plugin directory.
+`NEXTAGENT_NO_LSP=1` is a legacy switch that disables automatic language analysis.
+`NEXTAGENT_LANGSERVER_DIR` remains compatible and selects its `plugins/` subdirectory.
+Workspace `.aed/lsp.json` subprocess configuration is no longer used.
 
-Add or override servers in `<root>/.aed/lsp.json`:
-
-```json
-{"servers": [{"name": "pyright", "command": "node", "args": "/path/to/pyright/langserver.index.js --stdio", "extensions": [".py"]}]}
-```
-
-On Windows an npm-installed server is a `.cmd` shim that cannot be spawned directly: start it as
-`node <js entry> --stdio`, or wrap it as `"command": "cmd", "args": "/c typescript-language-server --stdio"`.
+Current modules provide syntax diagnostics and document structure; semantic
+references/rename for other languages still require capabilities that the engine
+does not yet implement. Windows x64 and Linux x64 bundles both include all 30
+modules. Linux modules are loaded with `dlopen`/`dlsym` and released with `dlclose`.
 
 ## Search by meaning
 
@@ -168,7 +165,7 @@ function is in the top ten in 13 cases without a model and 18 with `nomic-embed-
 - **Claude Code**: install the skill (above). The model then reaches for `apply`, `view --symbol` and `locate` by itself.
 - **Any agent with a shell tool**: put the CLI cheat sheet of [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (section 12) in
   its instructions.
-- **MCP**: `nextagent --root DIR mcp [--clangd | --lsp]` speaks the Model Context Protocol over stdio (21 tools: `view`,
+- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (21 tools: `view`,
   `outline`, `select`, `replace_symbol`, `replace_text`, `patch`, `edit`, `references`, `rename`, `locate`, `context`, ...).
 
   ```json
@@ -189,30 +186,37 @@ function is in the top ten in 13 cases without a model and 18 with `nomic-embed-
 - **Paths.** `..` escapes, `.git` and `.aed` components, drive/stream (`:`) components and symlink or junction targets
   are rejected. CRLF is preserved exactly.
 - **Workspace files.** State lives in `<root>/.aed/`: `journal.aedj` (checksummed records, torn tails detected and
-  discarded, an exclusive lock so several processes can share a workspace), `index.cache`, `embed.cache`, `lsp.json`,
-  `embed.json`. Only the first holds anything you cannot rebuild.
+  discarded, an exclusive lock so several processes can share a workspace), `index.cache`, `embed.cache`, `embed.json`. Only the first holds anything you cannot rebuild.
 
-### clangd diagnostic gate
+### Diagnostic gate
 
-With `serve --clangd` / `mcp --clangd`, every `edit`, `replace_symbol`, `undo` and `redo` of C/C++ is vetted before it
-is committed: the changed files and the files that `#include` them are diagnosed by clangd before and after the change,
-and any *added* warning or error rejects the edit (`diagnostics_regression`). Reports must carry the expected document
-version, otherwise the gate fails closed; the compilation database is hashed again inside the write lock. Nothing is
-written on rejection. See [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) section 8 for the exact rules and their limits.
+`serve --diagnostics` and `mcp --diagnostics` compare native syntax diagnostics
+before and after edits and reject added warnings/errors. The gate requires fresh
+versioned reports and leaves the journal and disk unchanged on rejection. This is
+syntax validation; it does not provide compiler-level semantic validation.
+The historical `--lsp` flag aliases `--diagnostics`.
 
 ## Build
 
-Needs clang, lld, llvm, ninja and Python 3 (the libc23 it links against is vendored in `vendor/libc23`):
+Use Clang/Clang++ 23.1.3 or newer, CMake 4.5.0-rc1 or newer, Ninja, and a platform
+C++ runtime/SDK (MSVC + Windows SDK on Windows). All application and test sources
+compile as standard C++26 with `-pedantic-errors`. The `next-langserver` host and
+engine are statically linked; plugin DLLs are loaded inside the same process.
 
 ```sh
-python build.py test --target windows        # or --target linux
-python tests/parity.py build/linux/nextagent  # output must equal tests/parity.golden
-python skill/package.py build/skill           # the Claude Code skill package
+cmake -S . -B build/windows -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+cmake --build build/windows
+ctest --test-dir build/windows --output-on-failure
+python tests/bundled_lsp.py build/windows/nextagent.exe
+python tests/parity.py build/windows/nextagent.exe
+python package.py
 ```
 
-CI builds, tests and runs the parity check on both targets for every push, and publishes `windows-x64.zip`,
-`linux-x64.tar.gz` and the skill package on every `v*` tag. Legacy Windows scripts (`build.ps1`, `build.sh`) remain for
-the nextc compiler. The live-clangd tests are skipped when `clangd` is not on `PATH`.
+`python build.py test`, `./build.ps1 test`, and `./build.sh test` are convenience
+frontends for the same CMake build. CPack creates the complete distribution;
+`package.py` also writes its SHA-256 checksum. No vendored C runtime is required.
+The upstream engine/host sources and plugin snapshot live under
+`vendor/next-langserver`; the standalone LSP frontend is not built or packaged.
 
 ## Source layout
 
@@ -220,12 +224,12 @@ the nextc compiler. The live-clangd tests are skipped when `clangd` is not on `P
 src/util.*      buffers, errors, UTF-8, BLAKE2b, path rules          src/bin.h      binary cache encoding
 src/json.*      JSON DOM and writer                                  src/merge.*    three-way merge
 src/platform*   files, locks, processes, sockets (Windows / POSIX)   src/index.*    workspace index and its cache
-src/core.*      snapshots and changesets                             src/hybrid.c   locate: BM25 + embeddings
+src/core.*      snapshots and changesets                             src/hybrid.cpp   locate: BM25 + embeddings
 src/store.*     journal, history, flush, merge of outside changes    src/embed.*    external embedding model client
 src/c23.*       C23 scanner                                          src/semantic.* references, rename, call graph
-src/lsp_*.c     LSP client, hub, diagnostics gate                    src/refactor.* token-based C refactors
-src/rpc.*       JSON-RPC and MCP                                     src/main.c     CLI
-tests/          tests.c, parity.py, lspcheck.py, locate_eval.py, bench.py          skill/   the Claude Code skill
+src/language_engine.cpp  native language sessions and plugin registry                    src/refactor.* token-based C refactors
+src/rpc.*       JSON-RPC and MCP                                     src/main.cpp     CLI
+tests/          tests.cpp, parity.py, bundled_lsp.py, locate_eval.py, bench.py          skill/   the Claude Code skill
 ```
 
 ## Limitations
@@ -234,10 +238,9 @@ tests/          tests.c, parity.py, lspcheck.py, locate_eval.py, bench.py       
   next call), an async writer, a socket transport.
 - The C scanner is tolerant rather than a full parser; exotic declarators may be misreported, and `select` is syntax
   only. `add-param` and `add-include` are C-only and token-based.
-- The clangd gate misses a semantic change of a header (for example a signature) in an *unchanged* dependent; macro
-  includes, conditional compilation, system include paths and generated headers are not followed.
+- Native diagnostics validate syntax. Compiler semantic errors, conditional compilation and generated headers need a separate compiler check.
 - `locate` skips files over 8 MB and reads only UTF-8. The embedding client speaks plain HTTP only.
-- Language servers other than clangd, pyright and typescript-language-server are untested here.
+- The bundled next-langserver provides syntax analysis, not compiler semantic analysis.
 - State from 0.19 and earlier (`.aed/state.sqlite3`) is not read; run `sync` with the old version first.
 
 See [CHANGELOG.md](CHANGELOG.md), [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md), [docs/BENCHMARK.md](docs/BENCHMARK.md) and
@@ -246,3 +249,26 @@ See [CHANGELOG.md](CHANGELOG.md), [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md), [d
 ## License
 
 MIT, see [LICENSE](LICENSE).
+
+Build a Windows archive with `python build.py test` followed by `python package.py`.
+Verify the runtime with `python tests/bundled_lsp.py build/windows/nextagent.exe`.
+
+### Linux / WSL2 build
+
+The Linux bundle is verified in WSL2 Ubuntu 26.04 with Clang 23.1.6 and CMake
+4.5.0-rc1. It contains native ELF modules, not Windows DLLs. The executable uses
+the system glibc and libstdc++ runtime.
+
+```sh
+CLANG=clang-23 CXX=clang++-23 python3 build.py test --target linux
+python3 tests/bundled_lsp.py build/linux/nextagent
+python3 tests/parity.py build/linux/nextagent
+python3 package.py
+python3 tests/package_smoke.py dist/nextagent-0.44.0-linux-x64.tar.gz
+```
+
+If the required CMake is not installed, `python3 tools/setup_cmake.py` downloads
+the official binary into `build/toolchain` and prints its `bin` directory; add
+that directory to `PATH`. CI uses the same setup helper. Both platform plugin
+snapshots are included in the repository. To regenerate a snapshot from the
+sibling grammar projects, run `python3 tools/build_plugins.py --source ../next-langserver --cc clang-23`.

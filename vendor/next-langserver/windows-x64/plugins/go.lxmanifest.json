@@ -1,0 +1,11 @@
+{
+  "id": "go",
+  "display_name": "GoParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x6931df6f8dad239d",
+  "extensions": [
+    ".go"
+  ],
+  "library": "go.dll"
+}

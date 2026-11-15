@@ -3,7 +3,7 @@
 #define NA_RPC_H
 #include <stdio.h>
 #include "c23.h"
-#include "lsp.h"
+#include "language.hpp"
 #include "index.h"
 #include "json.h"
 #include "store.h"
@@ -15,7 +15,7 @@ typedef struct {
     bool autoflush; /* serve/mcp: write each committed revision to disk (default on; --no-sync disables) */
     const char *session; /* "cli" or "jsonrpc" */
     WsIndex *index; /* workspace index, created on first use */
-    LspHub *hub; /* optional: language servers for non-C documents (outline, select, replace_symbol) */
+    LanguageEngine *languages; /* optional: language servers for non-C documents (outline, select, replace_symbol) */
     /* per-document incremental outline caches (long-lived servers re-lex only what changed) */
     char *cache_paths[32];
     OutlineCache *caches[32];

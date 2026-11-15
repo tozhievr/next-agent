@@ -1,0 +1,2 @@
+(fnDecl) @fold
+(block) @fold

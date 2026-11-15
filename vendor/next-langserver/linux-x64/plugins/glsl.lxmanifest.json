@@ -1,0 +1,15 @@
+{
+  "id": "glsl",
+  "display_name": "GLSLParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xac38a40bd5cfdd39",
+  "extensions": [
+    ".glsl",
+    ".vert",
+    ".frag",
+    ".geom",
+    ".comp"
+  ],
+  "library": "libglsl.so"
+}

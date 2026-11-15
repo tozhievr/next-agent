@@ -1,0 +1,12 @@
+{
+  "id": "c",
+  "display_name": "CParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xd37599800ccf64e1",
+  "extensions": [
+    ".c",
+    ".h"
+  ],
+  "library": "c.dll"
+}

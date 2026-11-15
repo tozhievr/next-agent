@@ -36,6 +36,9 @@ try {
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
     $exe = Get-ChildItem $tmp -Recurse -Filter nextagent.exe | Select-Object -First 1
     if (-not $exe) { throw "nextagent.exe not found in archive" }
+    $runtime = Join-Path $exe.DirectoryName "plugins"
+    if (-not (Test-Path -LiteralPath $runtime -PathType Container)) { throw "bundled language plugins not found in archive" }
+    Copy-Item -LiteralPath $runtime -Destination $dir -Recurse -Force
     Copy-Item $exe.FullName (Join-Path $dir "nextagent.exe") -Force
 } finally {
     Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue

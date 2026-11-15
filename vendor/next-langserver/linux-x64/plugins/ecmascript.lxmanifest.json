@@ -1,0 +1,12 @@
+{
+  "id": "ecmascript",
+  "display_name": "ECMAScript",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x2e638fd30d949652",
+  "extensions": [
+    ".es",
+    ".ecmascript"
+  ],
+  "library": "libecmascript.so"
+}

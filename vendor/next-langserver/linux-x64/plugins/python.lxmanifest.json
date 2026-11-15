@@ -1,0 +1,14 @@
+{
+  "id": "python",
+  "display_name": "PythonParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xc17048f2c2917065",
+  "extensions": [
+    ".py",
+    ".pyw",
+    ".pyi",
+    ".python"
+  ],
+  "library": "libpython.so"
+}

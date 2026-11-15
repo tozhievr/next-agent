@@ -1,0 +1,11 @@
+{
+  "id": "swift",
+  "display_name": "Swift5Parser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xd0f1bc9d8499bb69",
+  "extensions": [
+    ".swift"
+  ],
+  "library": "libswift.so"
+}

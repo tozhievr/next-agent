@@ -1,0 +1,13 @@
+{
+  "id": "nasm",
+  "display_name": "nasm_x86_64_Parser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x9acb3b6269cd0e5d",
+  "extensions": [
+    ".asm",
+    ".nasm",
+    ".s"
+  ],
+  "library": "nasm.dll"
+}

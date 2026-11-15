@@ -1,0 +1,11 @@
+{
+  "id": "lean",
+  "display_name": "lean",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xe6f99568b9d789a7",
+  "extensions": [
+    ".lean"
+  ],
+  "library": "lean.dll"
+}

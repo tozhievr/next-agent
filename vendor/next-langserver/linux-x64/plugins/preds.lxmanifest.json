@@ -1,0 +1,12 @@
+{
+  "id": "preds",
+  "display_name": "Preds",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x0fdd3627142c5999",
+  "extensions": [
+    ".preds"
+  ],
+  "library": "libpreds.so",
+  "queries_dir": "preds.queries"
+}
