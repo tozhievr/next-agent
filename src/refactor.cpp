@@ -1,5 +1,5 @@
 #include "refactor.h"
-#include "c23.h"
+#include "symbols.hpp"
 #include "platform.h"
 #include <ctype.h>
 #include <stdlib.h>
@@ -820,7 +820,7 @@ int rf_find_symbols(Store *st, const char *query, const char *kind, size_t limit
         if (!text) continue;
         Snapshot *snap = snap_new(0, text, len);
         SymbolList list;
-        if (c23_outline(snap, false, &list) == 0) {
+        if (syntax_outline(snap, false, &list) == 0) {
             for (size_t i = 0; i < list.n; i++) {
                 const Symbol *s = &list.v[i];
                 if (kind && strcmp(kind, s->kind) != 0) continue;

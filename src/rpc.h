@@ -2,7 +2,7 @@
 #ifndef NA_RPC_H
 #define NA_RPC_H
 #include <stdio.h>
-#include "c23.h"
+#include "symbols.hpp"
 #include "language.hpp"
 #include "index.h"
 #include "json.h"
@@ -17,8 +17,8 @@ struct Rpc {
     bool autoflush; /* serve/mcp: write each committed revision to disk (default on; --no-sync disables) */
     const char *session; /* "cli" or "jsonrpc" */
     WsIndex *index; /* workspace index, created on first use */
-    LanguageEngine *languages; /* optional: language servers for non-C documents (outline, select, replace_symbol) */
-    /* per-document incremental outline caches (long-lived servers re-lex only what changed) */
+    LanguageEngine *languages; /* native language sessions (outline, select, replace_symbol) */
+    /* per-document native snapshot sessions for callers without an attached engine */
     char *cache_paths[32];
     OutlineCache *caches[32];
     size_t ncaches, next_evict;

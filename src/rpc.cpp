@@ -1,6 +1,7 @@
+#include <string>
 #include "rpc.h"
 #include "semantic.h"
-#include "c23.h"
+#include "symbols.hpp"
 #include "platform.h"
 #include "refactor.h"
 #include <ctype.h>
@@ -146,6 +147,7 @@ static OutlineCache *outline_cache_of(Rpc *r, const char *target) {
     }
     r->cache_paths[slot] = canon;
     r->caches[slot] = outline_cache_new();
+    outline_cache_set_path(r->caches[slot], canon);
     return r->caches[slot];
 }
 
@@ -167,8 +169,7 @@ static bool is_c_family(const char *p) {
     return false;
 }
 
-/* Language servers are asked first; C-family files fall back to the built-in scanner when no server
- * is installed or the request fails. */
+/* Symbols always come from next-langserver; snapshot adapters also use native parsing. */
 static bool use_lsp(Rpc *r, const char *target) { return r->languages && language_handles(r->languages, target); }
 
 static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
@@ -184,13 +185,25 @@ static int lsp_symbols(Rpc *r, const char *target, const Snapshot *s, bool neste
     return rc;
 }
 
+static int m_analyze(Rpc *r,const J *p,J **out){
+ const char *target;if(need_str(p,"target",&target))return -1;
+ if(!r->languages)return na_fail("native language analysis disabled");
+ Snapshot *snap=nullptr;if(store_view(r->store,target,&snap)!=0)return -1;
+ char *canon=store_canon(r->store,target);if(!canon){snap_free(snap);return -1;}
+ std::string path=std::string(store_root(r->store))+"/"+canon;free(canon);
+ auto ops=language_ops(r->languages);char *uri=nullptr;
+ int rc=ops.open_document(ops.ctx,path.c_str(),snap->text,snap->len,snap->rev,&uri);
+ if(rc==0)rc=ops.wait_diagnostics(ops.ctx,uri,snap->rev,out);
+ free(uri);snap_free(snap);return rc;
+}
+
 static int outline_any(Rpc *r, const char *target, const Snapshot *s, bool nested, SymbolList *out) {
     if (use_lsp(r, target)) {
         if (lsp_symbols(r, target, s, nested, out) == 0) return 0;
         if (!is_c_family(target)) return -1;
     }
     OutlineCache *oc = outline_cache_of(r, target);
-    return oc ? c23_outline_cached(oc, s, nested, out) : c23_outline(s, nested, out);
+    return oc ? syntax_outline_cached(oc, s, nested, out) : syntax_outline(s, nested, out);
 }
 
 static int select_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *kind,
@@ -205,7 +218,7 @@ static int select_any(Rpc *r, const char *target, const Snapshot *s, const char 
         if (!is_c_family(target)) return -1;
     }
     OutlineCache *oc = outline_cache_of(r, target);
-    return oc ? c23_select_cached(oc, s, name, kind, scope, out) : c23_select(s, name, kind, scope, out);
+    return oc ? syntax_select_cached(oc, s, name, kind, scope, out) : syntax_select(s, name, kind, scope, out);
 }
 
 static int replace_any(Rpc *r, const char *target, const Snapshot *s, const char *name, const char *replacement,
@@ -221,8 +234,8 @@ static int replace_any(Rpc *r, const char *target, const Snapshot *s, const char
         return 0;
     }
     OutlineCache *oc = outline_cache_of(r, target);
-    return oc ? c23_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, cs)
-              : c23_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, cs);
+    return oc ? syntax_replace_symbol_cached(oc, s, name, replacement, strlen(replacement), kind, scope, cs)
+              : syntax_replace_symbol(s, name, replacement, strlen(replacement), kind, scope, cs);
 }
 
 static int m_view(Rpc *r, const J *p, J **out) {
@@ -1512,6 +1525,7 @@ static const Method METHODS[] = {
     {"sync", m_sync},       {"references", m_references}, {"rename", m_rename},
     {"add_param", m_add_param}, {"add_include", m_add_include}, {"find_symbols", m_find_symbols},
     {"language_modules", m_language_modules},
+    {"analyze", m_analyze},
     {"lsp_servers", m_language_modules},
 };
 
@@ -1602,7 +1616,9 @@ static J *tools_list(void) {
     J *arr = j_arr();
     j_push(arr, tool_def("view", "Read a document at the current revision.",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}"));
-    j_push(arr, tool_def("outline", "List C23 top-level (or nested) symbols.",
+    j_push(arr, tool_def("analyze", "Get versioned syntax diagnostics from the native language module.",
+                         "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}"));
+    j_push(arr, tool_def("outline", "List native language top-level (or nested) symbols.",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"nested\":{\"type\":\"boolean\"}},\"required\":[\"target\"]}"));
     j_push(arr, tool_def("select", "Locate one symbol by name, kind and scope.",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"scope\":{\"type\":\"string\"}},\"required\":[\"target\",\"name\"]}"));

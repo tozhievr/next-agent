@@ -19,7 +19,7 @@ foreach(target lx_common lx_atn lx_rope lx_uast lx_lex lx_parse lx_host lx_host_
 endforeach()
 
 set(NEXTAGENT_SOURCES
-  src/checks.cpp src/util.cpp src/json.cpp src/platform.cpp src/core.cpp src/store.cpp src/c23.cpp
+  src/checks.cpp src/util.cpp src/json.cpp src/platform.cpp src/core.cpp src/store.cpp src/symbols.cpp
   src/lsp_proto.cpp src/compilation.cpp src/diagnostic_gate.cpp
   src/language_engine.cpp src/refactor.cpp src/index.cpp src/semantic.cpp
   src/hybrid.cpp src/embed.cpp src/merge.cpp src/rpc.cpp)
@@ -115,3 +115,6 @@ if(WIN32)
  add_test(NAME harness_gui COMMAND nextagent_harness --smoke --warp --state-dir ${CMAKE_CURRENT_BINARY_DIR}/gui-state --screenshot ${CMAKE_CURRENT_BINARY_DIR}/harness-ui.bmp)
  set_tests_properties(harness_gui PROPERTIES TIMEOUT 60)
 endif()
+
+add_test(NAME native_languages COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_languages.py --executable $<TARGET_FILE:nextagent> --report build/${NEXTAGENT_PLATFORM}/native-language-test.json)
+set_tests_properties(native_languages PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)

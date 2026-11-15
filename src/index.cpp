@@ -225,7 +225,7 @@ static void extract(WsIndex *ix, Entry *e, const char *t, size_t n) {
     if (c_family(e->path)) {
         Snapshot *snap = snap_new(0, t, n);
         SymbolList l;
-        if (c23_outline(snap, true, &l) == 0) e->syms = l;
+        if (syntax_outline_path(e->path, snap, true, &l) == 0) e->syms = l;
         snap_free(snap);
     }
 }

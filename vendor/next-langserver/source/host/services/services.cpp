@@ -1,4 +1,5 @@
 #include "host/services.hpp"
+#include "host/services/c_family_outline.hpp"
 #include "host/services/query_cache.hpp"
 
 #include "host/extensions.hpp"
@@ -729,6 +730,7 @@ std::vector<FoldRange> Services::fold(const Snapshot& snapshot) {
 }
 
 std::vector<DocumentSymbolNode> Services::outline(const Snapshot& snapshot) {
+  if(snapshot.module && (snapshot.module->id=="c" || snapshot.module->id=="cpp")) return c_family_outline(snapshot);
   std::vector<DocumentSymbolNode> out;
   if (!snapshot.root) return out;
   const LoadedModule* mod = snapshot.module.get();

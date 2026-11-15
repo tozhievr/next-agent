@@ -125,8 +125,8 @@ as a JSON-RPC compatibility alias).
 Sessions retain persistent syntax trees. Text changes become minimal byte edits
 at UTF-8 boundaries, followed by incremental Rope/ChangeSet reparsing. Native
 symbols are converted to NextAgent codepoint offsets; diagnostics retain document
-versions. C/C++ also retain the existing scanner's richer declaration ranges and
-syntax refactorings, after the native module parses the file.
+versions. C/C++ declaration ranges, kinds and nesting are extracted from the native syntax tree.
+The former built-in C23 lexer/scanner has been removed. Token-based refactoring helpers remain syntax-only.
 
 `NEXTAGENT_PLUGIN_DIR` selects a different plugin directory.
 `NEXTAGENT_NO_LSP=1` is a legacy switch that disables automatic language analysis.
@@ -165,7 +165,7 @@ function is in the top ten in 13 cases without a model and 18 with `nomic-embed-
 - **Claude Code**: install the skill (above). The model then reaches for `apply`, `view --symbol` and `locate` by itself.
 - **Any agent with a shell tool**: put the CLI cheat sheet of [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (section 12) in
   its instructions.
-- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (23 tools: `view`,
+- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (24 tools: `view`,
   `outline`, `select`, `replace_symbol`, `replace_text`, `patch`, `edit`, `references`, `rename`, `locate`, `context`, ...).
 
   ```json
@@ -226,7 +226,7 @@ src/json.*      JSON DOM and writer                                  src/merge.*
 src/platform*   files, locks, processes, sockets (Windows / POSIX)   src/index.*    workspace index and its cache
 src/core.*      snapshots and changesets                             src/hybrid.cpp   locate: BM25 + embeddings
 src/store.*     journal, history, flush, merge of outside changes    src/embed.*    external embedding model client
-src/c23.*       C23 scanner                                          src/semantic.* references, rename, call graph
+src/symbols.*   native syntax snapshot adapter                                          src/semantic.* references, rename, call graph
 src/language_engine.cpp  native language sessions and plugin registry                    src/refactor.* token-based C refactors
 src/rpc.*       JSON-RPC and MCP                                     src/main.cpp     CLI
 tests/          tests.cpp, parity.py, bundled_lsp.py, locate_eval.py, bench.py          skill/   the Claude Code skill
@@ -236,8 +236,8 @@ tests/          tests.cpp, parity.py, bundled_lsp.py, locate_eval.py, bench.py  
 
 - Not implemented: branches of the history, a file-watcher thread (outside changes are found by size and mtime on the
   next call), an async writer, a socket transport.
-- The C scanner is tolerant rather than a full parser; exotic declarators may be misreported, and `select` is syntax
-  only. `add-param` and `add-include` are C-only and token-based.
+- Native parser coverage depends on the bundled grammar; `select` is syntax-only.
+  `add-param` and `add-include` are C-only and token-based. Mermaid supports ER and class diagrams, not flowcharts.
 - Native diagnostics validate syntax. Compiler semantic errors, conditional compilation and generated headers need a separate compiler check.
 - `locate` skips files over 8 MB and reads only UTF-8. The embedding client speaks plain HTTP only.
 - The bundled next-langserver provides syntax analysis, not compiler semantic analysis.

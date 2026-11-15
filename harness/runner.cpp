@@ -33,7 +33,7 @@ J *native(const Json &value) {
 }
 const std::set<std::string> reads{"view",          "outline",    "select",           "search",
                                   "hybrid_search", "context",    "callers",          "callees",
-                                  "find_symbols",  "references", "language_modules", "tree"};
+                                  "find_symbols",  "references", "language_modules", "analyze", "tree"};
 std::string redact(std::string value, const std::string &secret) {
     if (!secret.empty())
         for (size_t p = 0; (p = value.find(secret, p)) != std::string::npos;)
@@ -54,7 +54,6 @@ Workspace::Workspace(const std::string &root) {
         store_close(store);
         throw std::runtime_error(na_errmsg());
     }
-    language_scanner_for_c(rpc.languages);
 }
 Workspace::~Workspace() {
     rpc_release(&rpc);

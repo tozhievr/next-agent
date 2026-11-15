@@ -6,10 +6,10 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
 class AgentIO:
-    def __init__(self, root=ROOT):
-        self.process = subprocess.Popen([str(ROOT / "build/windows/nextagent.exe"), "--root", str(root), "serve", "--no-gate"],
+    def __init__(self, root=ROOT, native=False, executable=None):
+        self.process = subprocess.Popen([str(executable or ROOT / "build" / ("windows" if os.name == "nt" else "linux") / ("nextagent.exe" if os.name == "nt" else "nextagent")), "--root", str(root), "serve", "--no-gate"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8",
-            env=dict(os.environ, NEXTAGENT_NO_LSP="1"))
+            env=({k:v for k,v in os.environ.items() if k != "NEXTAGENT_NO_LSP"} if native else dict(os.environ, NEXTAGENT_NO_LSP="1")))
         self.next_id = 0
     def call(self, method, params=None):
         self.next_id += 1

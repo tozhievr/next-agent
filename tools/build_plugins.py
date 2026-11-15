@@ -39,9 +39,35 @@ for manifest in (args.source / "grammars").rglob("*.lxmanifest.json"):
 if sources.keys() != manifests.keys():
     parser.error("Missing grammar sources: " + ", ".join(sorted(manifests.keys() - sources.keys())))
 
+# Downstream native C predicate repair; lexer and parser tables remain upstream.
+sources["c"] = [ROOT / "vendor/next-langserver/overrides/c_glue.c" if p.name == "c_glue.c" else p for p in sources["c"]]
+
+for lang in ("swift", "csharp"):
+    sources[lang] = [ROOT / f"vendor/next-langserver/overrides/{lang}_glue.c" if p.name == f"{lang}_glue.c" else p for p in sources[lang]]
+
+sources["php"] = [ROOT / "vendor/next-langserver/overrides/php/generated" / p.name for p in sources["php"]]
+
 project = ROOT / f"build/plugin-{platform}-source"
 build = ROOT / f"build/plugin-{platform}"
 project.mkdir(parents=True, exist_ok=True)
+# Go NLSEMI uses an epsilon OTHER token to leave the mode without consuming
+# the next character. Preserve acceptance of the DFA start state.
+for idx, source in enumerate(sources["go"]):
+    if source.name == "go_lexer.c":
+        text = source.read_text(encoding="utf-8")
+        needle = "uint16_t state = lx_go_mode_start[cur_mode];"
+        assert needle in text
+        text = text.replace(needle, needle + "\n  last_accept = lx_go_dfa_accept[state];")
+        text = text.replace("if (last_accept == 0u) {", """if (last_accept == 0u && req->mode == 1u) {
+          res->symbol = 92u; res->channel = LX_CH_HIDDEN; res->cmd = LX_CMD_MODE;
+          res->cmd_arg = 0u; res->width = 0u; res->reach_ahead = max_read_end - start_offset;
+          res->ext_next = req->ext; return LX_OK;
+        }
+        if (last_accept == 0u) {""")
+        patched = project / "go_lexer.c"
+        patched.write_text(text, encoding="utf-8")
+        sources["go"][idx] = patched
+
 lines = ["cmake_minimum_required(VERSION 4.5)", "project(NextAgentPlugins LANGUAGES C)",
          "set(CMAKE_C_STANDARD 99)", "set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)",
          'include_directories("' + (ROOT / "vendor/next-langserver/source/include").as_posix() + '")']
@@ -66,7 +92,7 @@ for lang, manifest in sorted(manifests.items()):
             shutil.copytree(canonical / queries, destination / queries, dirs_exist_ok=True)
 
 vendor = ROOT / "vendor/next-langserver"
-files = sorted(p for folder in ("source", "windows-x64", "linux-x64")
+files = sorted(p for folder in ("source", "overrides", "windows-x64", "linux-x64")
                for p in (vendor / folder).rglob("*") if p.is_file())
 (vendor / "SHA256SUMS.txt").write_text("".join(
     hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.relative_to(vendor).as_posix() + "\n"

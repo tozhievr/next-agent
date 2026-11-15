@@ -60,7 +60,7 @@ void symbols(const lx::Rope& rope, const std::vector<lx::host::DocumentSymbolNod
         }
         Symbol& s = out->v[out->n++];
         s.name = na_strdup(n.name.c_str());
-        s.kind = na_strdup(n.kind >= 1 && n.kind <= 26 ? kinds[n.kind] : kinds[0]);
+        s.kind = na_strdup(n.detail == "declaration" ? "declaration" : n.kind >= 1 && n.kind <= 26 ? kinds[n.kind] : kinds[0]);
         s.scope = na_strdup(scope.c_str());
         s.start = rope.byte_to_char(n.range.start);
         s.end = rope.byte_to_char(n.range.end);
@@ -83,7 +83,7 @@ struct LanguageEngine {
     lx::host::LanguageRegistry& registry = runtime().registry;
     std::unordered_map<std::string, ModuleInfo>& modules = runtime().modules;
     std::unordered_map<std::string, std::unique_ptr<Document>> documents;
-    bool prefer_c_scanner = false;
+
     std::string error;
 
     explicit LanguageEngine(const char *) {
@@ -168,7 +168,7 @@ LanguageEngine *language_new(const char *root) {
     catch (const std::exception& e) { na_seterr("language_engine_failed: %s", e.what()); return nullptr; }
 }
 void language_free(LanguageEngine *engine) { delete engine; }
-void language_scanner_for_c(LanguageEngine *engine) { engine->prefer_c_scanner = true; }
+
 bool language_configured(LanguageEngine *engine, const char *path) {
     return engine && engine->registry.resolve_language_id_by_extension(extension(path)).has_value();
 }
@@ -179,13 +179,6 @@ int language_outline(LanguageEngine *engine, const char *path, const char *text,
     if (!d) return -1;
     auto snap = d->session->snapshot();
     auto list = lx::host::Services::outline(*snap);
-    const bool c_family = snap->module->id == "c" || snap->module->id == "cpp";
-    if (c_family && (engine->prefer_c_scanner || list.empty())) {
-        auto plain = snap_new(0, text, len);
-        int rc = c23_outline(plain, nested, out);
-        snap_free(plain);
-        return rc;
-    }
     symbols(snap->rope, list, "", nested, out);
     return 0;
 }

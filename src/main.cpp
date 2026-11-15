@@ -585,7 +585,6 @@ int main(int argc, char **argv) {
             if (strcmp(cmd, lsp_cmds[k]) == 0) listed = true;
         if (want && listed) {
             cli_languages = language_new(store_root(store));
-            language_scanner_for_c(cli_languages);
             rpc.languages = cli_languages;
         }
     }

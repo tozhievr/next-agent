@@ -1,7 +1,7 @@
 /* Native language integration, position codecs, framing and diagnostic validation. */
 #ifndef NA_LANGUAGE_HPP
 #define NA_LANGUAGE_HPP
-#include "c23.h"
+#include "symbols.hpp"
 #include "core.h"
 #include "json.h"
 #include "store.h"
@@ -96,7 +96,6 @@ typedef struct LanguageEngine LanguageEngine;
 LanguageEngine *language_new(const char *root);
 void language_free(LanguageEngine *h);
 /* Retain richer C declaration ranges after native parsing. */
-void language_scanner_for_c(LanguageEngine *h);
 DiagnosticOps language_ops(LanguageEngine *h);
 bool language_handles(LanguageEngine *h, const char *path); /* a configured, installable server exists */
 bool language_configured(LanguageEngine *h, const char *path); /* an entry for this extension exists (nothing is started) */
