@@ -8,8 +8,10 @@
 #include "json.h"
 #include "store.h"
 
-typedef struct {
+struct Rpc {
     Store *store;
+    bool (*cancelled)(void *) = nullptr;
+    void *cancel_context = nullptr;
     Validator validator;
     bool has_validator;
     bool autoflush; /* serve/mcp: write each committed revision to disk (default on; --no-sync disables) */
@@ -20,7 +22,7 @@ typedef struct {
     char *cache_paths[32];
     OutlineCache *caches[32];
     size_t ncaches, next_evict;
-} Rpc;
+};
 
 /* Releases the outline caches. Call before discarding an Rpc. */
 void rpc_release(Rpc *r);

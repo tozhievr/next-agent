@@ -1502,7 +1502,10 @@ static int m_tree(Rpc *r, const J *p, J **out) {
     return 0;
 }
 
+int native_check(Rpc*, const J*, J**);
+
 static const Method METHODS[] = {
+    {"run_check", native_check},
     {"tree", m_tree},
     {"open", m_open},       {"view", m_view},   {"outline", m_outline}, {"select", m_select},
     {"replace_symbol", m_replace_symbol},       {"replace_text", m_replace_text},       {"search", m_search}, {"hybrid_search", m_hybrid_search}, {"context", m_context}, {"merge", m_merge}, {"callers", m_callers}, {"callees", m_callees}, {"patch", m_patch},       {"edit", m_edit},      {"history", m_history},
@@ -1639,6 +1642,10 @@ static J *tools_list(void) {
                          "{\"type\":\"object\",\"properties\":{}}"));
     j_push(arr, tool_def("find_symbols", "Search symbols of every indexed language across the workspace by name substring.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
+    j_push(arr, tool_def("run_check", "Execute a build or test check through NextAgent; no shell/file commands. Capture stdout/stderr, real exit status, cancellation and timeout.",
+        "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"build\",\"test\",\"python\"]},\"build_dir\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"kind\"]}"));
+    j_push(arr, tool_def("tree", "List workspace files and folders through NextAgent; internal metadata and generated build folders are excluded.",
+        "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"recursive\":{\"type\":\"boolean\"},\"limit\":{\"type\":\"integer\"}}}"));
     return arr;
 }
 

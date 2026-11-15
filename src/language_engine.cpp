@@ -10,6 +10,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -73,13 +74,20 @@ void symbols(const lx::Rope& rope, const std::vector<lx::host::DocumentSymbolNod
 }
 
 struct LanguageEngine {
-    lx::host::LanguageRegistry registry;
-    std::unordered_map<std::string, ModuleInfo> modules;
+    struct Runtime {
+        lx::host::LanguageRegistry registry;
+        std::unordered_map<std::string, ModuleInfo> modules;
+        std::once_flag indexed;
+    };
+    static Runtime& runtime() { static Runtime value; return value; }
+    lx::host::LanguageRegistry& registry = runtime().registry;
+    std::unordered_map<std::string, ModuleInfo>& modules = runtime().modules;
     std::unordered_map<std::string, std::unique_ptr<Document>> documents;
     bool prefer_c_scanner = false;
     std::string error;
 
     explicit LanguageEngine(const char *) {
+        std::call_once(runtime().indexed, [this] {
         std::filesystem::path plugin_dir;
         if (const char *dir = getenv("NEXTAGENT_PLUGIN_DIR")) plugin_dir = utf8_path(dir);
         else if (const char *dir = getenv("NEXTAGENT_LANGSERVER_DIR")) plugin_dir = utf8_path(dir) / "plugins";
@@ -102,6 +110,7 @@ struct LanguageEngine {
             info.library = plugin_dir / utf8_path(std::string(value.at("library").as_string()).c_str());
             modules.emplace(value.at("id").as_string(), std::move(info));
         }
+        });
     }
 
     Document *analyze(const char *path, const char *text, size_t len, int64_t version) {

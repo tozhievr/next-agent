@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <initializer_list>
 #include <unistd.h>
 #include <errno.h>
 
@@ -301,6 +302,8 @@ void pf_sleep_ms(unsigned ms) {
 struct PfProc {
     long pid, in_w, out_r;
     bool exited;
+    int exit_code;
+    bool group;
 };
 
 static bool executable_file(const char *p) { return pf_is_file(p) && !bad(sc2(SYS_access, p, 1)); }
@@ -363,32 +366,31 @@ static char **split_args(const char *full, const char *args, size_t *count) {
     return v;
 }
 
-PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
+static PfProc *spawn_impl(const char *exe, const char *args, const char *cwd, bool capture) {
     char *full = pf_which(exe);
     if (!full) {
         na_seterr("executable not found: %s", exe);
         return NULL;
     }
-    int in_p[2], out_p[2];
+    int in_p[2]={-1,-1}, out_p[2]={-1,-1};
     if (bad(sc2(SYS_pipe2, in_p, O_CLOEXEC)) || bad(sc2(SYS_pipe2, out_p, O_CLOEXEC))) {
+        for(int fd : {in_p[0],in_p[1],out_p[0],out_p[1]}) if(fd>=0)sc1(SYS_close,fd);
         free(full);
         na_seterr("cannot create pipes");
         return NULL;
     }
-    static bool sigpipe_ignored;
-    if (!sigpipe_ignored) { /* a dead server must surface as a write error, not kill us */
-        unsigned long sa[4] = {1 /* SIG_IGN */, 0, 0, 0};
-        sc4(SYS_rt_sigaction, 13, sa, 0, 8);
-        sigpipe_ignored = true;
-    }
+    static const bool sigpipe_ignored=[](){unsigned long sa[4]={1,0,0,0};sc4(SYS_rt_sigaction,13,sa,0,8);return true;}();
+    (void)sigpipe_ignored;
     size_t argc;
     char **argv = split_args(full, args, &argc);
     long pid = sc1(SYS_fork, 0);
     if (pid == 0) { /* child: only async-signal-safe raw calls */
+        if (capture) sc2(109, 0, 0);
         sc2(SYS_dup2, in_p[0], 0);
         sc2(SYS_dup2, out_p[1], 1);
         long nul = open_path("/dev/null", O_WRONLY, 0);
-        if (!bad(nul)) sc2(SYS_dup2, nul, 2);
+        if (capture) sc2(SYS_dup2, out_p[1], 2);
+        else if (!bad(nul)) sc2(SYS_dup2, nul, 2);
         if (cwd) sc1(SYS_chdir, cwd);
         sc3(SYS_execve, full, argv, environ);
         for (;;) sc1(SYS_exit, 127);
@@ -406,10 +408,17 @@ PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
     }
     PfProc *p = static_cast<PfProc *>(na_alloc(sizeof *p));
     p->pid = pid;
+    p->group = capture;
+    p->exit_code = -1;
+    if (capture) sc2(109,pid,pid);
     p->in_w = in_p[1];
     p->out_r = out_p[0];
     return p;
 }
+
+PfProc *pf_spawn(const char *exe,const char *args,const char *cwd){return spawn_impl(exe,args,cwd,false);}
+PfProc *pf_spawn_capture(const char *exe,const char *args,const char *cwd){return spawn_impl(exe,args,cwd,true);}
+int pf_proc_exit_code(PfProc *p){return p?p->exit_code:-1;}
 
 int pf_proc_write(PfProc *p, const void *data, size_t n) {
     if (!p || p->in_w < 0) return -1;
@@ -421,6 +430,7 @@ bool pf_proc_alive(PfProc *p) {
     int st;
     long r = sc4(SYS_wait4, p->pid, &st, 1 /* WNOHANG */, 0);
     if (r == p->pid || (bad(r) && r != -E_INTR)) {
+        if (r == p->pid) p->exit_code = (st & 0x7f) == 0 ? (st >> 8) & 255 : 128 + (st & 0x7f);
         p->exited = true;
         return false;
     }
@@ -445,6 +455,7 @@ int pf_proc_read(PfProc *p, void *buf, size_t cap, int timeout_ms) {
 
 void pf_proc_close(PfProc *p, int graceful_ms) {
     if (!p) return;
+    if (p->group) sc2(SYS_kill,-p->pid,9);
     if (p->in_w >= 0) sc1(SYS_close, p->in_w);
     p->in_w = -1;
     if (!p->exited) {

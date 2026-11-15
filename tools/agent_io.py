@@ -19,14 +19,23 @@ class AgentIO:
         reply = json.loads(self.process.stdout.readline())
         if "error" in reply: raise RuntimeError(reply["error"])
         return reply["result"]
-    def read(self, path): return self.call("view", {"target":str(path)})["text"]
+    def read(self, path):
+        report = self.call("merge", {"paths":[str(path)],"strategy":"auto"})
+        def conflict(value):
+            if isinstance(value, dict): return value.get("status") == "conflict" or any(conflict(x) for x in value.values())
+            if isinstance(value, list): return any(conflict(x) for x in value)
+            return False
+        if conflict(report): raise RuntimeError("External edit conflict: " + str(path))
+        return self.call("view", {"target":str(path)})["text"]
     def write(self, path, text, label="Harness implementation"):
         try: old = self.read(path)
         except RuntimeError: old = None
         if old == text: return
         if old is None:
             return self.call("patch", {"edits":[{"path":str(path),"new":text,"create":True}], "label":label})
-        return self.call("edit", {"ops":[{"path":str(path),"start":0,"end":len(old),"text":text}], "label":label})
+        result = self.call("edit", {"ops":[{"path":str(path),"start":0,"end":len(old),"text":text}], "label":label})
+        if result.get("written") is False: raise RuntimeError(result.get("flush_error", "Native flush failed"))
+        return result
     def tree(self, path="", recursive=True):
         result = self.call("tree", {"path":path,"recursive":recursive,"limit":20000})
         if result["truncated"]: raise RuntimeError("Tree limit exceeded")

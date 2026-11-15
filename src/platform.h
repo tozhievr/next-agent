@@ -40,6 +40,8 @@ typedef struct PfProc PfProc;
 char *pf_executable(void); /* absolute path of the running executable */
 char *pf_which(const char *exe); /* full path or NULL */
 PfProc *pf_spawn(const char *exe, const char *args, const char *cwd);
+PfProc *pf_spawn_capture(const char *exe, const char *args, const char *cwd);
+int pf_proc_exit_code(PfProc *p);
 int pf_proc_write(PfProc *p, const void *data, size_t n);
 /* >0: bytes read; 0: timeout; -1: stream closed / process gone. */
 int pf_proc_read(PfProc *p, void *buf, size_t cap, int timeout_ms);

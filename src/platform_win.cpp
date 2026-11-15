@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <initializer_list>
 
 /* ---- minimal Win32 declarations (resolved from kernel32.dll at link time) ---- */
 typedef void *HANDLE;
@@ -57,6 +58,10 @@ BOOL MoveFileExW(const WCHAR *, const WCHAR *, DWORD);
 DWORD GetFullPathNameW(const WCHAR *, DWORD, WCHAR *, WCHAR **);
 DWORD GetLastError(void);
 DWORD GetModuleFileNameW(HANDLE, WCHAR *, DWORD);
+HANDLE CreateJobObjectW(void *, const WCHAR *);
+BOOL AssignProcessToJobObject(HANDLE, HANDLE);
+BOOL TerminateJobObject(HANDLE, unsigned);
+DWORD ResumeThread(HANDLE);
 HANDLE FindFirstFileW(const WCHAR *, WIN32_FIND_DATAW *);
 BOOL FindNextFileW(HANDLE, WIN32_FIND_DATAW *);
 BOOL FindClose(HANDLE);
@@ -366,6 +371,7 @@ void pf_sleep_ms(unsigned ms) { Sleep(ms); }
 struct PfProc {
     HANDLE process, thread, in_w, out_r;
     bool exited;
+    HANDLE job;
 };
 
 char *pf_which(const char *exe) {
@@ -392,7 +398,7 @@ char *pf_which(const char *exe) {
     return norm;
 }
 
-PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
+static PfProc *spawn_impl(const char *exe, const char *args, const char *cwd, bool capture) {
     char *full = pf_which(exe);
     if (!full) {
         na_seterr("executable not found: %s", exe);
@@ -404,6 +410,7 @@ PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
     sa.bInheritHandle = 1;
     HANDLE in_r = NULL, in_w = NULL, out_r = NULL, out_w = NULL;
     if (!CreatePipe(&in_r, &in_w, &sa, 1 << 20) || !CreatePipe(&out_r, &out_w, &sa, 1 << 20)) {
+        for (HANDLE h : {in_r,in_w,out_r,out_w}) if(h) CloseHandle(h);
         free(full);
         na_seterr("cannot create pipes");
         return NULL;
@@ -430,10 +437,10 @@ PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
     si.dwFlags = 0x100; /* STARTF_USESTDHANDLES */
     si.hStdInput = in_r;
     si.hStdOutput = out_w;
-    si.hStdError = err_h == INVALID_HANDLE ? NULL : err_h;
+    si.hStdError = capture ? out_w : (err_h == INVALID_HANDLE ? NULL : err_h);
     PROCESS_INFORMATION pi;
     memset(&pi, 0, sizeof pi);
-    BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, 1, 0x08000000u /* CREATE_NO_WINDOW */, NULL, wcwd,
+    BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, 1, (0x08000000u | (capture ? 4u : 0u)) /* NO_WINDOW, optionally SUSPENDED */, NULL, wcwd,
                              &si, &pi);
     DWORD e = ok ? 0 : GetLastError();
     free(wcmd);
@@ -454,8 +461,19 @@ PfProc *pf_spawn(const char *exe, const char *args, const char *cwd) {
     p->thread = pi.hThread;
     p->in_w = in_w;
     p->out_r = out_r;
+    if (capture) {
+        p->job = CreateJobObjectW(nullptr, nullptr);
+        if (!p->job || !AssignProcessToJobObject(p->job, p->process)) {
+            pf_proc_close(p, 0);na_seterr("cannot create process job");return nullptr;
+        }
+        ResumeThread(p->thread);
+    }
     return p;
 }
+
+PfProc *pf_spawn(const char *exe,const char *args,const char *cwd){return spawn_impl(exe,args,cwd,false);}
+PfProc *pf_spawn_capture(const char *exe,const char *args,const char *cwd){return spawn_impl(exe,args,cwd,true);}
+int pf_proc_exit_code(PfProc *p){DWORD code=259;if(!p||!GetExitCodeProcess(p->process,&code)||code==259)return -1;return static_cast<int>(code);}
 
 int pf_proc_write(PfProc *p, const void *data, size_t n) {
     if (!p || !p->in_w) return -1;
@@ -495,6 +513,7 @@ int pf_proc_read(PfProc *p, void *buf, size_t cap, int timeout_ms) {
 
 void pf_proc_close(PfProc *p, int graceful_ms) {
     if (!p) return;
+    if (p->job) {TerminateJobObject(p->job,1);CloseHandle(p->job);}
     if (p->in_w) {
         CloseHandle(p->in_w);
         p->in_w = NULL;
