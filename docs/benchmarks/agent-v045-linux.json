@@ -1,0 +1,38 @@
+{
+  "incremental_edit_outline": {
+    "rounds": 25,
+    "median_ms": 15.462884000001509,
+    "p95_ms": 16.11521300000618
+  },
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.43",
+  "corpus_bytes": 4980,
+  "symbols": 100,
+  "cold_outline_ms": 2688.819531999997,
+  "full_view": {
+    "rounds": 25,
+    "median_ms": 0.1448000000010552,
+    "p95_ms": 0.16976199999874098,
+    "response_bytes": 5131
+  },
+  "symbol_view": {
+    "rounds": 25,
+    "median_ms": 0.5171000000103732,
+    "p95_ms": 0.5612280000093506,
+    "response_bytes": 116
+  },
+  "warm_outline": {
+    "rounds": 25,
+    "median_ms": 0.7506230000018377,
+    "p95_ms": 0.7986099999897078,
+    "response_bytes": 9648
+  },
+  "response_reduction": 44.23275862068966,
+  "notes": [
+    "Single process, sequential RPC, local filesystem; wall-clock timings include Python JSON transport.",
+    "No model requests, tokenizer estimates, API cost or comparison against another agent.",
+    "Incremental edits use 25 distinct contents; restart intentionally reuses the last derived outline cache."
+  ],
+  "restart_outline_ms": 188.0168929999968,
+  "restart_cache_hits": 1,
+  "version": "0.45.0"
+}

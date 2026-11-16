@@ -2,6 +2,16 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.45.0]
+
+- Durable AST labels and content anchors, including stale/ambiguous-node protection and concurrent binding checks.
+- Budgeted batch reads, anchored symbol reads, immutable prepare/commit plans and one-call checked changes.
+- Journaled create/move/delete/mkdir with undo/redo; safe journal format-2 marker for upgraded binaries.
+- Source/plugin/executable-addressed derived caches, warm-up and explicit module capabilities.
+- Revision/input-bound checks, current proof status and responsive Harness reads during long checks.
+- Full declaration ranges for Python and common declaration-shaped native ASTs; filtered labels on large files.
+- Fixed Windows path aliases and the remaining 64-path CLI flush limit.
+
 ## Unreleased
 
 - Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.

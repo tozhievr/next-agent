@@ -16,7 +16,7 @@ A coding agent normally reads whole files, counts line numbers and sends one edi
 
 It works from a shell tool (CLI), as an MCP server, or as a JSON-RPC server, and ships a Claude Code skill.
 
-> **Version 0.44.0, development tree.** C++26, Clang 23.1.3 and CMake 4.5.0-rc1.
+> **Version 0.45.0, development tree.** C++26, Clang 23.1.3 and CMake 4.5.0-rc1.
 > Native next-langserver engine integration; no external language-server processes.
 
 ## Contents
@@ -165,7 +165,7 @@ function is in the top ten in 13 cases without a model and 18 with `nomic-embed-
 - **Claude Code**: install the skill (above). The model then reaches for `apply`, `view --symbol` and `locate` by itself.
 - **Any agent with a shell tool**: put the CLI cheat sheet of [docs/AGENT_GUIDE.md](docs/AGENT_GUIDE.md) (section 12) in
   its instructions.
-- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (24 tools: `view`,
+- **MCP**: `nextagent --root DIR mcp [--diagnostics]` speaks the Model Context Protocol over stdio (32 tools: `view`,
   `outline`, `select`, `replace_symbol`, `replace_text`, `patch`, `edit`, `references`, `rename`, `locate`, `context`, ...).
 
   ```json
@@ -264,7 +264,7 @@ CLANG=clang-23 CXX=clang++-23 python3 build.py test --target linux
 python3 tests/bundled_lsp.py build/linux/nextagent
 python3 tests/parity.py build/linux/nextagent
 python3 package.py
-python3 tests/package_smoke.py dist/nextagent-0.44.0-linux-x64.tar.gz
+python3 tests/package_smoke.py dist/nextagent-0.45.0-linux-x64.tar.gz
 ```
 
 If the required CMake is not installed, `python3 tools/setup_cmake.py` downloads
@@ -282,3 +282,6 @@ choose a workspace and configure an OpenRouter key and model. Linux includes
 
 Measured native integration results, original fixture failures and reproducible commands:
 [verification report](docs/benchmarks/README.md).
+
+AST labels, budgeted batch reads, checked transactions, reversible file operations and check freshness:
+[agent workflows](docs/AGENT_WORKFLOWS.md).

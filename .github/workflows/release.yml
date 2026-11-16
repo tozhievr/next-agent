@@ -78,7 +78,7 @@ jobs:
           fi
           cp README.md LICENSE CHANGELOG.md dist/$name/
           mkdir -p dist/$name/docs
-          cp docs/AGENT_GUIDE.md docs/HARNESS.md dist/$name/docs/
+          cp docs/AGENT_GUIDE.md docs/HARNESS.md docs/AGENT_WORKFLOWS.md dist/$name/docs/
           cp -R docs/benchmarks dist/$name/docs/
           cd dist
           if [ "${{ matrix.target }}" = windows ]; then
