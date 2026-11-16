@@ -1,12 +1,14 @@
 #include "language.hpp"
 #include "platform.h"
 #include "rpc.h"
+#include "skill.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static const char USAGE[] =
     "usage: nextagent [--root DIR] [--brief] [--no-sync] [--version] <command> [args]   (global flags may appear anywhere)\n"
+    "  skill [--reference] [--json]  print the built-in model skill without opening a workspace\n"
     "  call METHOD [JSON|-]          invoke native API; - reads JSON from stdin\n"
     "  apply [FILE|-] [--label S]     MANY edits in ONE revision from a script, no quoting:\n"
     "                                   @@@ replace PATH [all] / old text / @@@ with / new text\n"
@@ -42,7 +44,6 @@ static const char USAGE[] =
           "  context QUERY [--budget TOKENS] [--path SUBSTR]   best code for a question, cut to a token budget\n"
           "  locate QUERY [--path SUBSTR] [--limit N] [--embed N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
-          "  call METHOD [JSON|-]              invoke any native API; - reads JSON from stdin\n"
     "  serve [--diagnostics]        JSON-RPC 2.0, one object per line on stdio\n"
     "  mcp [--diagnostics]         MCP stdio bridge\n";
 
@@ -565,6 +566,26 @@ int main(int argc, char **argv) {
         } else {
             k++;
         }
+    }
+
+    if (strcmp(cmd, "skill") == 0) {
+        bool reference = false, json = false;
+        for (int k = 0; k < nargs; ++k) {
+            if (strcmp(args[k], "--reference") == 0) reference = true;
+            else if (strcmp(args[k], "--json") == 0) json = true;
+            else { usage_for(cmd); return 2; }
+        }
+        const char *text = reference ? NEXTAGENT_SKILL_REFERENCE : NEXTAGENT_SKILL;
+        if (json) {
+            J *document = j_obj();
+            j_set(document, "name", j_str("nextagent"));
+            j_set(document, "version", j_str(NA_VERSION));
+            j_set(document, "document", j_str(reference ? "reference.md" : "SKILL.md"));
+            j_set(document, "content", j_str(text));
+            char *encoded = json_dump(document);
+            puts(encoded); free(encoded); json_free(document);
+        } else fputs(text, stdout);
+        return ferror(stdout) ? 1 : 0;
     }
 
     Store *store = store_open(root);

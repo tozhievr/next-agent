@@ -77,6 +77,9 @@ jobs:
             cp -R build/linux/plugins dist/$name/
           fi
           cp README.md LICENSE CHANGELOG.md dist/$name/
+          mkdir -p dist/$name/skill
+          cp -R skill/nextagent dist/$name/skill/
+          printf '%s\n' "$ver" > dist/$name/skill/nextagent/VERSION
           mkdir -p dist/$name/docs
           cp docs/AGENT_GUIDE.md docs/HARNESS.md docs/AGENT_WORKFLOWS.md dist/$name/docs/
           cp -R docs/benchmarks dist/$name/docs/

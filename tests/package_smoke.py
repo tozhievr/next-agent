@@ -1,5 +1,6 @@
 """Validate and run a packaged Windows ZIP or Linux tar.gz after relocation."""
 import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -33,6 +34,13 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
     if extension == ".dll":
         assert exe.with_name("nextagent-harness.exe").is_file()
     subprocess.run([str(cli), "--root", str(destination / "workspace"), "--state-dir", str(destination / "state"), "--offline", "--prompt", "package self-test", "--json"], check=True)
+    subprocess.run([sys.executable, str(ROOT / "tests/skill_cli.py"), str(exe)], check=True)
+    assert (exe.parent / "skill/nextagent/SKILL.md").is_file()
+    for filename, flags in [("SKILL.md", []), ("reference.md", ["--reference"])]:
+        embedded = json.loads(subprocess.check_output([str(exe), "skill", *flags, "--json"], text=True, encoding="utf-8"))
+        assert embedded["content"] == (exe.parent / "skill/nextagent" / filename).read_text(encoding="utf-8")
+        assert embedded["version"] == (exe.parent / "skill/nextagent/VERSION").read_text().strip()
+
     plugins = exe.parent / "plugins"
     assert len(list(plugins.glob("*.lxmanifest.json"))) == 30
     assert len(list(plugins.glob("*" + extension))) == 30

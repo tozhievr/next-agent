@@ -1,134 +1,50 @@
 ---
 name: nextagent
-description: Edit and navigate code through the `nextagent` CLI instead of reading whole files and issuing one Edit per place. Use it when a change touches several places or files (rename, add a parameter, batch of edits, insert next to a function), when you need one function without reading its file, when you are looking for code by meaning rather than by name, or when you want every change in a revision history you can undo. Requires the `nextagent` binary on PATH.
+description: Navigate and edit a code workspace with the nextagent CLI, native AST labels and checked multi-file transactions. Use for targeted code reads, coordinated edits, file moves, undoable changes and verification through next-agent.
 ---
 
-# NextAgent
+# NextAgent 0.45.1
 
-A transactional code editor. Every command that changes text is **one revision** (undoable), is written to disk
-immediately and prints a few bytes. Run it from the project root, or pass `--root DIR`. State lives in `.aed/` (keep it
-out of git).
+Use `nextagent --version` to confirm the binary. `nextagent skill` returns this instruction from the binary itself; `nextagent skill --reference` returns the detailed workflow reference. Neither command opens a workspace or loads language modules. `--json` returns a versioned machine-readable document.
 
-Check it is installed: `nextagent --version` (this skill needs 0.39 or newer: `apply`, `sub`/`line`/`ins`, `@BS@`).
-If it is missing or older, see "Install" at the end.
+## Choose a small amount of relevant code
 
-Use `--brief` (or `NEXTAGENT_BRIEF=1`) for compact text output; it costs far fewer tokens than JSON.
+Run from the workspace root or use `nextagent --root DIR ...`. Use `outline PATH --nested`, `view PATH --symbol NAME --raw`, `search QUERY`, `find QUERY`, `locate QUERY` or `context QUERY --budget 3000` to discover code. `--brief` reduces ordinary CLI output; native API results are usually best kept as JSON.
 
-## Read less
+For related reads use `nextagent call read_batch -` with a JSON parameter object on stdin:
 
-| Need | Command |
-|---|---|
-| one function or type | `nextagent view PATH --symbol NAME [--raw]` |
-| a window of lines | `nextagent view PATH --lines 40-80 --raw` |
-| what is in a file | `nextagent --brief outline PATH [--nested]` |
-| text search | `nextagent --brief search "text" [--word] [-i] [--context 2] [--path SUBSTR]` |
-| symbols by name | `nextagent --brief find QUERY [--kind function]` |
-| code by meaning | `nextagent --brief locate "how are edits flushed" --limit 5` |
-| everything relevant to a question, cut to a token budget | `nextagent context "question" --budget 3000` |
-| who calls / what it calls | `nextagent --brief callers NAME [--depth 2]` / `callees NAME` |
-
-Start an unfamiliar task with `context` or `locate`, then `view --symbol` the hits. Do not read whole files.
-
-## Edit
-
-**Several edits, or a multi-line change: one `apply` script.** One call, one revision, no JSON and no quoting:
-
-```
-nextagent apply - <<'EOF'
-@@@ replace src/a.c
-old text
-@@@ with
-new text
-@@@ replace src/b.c all
-oldName
-@@@ with
-newName
-@@@ symbol src/a.c parse_config
-int parse_config(const char *path) { return path != 0; }
-@@@ insert src/a.c before-symbol main
-/* program entry point */
-@@@ lines src/c.c 10-12
-replacement
-lines
-@@@ create src/new.c
-#include "a.h"
-EOF
+```json
+{"requests":[{"target":"auth.py","symbol":"login","with_anchor":true},{"target":"auth.py","symbol":"logout"}],"budget_bytes":12000}
 ```
 
-Blocks: `replace PATH [all]` (old text, `@@@ with`, new text; the old text must match exactly once unless `all`),
-`lines PATH A-B`, `symbol PATH NAME` (replaces the whole definition), `insert PATH
-before-symbol|after-symbol NAME` or `before-line|after-line N`, `create PATH`. If any block fails nothing is applied.
+A truncated result is partial evidence: read the omitted region before changing it. Budgets cover the UTF-8 result object, not protocol framing.
 
-**Small edits, one line each** (any number of files, still one revision):
+## Read, anchor and change
 
-```
-nextagent sub OLD NEW a.c b.c [--all]     # literal replacement
-nextagent line PATH 12 'text'             # replace line 12   (12-14 for a range)
-nextagent del PATH 12-14
-nextagent ins PATH 12 'text'              # insert before line 12
-nextagent append PATH 'text'              # add at the end of the file
+`nextagent call view -` with `{"target":"auth.py","symbol":"login","with_anchor":true}` returns text and an opaque `ast_...` anchor from one source snapshot. Use that returned anchor directly in `change`:
+
+```json
+{"edits":[{"anchor":"ast_RETURNED_ID","new":"def login(user):\n    return user.strip()\n\n"}],"label":"Normalize login"}
 ```
 
-**Semantic changes across the workspace:** `nextagent rename OLD NEW`, `nextagent references NAME`,
-`nextagent add-param FUNC "int x" --default 0`. In one-shot CLI calls C/C++ work out of the box (token-accurate
-syntax mode); for other languages the one-shot CLI starts the language server found on PATH (about 3 s for references/rename; NEXTAGENT_NO_LSP=1 disables it).
+For durable intent, bind with `labels {"action":"bind","label":"auth.login","anchor":"ast_RETURNED_ID"}`. Later read with `view {"label":"auth.login"}` and edit with `{"edits":[{"label":"auth.login","new":"..."}]}`. The outer transaction `label` describes history; an edit's `label` locates an AST binding.
 
-## Rules that save time
+Anchors survive unrelated text inserted before a node and process restarts. Changed nodes produce `stale_anchor`; identical candidates can produce `ambiguous_anchor`. Re-read and choose the intended node; never retry with guessed offsets. Labels do not automatically follow file moves or renames. Rebinding/unbinding requires the previous `expected_anchor`.
 
-1. **Edits in one script must not touch the same place.** A `symbol` replacement and an `insert` next to that same
-   symbol, or two `replace` blocks that overlap, fail with `overlapping_edits`; put the extra text inside the
-   replacement instead.
-2. **Anchor on symbols or text, not line numbers.** A number from an earlier read drifts as soon as anything above it
-   changes. Use `before-symbol`/`after-symbol`, `append`, or run `view PATH --lines A-B` right before a line edit.
-3. **Backslashes.** Some shells halve `\\`. Write `@BS@` wherever a single backslash must reach the program; it is
-   replaced in every argument and in `apply` scripts (not in files read with `--new-file`/`--old-file`). For long or
-   awkward text put it in a file and use `--new-file F`.
-4. **Prefer `apply -` with a quoted heredoc (`<<'EOF'`)** over many separate commands: fewer calls, one undo step.
-5. **Every change is undoable:** `nextagent history --limit 5`, `nextagent undo`, `nextagent redo`. `nextagent diff [REV]`
-   shows what a revision changed (default the last one) without re-reading the files.
-6. **PowerShell has no heredoc:** write the script to a file and run `nextagent apply script.txt`, or use a here-string
-   piped in: `@'...'@ | nextagent apply -`. In an MCP session the `patch` tool takes the same locators as `apply`
-   (`create`, `at_end`, `before_symbol`, ...).
-7. **nextagent does not delete files.** Delete them with the shell; `merge PATH --ours` would recreate a deleted file, so
-   do not run it on one.
-8. **Do not edit tracked files with `sed -i` or other tools between nextagent calls.** If a human, git or a formatter
-   changed a file anyway, nextagent merges it automatically on the next call; to do it explicitly:
-   `nextagent merge [PATH] [--dry-run]`.
-9. Errors are one short line naming the cause (`text_not_found`, `ambiguous_symbol`, `disk_conflict`, ...). A failed
-   call changes nothing; fix the cause and repeat it.
+For reviewable changes call `prepare` with the same edits/files object, inspect its diff or `read_batch` with `plan`, `target` and `side:"after"`, then `commit {"plan":"plan_RETURNED_ID"}`. A stale plan must be prepared again. Retrying the same committed plan is idempotent. A journal commit and disk flush are distinct: inspect `written` and `flush_error`; recover with `sync` or a plan retry after fixing the obstruction.
 
-## Other languages (language servers)
+## Files, checks and capabilities
 
-Symbols, `rename`, `references` and `add-param` for non-C languages use a language server: one-shot CLI calls start it on demand; for repeated calls keep it warm in the long-lived modes: `nextagent mcp --lsp` (MCP) or `nextagent serve --lsp` (JSON-RPC over stdio; methods `outline`,
-`find_symbols`, `references`, `rename`, ... take the same arguments as the CLI). Servers found on PATH are used
-automatically (clangd, pyright, rust-analyzer, gopls, typescript-language-server, ...). Add or override servers in
-`.aed/lsp.json`:
+Create/move/delete directories and UTF-8 files through `change` or `prepare` using `files`. These operations share the transaction and undo history. Nonempty directory operations require `recursive:true`; binary files and workspace escapes are rejected. See the reference for examples and limits.
 
-```
-{"servers":[{"name":"pyright","command":"node","args":"/path/to/pyright/langserver.index.js --stdio","extensions":[".py"]}]}
-```
+Use `nextagent call capabilities` before relying on a language feature. Bundled next-langserver modules load in-process by extension; external LSP executables are not required. AST nodes and syntax outlines are not compiler-level semantic references or rename. Check reported capabilities and ambiguity before a cross-workspace refactor.
 
-Verified live: clangd, pyright, typescript-language-server (needs `typescript` 5.x in the project). On Windows start
-npm-installed servers as `node <js entry> --stdio`; a `.cmd` shim cannot be spawned.
+Run relevant checks through `run_check` and consult `check_status` before reporting that their proof is current. A successful command does not prove later edits passed. `.aed/` holds journal and derived caches; keep it out of git. 0.45 upgrades journal format; older binaries cannot safely reopen an upgraded journal.
 
-## Better `locate`
+Use nextagent for source reads and edits in workflows that require it. Build/test tools and git can still operate normally. External source changes are reconciled on native reads; overlapping changes require conflict resolution.
 
-`locate` works with no setup (BM25 + names + local embeddings). A real embedding model sharpens it for questions that
-do not share words with the code: create `.aed/embed.json`, for example for a local Ollama with
-`ollama pull nomic-embed-text`:
+## Shell transport and legacy editing
 
-```
-{"url":"http://127.0.0.1:11434/v1/embeddings","model":"nomic-embed-text"}
-```
+Prefer JSON on stdin for multiline text: POSIX quoted heredoc or PowerShell here-string piped to `nextagent call METHOD -`. JSON strings must escape newlines as `\n`. Do not interpolate source into shell commands. `nextagent apply -` also supports multiple exact-text/symbol edits in one revision; details are in [reference.md](reference.md).
 
-and run `nextagent locate "question" --embed 100000` once to embed the workspace (cached in `.aed/embed.cache`).
-Plain HTTP only; for https use a local proxy or `"command"` mode.
-
-## Install
-
-Download `nextagent-<version>-windows-x64.zip` or `nextagent-<version>-linux-x64.tar.gz` from
-https://github.com/tozhievr/next-agent/releases, or on Linux
-`curl -fsSL https://raw.githubusercontent.com/tozhievr/next-agent/main/install.sh | sh`
-(Windows: `install.ps1` in the repository). Put `nextagent` on PATH.
-
-More detail: `reference.md` next to this file.
+Read [reference.md](reference.md), also available with `nextagent skill --reference`, for complete transaction examples, label queries, checks and failure recovery.

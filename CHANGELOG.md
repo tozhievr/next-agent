@@ -2,6 +2,11 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.45.1
+
+- Add standalone `nextagent skill [--reference] [--json]` with canonical instructions embedded in the binary.
+- Rewrite the skill for native AST anchors, checked transactions, file operations and current verification capabilities; ship the skill in both distributions.
+
 ## [0.45.0]
 
 - Durable AST labels and content anchors, including stale/ambiguous-node protection and concurrent binding checks.
