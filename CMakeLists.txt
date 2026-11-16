@@ -141,3 +141,28 @@ add_test(NAME skill_cli COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR
 
 add_test(NAME cpp_modules COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_modules.py $<TARGET_FILE:nextagent>)
 set_tests_properties(cpp_modules PROPERTIES TIMEOUT 120)
+
+option(NEXTAGENT_ELECTRON "Build the Electron Node-API bridge" OFF)
+if(NEXTAGENT_ELECTRON)
+  if(NOT EXISTS "${NODE_API_INCLUDE}/node_api.h")
+    message(FATAL_ERROR "Install harness-electron dependencies and run bun run native:build")
+  endif()
+  set_target_properties(nextagent_core nextagent_harness_core lx_common lx_atn lx_rope lx_uast lx_lex lx_parse lx_host lx_host_services PROPERTIES POSITION_INDEPENDENT_CODE ON)
+  add_library(nextagent_desktop MODULE harness-electron/native/addon.cpp)
+  target_include_directories(nextagent_desktop PRIVATE "${NODE_API_INCLUDE}")
+  target_link_libraries(nextagent_desktop PRIVATE nextagent_harness_core)
+  if(WIN32)
+    target_link_libraries(nextagent_desktop PRIVATE "${NODE_API_LIBRARY}")
+    target_link_options(nextagent_desktop PRIVATE "LINKER:/DELAYLOAD:node.exe")
+    target_link_libraries(nextagent_desktop PRIVATE delayimp)
+  endif()
+  if(WIN32)
+    set(DESKTOP_PLATFORM win)
+  else()
+    set(DESKTOP_PLATFORM linux)
+  endif()
+  set_target_properties(nextagent_desktop PROPERTIES PREFIX "" SUFFIX ".node"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/harness-electron/native/bin/${DESKTOP_PLATFORM}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/harness-electron/native/bin/${DESKTOP_PLATFORM}")
+  add_custom_command(TARGET nextagent_desktop POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_directory "${PLUGIN_BUNDLE}" "${CMAKE_CURRENT_SOURCE_DIR}/harness-electron/native/bin/${DESKTOP_PLATFORM}/plugins")
+endif()

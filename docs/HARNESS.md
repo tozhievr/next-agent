@@ -56,3 +56,7 @@ Protocol references: [tool calling](https://openrouter.ai/docs/guides/features/t
 and [streaming](https://openrouter.ai/docs/api/reference/streaming).
 
 The model can use [AST labels and checked agent workflows](AGENT_WORKFLOWS.md).
+
+## Electron desktop
+
+The [Electron Harness](../harness-electron/README.md) uses Next.js static export, Tailwind CSS and shadcn/ui with the standard neutral palette. A context-isolated preload talks to a worker loading the native Node-API addon; next-agent and next-langserver run in that worker thread rather than CLI/language-server subprocesses. The model loop, workspace I/O, session history and checks reuse the native Harness implementation.

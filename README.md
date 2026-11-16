@@ -90,6 +90,9 @@ Choose either example in a fresh workspace: creating an existing destination is 
 
 ## Harness with OpenRouter
 
+The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The original Win32/Arcade client remains available in the native distribution.
+
+
 The Harness links **next-agent + next-langserver** in one process. The Windows desktop uses the Arcade Win32/DX12 UI library. The model reads and changes the workspace through next-agent tools; no generic shell tool is exposed to it.
 
 Run `nextagent-harness.exe`, choose a workspace, and configure an OpenRouter key and a model supporting tool calls. Saved Windows keys use DPAPI for the current user.
