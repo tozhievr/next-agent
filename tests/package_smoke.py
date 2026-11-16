@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
     else:
         with tarfile.open(archive) as package:
             package.extractall(destination, filter="data")
-        executables = list(destination.rglob("nextagent"))
+        executables = [path for path in destination.rglob("nextagent") if path.is_file()]
         extension = ".so"
     assert len(executables) == 1, executables
     exe = executables[0]
