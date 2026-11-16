@@ -1,0 +1,2 @@
+#pragma once
+inline constexpr char HARNESS_INSTRUCTION[] = R"NAINSTR(@HARNESS_INSTRUCTION_TEXT@)NAINSTR";

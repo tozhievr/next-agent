@@ -41,7 +41,7 @@ try {
     Copy-Item -LiteralPath $runtime -Destination $dir -Recurse -Force
     $skill = Join-Path $exe.DirectoryName "skill"
     if (Test-Path -LiteralPath $skill -PathType Container) { Copy-Item -LiteralPath $skill -Destination $dir -Recurse -Force }
-    foreach ($name in @("nextagent.exe", "nextagent-harness-cli.exe", "nextagent-harness.exe")) {
+    foreach ($name in @("nextagent.exe", "nextagent-harness-cli.exe")) {
         $source = Join-Path $exe.DirectoryName $name
         if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "$name not found in archive" }
         Copy-Item -LiteralPath $source -Destination (Join-Path $dir $name) -Force

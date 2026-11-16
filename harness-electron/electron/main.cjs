@@ -10,6 +10,15 @@ const {
 const { Worker } = require("node:worker_threads");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+// Portable launches keep their profile beside the executable/AppImage.
+const setupBundle = require("node:fs").existsSync(
+  path.join(process.resourcesPath, "payload-manifest.json"),
+);
+const portableRoot =
+  process.env.PORTABLE_EXECUTABLE_DIR ||
+  (process.env.APPIMAGE ? path.dirname(process.env.APPIMAGE) : "");
+if (portableRoot && !setupBundle && !app.commandLine.hasSwitch("user-data-dir"))
+  app.setPath("userData", path.join(portableRoot, "NextAgent Harness Data"));
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "harness",
@@ -51,6 +60,45 @@ app
     const resources = app.isPackaged
       ? process.resourcesPath
       : path.join(__dirname, "..");
+    if (process.argv.includes("--uninstall")) {
+      const fs = require("original-fs").promises;
+      const target = path.dirname(process.execPath);
+      const marker = JSON.parse(
+        await fs.readFile(path.join(target, ".nextagent-install.json"), "utf8"),
+      );
+      if (marker.appId !== "dev.nextagent.harness")
+        throw new Error("Not an installed application");
+      const temporary = await fs.mkdtemp(
+        path.join(app.getPath("temp"), "nextagent-uninstall-"),
+      );
+      const runtime = path.join(temporary, "runtime");
+      await fs.cp(target, runtime, { recursive: true });
+      require("node:child_process")
+        .spawn(
+          path.join(runtime, path.basename(process.execPath)),
+          ["--uninstall-target", target],
+          { detached: true, stdio: "ignore" },
+        )
+        .unref();
+      app.quit();
+      return;
+    }
+    const uninstallIndex = process.argv.indexOf("--uninstall-target");
+    if (uninstallIndex >= 0) {
+      await require("./setup.cjs").run(
+        resources,
+        process.argv[uninstallIndex + 1],
+      );
+      return;
+    }
+    if (
+      require("node:fs").existsSync(
+        path.join(resources, "payload-manifest.json"),
+      )
+    ) {
+      await require("./setup.cjs").run(resources);
+      return;
+    }
     const nativeDir = path.join(
       resources,
       app.isPackaged
@@ -236,6 +284,10 @@ app
       minWidth: 1000,
       minHeight: 680,
       frame: false,
+      icon: path.join(
+        resources,
+        app.isPackaged ? "assets/icon.png" : "assets/icon.png",
+      ),
       backgroundColor: "#0a0a0a",
       show: false,
       webPreferences: {

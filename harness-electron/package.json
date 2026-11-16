@@ -1,6 +1,6 @@
 {
   "name": "harness-electron",
-  "version": "0.1.0",
+  "version": "0.46.0",
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
@@ -10,11 +10,13 @@
     "desktop": "electron .",
     "desktop:dev": "node scripts/dev.cjs",
     "native:build": "python scripts/build_native.py",
-    "desktop:build": "bun run native:build && bun run build && electron-builder --dir",
-    "test:desktop": "node --test tests/native.test.cjs",
+    "desktop:build": "bun run icons && bun run native:build && bun run build && electron-builder --dir",
+    "test:desktop": "node --test tests/native.test.cjs tests/installer.test.cjs",
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
-    "format:check": "prettier --check app components lib electron tests scripts/dev.cjs *.ts *.mjs *.json"
+    "format:check": "prettier --check app components lib electron tests scripts/dev.cjs *.ts *.mjs *.json",
+    "icons": "node scripts/icons.cjs",
+    "dist": "bun run icons && bun run native:build && bun run build && node scripts/distribute.cjs"
   },
   "dependencies": {
     "next": "16.4.6",
@@ -77,18 +79,32 @@
       {
         "from": "native/bin/${os}",
         "to": "native"
+      },
+      {
+        "from": "assets",
+        "to": "assets"
       }
     ],
     "npmRebuild": false,
     "win": {
       "target": "dir",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": true,
+      "icon": "assets/icon.ico",
+      "signExecutable": false
     },
     "linux": {
-      "target": "dir"
+      "target": "dir",
+      "icon": "assets/icon.png",
+      "category": "Development",
+      "executableName": "nextagent-harness",
+      "syncDesktopName": true
     },
-    "electronDist": "node_modules/electron/dist"
+    "electronDist": "node_modules/electron/dist",
+    "artifactName": "NextAgent-Harness-${version}-${os}-${arch}.${ext}"
   },
   "description": "Native next-agent Harness with Electron, Next.js and shadcn/ui",
-  "author": "NextAgent contributors"
+  "author": "NextAgent contributors",
+  "license": "MIT",
+  "homepage": "https://github.com/tozhievr/next-agent",
+  "desktopName": "dev.nextagent.harness"
 }

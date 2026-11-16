@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Brand } from "@/components/brand";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -259,7 +260,7 @@ export default function Home() {
       <header className="titlebar flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div className="flex items-center gap-2.5 text-xs">
           <div className="flex size-6 items-center justify-center rounded-md border bg-primary text-primary-foreground">
-            <Command className="size-3.5" />
+            <Brand className="size-4" />
           </div>
           <span className="font-semibold">NextAgent</span>
           <span className="text-muted-foreground">/</span>
@@ -269,19 +270,6 @@ export default function Home() {
           </span>
         </div>
         <div className="flex items-center gap-4">
-          <span className="hidden items-center gap-1.5 font-mono text-[10px] text-muted-foreground md:flex">
-            <span
-              className={cn(
-                "size-1.5 rounded-full",
-                connected ? "bg-foreground" : "bg-muted-foreground",
-              )}
-            />
-            {connected
-              ? caps
-                ? `next-langserver · ${caps.modules.length} модулей`
-                : "Ядро подключено"
-              : "Ожидание desktop"}
-          </span>
           <div className="flex gap-1">
             <Button
               variant="ghost"
@@ -485,7 +473,7 @@ export default function Home() {
             {!messages.length && !running ? (
               <div className="mx-auto flex min-h-full max-w-2xl flex-col justify-center pb-8">
                 <div className="mb-7 flex size-12 items-center justify-center rounded-xl border bg-card shadow-sm">
-                  <Command className="size-6" />
+                  <Brand className="size-7" />
                 </div>
                 <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="h-px w-5 bg-border" />
@@ -527,11 +515,7 @@ export default function Home() {
                 {messages.map((m, i) => (
                   <article key={i} className="flex gap-3">
                     <div className="flex size-7 shrink-0 items-center justify-center rounded-md border bg-card text-[10px] font-medium">
-                      {m.role === "user" ? (
-                        "ВЫ"
-                      ) : (
-                        <Command className="size-3.5" />
-                      )}
+                      {m.role === "user" ? "ВЫ" : <Brand className="size-4" />}
                     </div>
                     <div className="min-w-0 flex-1">
                       <h2 className="mb-2 text-xs font-semibold">
@@ -589,7 +573,7 @@ export default function Home() {
                 Для доступа к ядру запустите Electron: bun run desktop
               </p>
             )}
-            <div className="mx-auto max-w-3xl rounded-xl border bg-card/40 p-3 shadow-sm focus-within:border-ring/50">
+            <div className="mx-auto max-w-3xl rounded-xl border bg-card/40 p-2.5 shadow-sm focus-within:border-ring/50">
               <Textarea
                 ref={textarea}
                 aria-label="Сообщение"
@@ -599,7 +583,12 @@ export default function Home() {
                     : "Откройте папку проекта, чтобы начать…"
                 }
                 value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
+                onChange={(e) => {
+                  setPrompt(e.target.value);
+                  e.target.style.height = "auto";
+                  e.target.style.height =
+                    Math.min(e.target.scrollHeight, 160) + "px";
+                }}
                 onKeyDown={(e) => {
                   if (
                     e.key === "Enter" &&
@@ -611,7 +600,8 @@ export default function Home() {
                   }
                 }}
                 disabled={!connected || running}
-                className="min-h-20 border-0 p-1 shadow-none focus-visible:ring-0"
+                rows={1}
+                className="min-h-10 max-h-40 border-0 p-1 shadow-none focus-visible:ring-0"
               />
               <div className="flex items-center justify-between gap-2 pt-2">
                 <div className="flex min-w-0 items-center gap-1">
@@ -743,6 +733,14 @@ export default function Home() {
                 <Metric
                   label="Входные токены"
                   value={(session.input_tokens || 0).toLocaleString()}
+                />
+                <Metric
+                  label="Из кеша провайдера"
+                  value={(session.cached_tokens || 0).toLocaleString()}
+                />
+                <Metric
+                  label="Записано в кеш"
+                  value={(session.cache_write_tokens || 0).toLocaleString()}
                 />
                 <Metric
                   label="Выходные токены"

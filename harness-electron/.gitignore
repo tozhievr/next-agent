@@ -44,3 +44,9 @@ next-env.d.ts
 /release/
 /test-results/
 /playwright-report/
+
+/NextAgent Harness Data/
+
+# Frontend source; the parent C++ repository ignores generic lib directories.
+!/lib/
+!/lib/**

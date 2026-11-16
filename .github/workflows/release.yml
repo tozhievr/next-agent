@@ -69,7 +69,7 @@ jobs:
           name=nextagent-$ver-${{ matrix.target }}-x64
           mkdir -p dist/$name
           if [ "${{ matrix.target }}" = windows ]; then
-            cp build/windows/nextagent.exe build/windows/nextagent-harness-cli.exe build/windows/nextagent-harness.exe dist/$name/
+            cp build/windows/nextagent.exe build/windows/nextagent-harness-cli.exe dist/$name/
             cp -R build/windows/plugins dist/$name/
           else
             cp build/linux/nextagent build/linux/nextagent-harness-cli dist/$name/

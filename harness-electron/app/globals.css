@@ -149,3 +149,56 @@ body {
 .markdown a {
   text-decoration: underline;
 }
+
+@keyframes setup-orbit {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes setup-wave {
+  0%,
+  100% {
+    opacity: 0.2;
+    transform: scaleX(0.65);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+@keyframes setup-emblem {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+.setup-orbit {
+  animation: setup-orbit 38s linear infinite;
+}
+.setup-orbit-reverse {
+  animation: setup-orbit 26s linear infinite reverse;
+}
+.setup-wave {
+  animation: setup-wave 1.8s ease-in-out infinite;
+}
+.setup-emblem {
+  animation: setup-emblem 5s ease-in-out infinite;
+}
+.setup-grid {
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse, black, transparent 70%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .setup-orbit,
+  .setup-orbit-reverse,
+  .setup-wave,
+  .setup-emblem {
+    animation: none;
+  }
+}

@@ -24,8 +24,11 @@ test("desktop renders and executes the native agent loop", async () => {
       page.getByRole("heading", { name: "Что будем создавать?" }),
     ).toBeVisible();
     await expect(
+      page.getByRole("textbox", { name: "Сообщение" }),
+    ).toBeEnabled();
+    await expect(
       page.getByText("Ядро подключено", { exact: true }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await page.getByRole("button", { name: "Настройки", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Настройки исполнителя" }),
