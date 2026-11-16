@@ -2,6 +2,13 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## Harness 0.46.0
+
+- Replace the Win32/Arcade desktop with the separately packaged Electron Harness.
+- Add a monochrome vector identity, compact composer and custom animated Setup/Portable builds for Windows and Linux.
+- Embed `harness/instruction.md`, stabilize model/tool prefixes and record provider cache reads/writes.
+- Verify setup payloads using raw filesystem access so Electron ASAR virtualization cannot corrupt archive checks or copies.
+
 ## 0.45.1
 
 - Recognize `.cppm`, `.ixx`, `.ccm`, `.cxxm`, `.c++m` and `.mpp` as C++ module sources in native manifests, workspace symbols, refactoring and compilation scanning.

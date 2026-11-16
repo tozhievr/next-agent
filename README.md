@@ -27,7 +27,7 @@ Download an archive from [Releases](https://github.com/tozhievr/next-agent/relea
 
 | Platform | Included clients |
 |---|---|
-| Windows x64 | `nextagent.exe`, `nextagent-harness.exe`, `nextagent-harness-cli.exe` |
+| Windows x64 | `nextagent.exe`, `nextagent-harness-cli.exe` |
 | Linux x64 | `nextagent`, `nextagent-harness-cli` |
 
 Both archives include plugins, manifests, skill and documentation. Install the latest published release on Windows:
@@ -90,9 +90,12 @@ Choose either example in a fresh workspace: creating an existing destination is 
 
 ## Harness with OpenRouter
 
-The Harness links **next-agent + next-langserver** in one process. The Windows desktop uses the Arcade Win32/DX12 UI library. The model reads and changes the workspace through next-agent tools; no generic shell tool is exposed to it.
+The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The old Win32/Arcade frontend has been removed. Harness is distributed separately as Setup and Portable for Windows/Linux.
 
-Run `nextagent-harness.exe`, choose a workspace, and configure an OpenRouter key and a model supporting tool calls. Saved Windows keys use DPAPI for the current user.
+
+The Harness links **next-agent + next-langserver** in one process. The desktop uses Electron, Next.js, Tailwind CSS and standard shadcn/ui themes. The model reads and changes the workspace through next-agent tools; no generic shell tool is exposed to it.
+
+Run the separate NextAgent Harness application, choose a workspace, and configure an OpenRouter key and a model supporting tool calls. Saved Windows keys use DPAPI for the current user.
 
 The CLI works on both platforms. Supply `OPENROUTER_API_KEY` in the environment:
 
@@ -217,7 +220,7 @@ python3 tests/package_smoke.py dist/nextagent-0.45.1-linux-x64.tar.gz
 
 On Ubuntu, install `libcurl4-openssl-dev` before configuring. `python tools/setup_cmake.py` downloads pinned CMake into `build/toolchain`; add its printed `bin` directory to `PATH`.
 
-`build.py test` configures, builds and runs CTest. `package.py` uses CPack and writes SHA-256 files. Package smoke tests verify relocation, all modules, skill consistency, C++ module extensions and protocol parity. Windows tests the GUI using WARP. Linux is verified in WSL2 Ubuntu 26.04; compatibility with every distribution is not claimed.
+`build.py test` configures, builds and runs CTest. `package.py` uses CPack and writes SHA-256 files. Package smoke tests verify relocation, all modules, skill consistency, C++ module extensions and protocol parity. Electron UI is tested separately with Playwright. Linux is verified in WSL2 Ubuntu 26.04; compatibility with every distribution is not claimed.
 
 Both platform plugin snapshots are included. To regenerate one from a sibling next-langserver checkout:
 
@@ -232,7 +235,7 @@ python tools/build_plugins.py --source ../next-langserver --cc clang-23
 | `src/` | Store, journal, languages, search, transactions, checks and CLI/protocol adapters |
 | `harness/` | OpenRouter loop, transport, sessions, CLI and Windows UI |
 | `vendor/next-langserver/` | Embedded engine/host, downstream fixes and plugins |
-| `vendor/arcade_ui_standalone/` | Desktop UI library snapshot |
+| `harness-electron/` | Desktop UI, animated setup, portable packaging and Node-API bridge |
 | `skill/` | Canonical model instructions and skill packaging |
 | `tests/`, `tools/` | Regressions, integration evaluation, builds and measurements |
 

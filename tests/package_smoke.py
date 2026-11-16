@@ -31,8 +31,6 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
     exe = executables[0]
     cli = exe.with_name("nextagent-harness-cli" + (".exe" if extension == ".dll" else ""))
     assert cli.is_file(), cli
-    if extension == ".dll":
-        assert exe.with_name("nextagent-harness.exe").is_file()
     subprocess.run([str(cli), "--root", str(destination / "workspace"), "--state-dir", str(destination / "state"), "--offline", "--prompt", "package self-test", "--json"], check=True)
     subprocess.run([sys.executable, str(ROOT / "tests/skill_cli.py"), str(exe)], check=True)
     assert (exe.parent / "skill/nextagent/SKILL.md").is_file()

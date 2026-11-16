@@ -1,4 +1,5 @@
 #include "harness.hpp"
+#include "instruction.hpp"
 #include "src/platform.h"
 #include <algorithm>
 #include <atomic>
@@ -241,6 +242,8 @@ Json Session::serialize() const {
                   {"last_check",view.last_check},
                   {"input_tokens", view.input_tokens},
                   {"output_tokens", view.output_tokens},
+                  {"cached_tokens", view.cached_tokens},
+                  {"cache_write_tokens", view.cache_write_tokens},
                   {"cost", view.cost},
                   {"cost_reported", view.cost_reported},
                   {"status", view.status},
@@ -259,6 +262,8 @@ void Session::restore(const Json &data) {
     current.last_check=data.at("last_check");if(current.last_check.is_object())current.last_check["fresh"]=false;
     current.input_tokens = data.at("input_tokens").as_uint64();
     current.output_tokens = data.at("output_tokens").as_uint64();
+    current.cached_tokens=data.at("cached_tokens").as_uint64();
+    current.cache_write_tokens=data.at("cache_write_tokens").as_uint64();
     current.cost = data.at("cost").as_double();
     current.cost_reported = data.at("cost_reported").as_bool() || current.cost > 0;
     current.tool_calls = data.at("tool_calls").as_uint64();
@@ -322,17 +327,15 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                                                        {"description", string(tool, "description")},
                                                        {"parameters", tool.at("inputSchema")}}}});
         }
-        std::string system =
-            "You are NextAgent, a coding agent working in " + workspace->root() +
-            ". ALL file and codebase operations MUST use the provided NextAgent tools. Never invent file "
-            "contents, tool outcomes or test results. Use tree and context to inspect the workspace, read "
-            "applicable AGENTS.md before editing. Use atomic patch/edit and current revisions for changes. "
-            "Preserve user changes. Report limitations honestly. Native file tools are confined to this "
-            "workspace. run_check executes project checks as the OS user; never use checks as a workaround "
-            "for source-file access. " +
-            (config.read_only
-                 ? "This run is read-only: analyze and propose changes, do not modify files."
-                 : "You may implement the user's task in this workspace using NextAgent transactions.");
+        std::sort(tools.begin(), tools.end(), [](const Json &a,const Json &b){return string(a.at("function"),"name")<string(b.at("function"),"name");});
+        std::string environment = "Workspace: " + workspace->root() + "\nNextAgent version: " NA_VERSION "\nOperating system: "
+#ifdef _WIN32
+            "Windows"
+#else
+            "Linux"
+#endif
+            "\nProfile: " + std::string(config.read_only ? "read-only" : "agent: workspace changes permitted") +
+            "\nTools: native NextAgent API only; run_check supports CMake/CTest/Python unittest.\n";
         auto instructions = workspace->read("AGENTS.md", config.read_only);
         if (instructions.size() > 16000) {
             size_t end = 16000;
@@ -341,7 +344,7 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
             instructions.resize(end);
         }
         if (!instructions.empty())
-            system += "\nWorkspace AGENTS.md:\n" + instructions;
+            environment += "\nWorkspace AGENTS.md:\n" + instructions;
         bool completed = false;
         for (int step = 0; step < config.max_steps && !stop.stop_requested(); step++) {
             save();
@@ -351,9 +354,18 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                 current.status = "Модель: " + config.model;
                 current.answer.clear();
             }
-            Array messages{Object{{"role", "system"}, {"content", system}}};
+            Array messages{Object{{"role", "system"}, {"content", Array{
+                Object{{"type","text"},{"text",HARNESS_INSTRUCTION},{"cache_control",Object{{"type","ephemeral"}}}},
+                Object{{"type","text"},{"text",environment},{"cache_control",Object{{"type","ephemeral"}}}}
+            }}}};
             auto previous = snapshot().messages.as_array();
             messages.insert(messages.end(), previous.begin(), previous.end());
+            // A rolling text breakpoint reuses growing conversation prefixes on
+            // providers requiring explicit cache control. History itself stays unchanged.
+            if(messages.size()>1 && messages.back().at("content").is_string()){
+                auto text=string(messages.back(),"content");
+                if(!text.empty())messages.back()["content"]=Array{Object{{"type","text"},{"text",text},{"cache_control",Object{{"type","ephemeral"}}}}};
+            }
             Json request = Object{{"model", config.model},
                                   {"messages", std::move(messages)},
                                   {"tools", tools},
@@ -361,6 +373,12 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                                   {"stream_options", Object{{"include_usage", true}}},
                                   {"parallel_tool_calls", false},
                                   {"provider", Object{{"require_parameters", true}}}};
+            request["session_id"] = snapshot().id;
+            request["prompt_cache_key"] = "nextagent:" + snapshot().id;
+            // OpenRouter's automatic Claude cache frontier advances with the conversation.
+            // Other providers can use the stable prefix/explicit text-block breakpoints.
+            if(config.model.find("anthropic/")!=std::string::npos || config.model=="openrouter/auto")
+                request["cache_control"]=Object{{"type","ephemeral"}};
             std::string content, finish;
             Json usage;
             std::map<int, Json> calls;
@@ -423,6 +441,7 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                 current.input_tokens += usage.at("prompt_tokens").as_uint64();
                 current.output_tokens += usage.at("completion_tokens").as_uint64();
                 current.cached_tokens += usage.at("prompt_tokens_details").at("cached_tokens").as_uint64();
+                current.cache_write_tokens += usage.at("prompt_tokens_details").at("cache_write_tokens").as_uint64();
                 current.cost += usage.at("cost").as_double();
                 if (usage.at("cost").is_number())
                     current.cost_reported = true;

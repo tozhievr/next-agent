@@ -21,7 +21,14 @@ class Native:
 native=Native(project)
 native.call("patch",{"edits":[{"path":"tests/test_hello.py","new":"import unittest\nfrom hello import hello\nclass TestHello(unittest.TestCase):\n    def test_value(self): self.assertEqual(hello(), 1)\n","create":True}]})
 native.close()
+def message_text(message):
+ content=message["content"]
+ return content if isinstance(content,str) else "".join(p.get("text","") for p in content)
+
 errors=[]
+prefixes=[]
+tool_sets=[]
+session_ids=[]
 class Server(http.server.BaseHTTPRequestHandler):
  count=0
  def log_message(self,*args):pass
@@ -31,6 +38,12 @@ class Server(http.server.BaseHTTPRequestHandler):
    assert self.headers["Authorization"]=="Bearer harness-test-key"
    request=json.loads(self.rfile.read(int(self.headers["Content-Length"])))
    assert request["stream"] and any(t["function"]["name"]=="run_check" for t in request["tools"])
+   prefixes.append(request["messages"][0]);tool_sets.append(request["tools"]);session_ids.append(request["session_id"])
+   blocks=request["messages"][0]["content"]
+   assert "# NextAgent Harness instructions" in blocks[0]["text"]
+   assert blocks[0]["cache_control"]["type"]=="ephemeral"
+   assert "Operating system:" in blocks[1]["text"] and "Workspace:" in blocks[1]["text"]
+   assert request["prompt_cache_key"].endswith(request["session_id"])
    count=type(self).count;type(self).count+=1
    self.send_response(200);self.send_header("Content-Type","text/event-stream");self.end_headers()
    chunks=[]
@@ -40,12 +53,12 @@ class Server(http.server.BaseHTTPRequestHandler):
      {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"patch","function":{"name":"tch","arguments":args[12:]}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10,"cost":0.001}}]
    elif count==1:
     assert request["messages"][-1]["tool_call_id"]=="native_patch"
-    assert json.loads(request["messages"][-1]["content"])["paths"]==["hello.py"]
+    assert json.loads(message_text(request["messages"][-1]))["paths"]==["hello.py"]
     chunks=[{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"check","function":{"name":"run_check","arguments":json.dumps({"kind":"python","timeout_ms":10000})}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":120,"completion_tokens":10}}]
    else:
-    result=json.loads(request["messages"][-1]["content"])
+    result=json.loads(message_text(request["messages"][-1]))
     assert result["exit_code"]==0 and "Ran 1 test" in result["output"],result
-    chunks=[{"choices":[{"delta":{"content":"Готово: код записан и тест пройден."},"finish_reason":"stop"}],"usage":{"prompt_tokens":140,"completion_tokens":12,"cost":0.002,"prompt_tokens_details":{"cached_tokens":40}}}]
+    chunks=[{"choices":[{"delta":{"content":"Готово: код записан и тест пройден."},"finish_reason":"stop"}],"usage":{"prompt_tokens":140,"completion_tokens":12,"cost":0.002,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":80}}}]
    self.wfile.write(b": keepalive\n\n")
    for chunk in chunks:
     frame=("data: "+json.dumps(chunk,ensure_ascii=False)+"\n\n").encode()
@@ -59,6 +72,9 @@ try:
  assert not errors,errors
  assert run.returncode==0,(run.stdout,run.stderr)
  result=json.loads(run.stdout);assert result["tool_calls"]==2 and result["input_tokens"]==360 and result["output_tokens"]==32,result
+ assert result["cached_tokens"]==40 and result["cache_write_tokens"]==80,result
+ assert len(prefixes)==3 and all(p==prefixes[0] for p in prefixes)
+ assert all(t==tool_sets[0] for t in tool_sets) and len(set(session_ids))==1
  assert "harness-test-key" not in run.stdout
  native=Native(project);assert "return 1" in native.call("view",{"target":"hello.py"})["text"];native.close()
  print("OpenRouter wire test: fragmented SSE/tool arguments, native patch, real Python test, metrics and key redaction passed")

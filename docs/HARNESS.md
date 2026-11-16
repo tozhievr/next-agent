@@ -7,10 +7,9 @@ There is no language-server subprocess and no generic shell tool exposed to mode
 
 ## Run
 
-Windows: launch `nextagent-harness.exe`, select a workspace, open settings and enter
+Windows: launch the separate NextAgent Harness application, select a workspace, open settings and enter
 an OpenRouter API key and a model ID supporting tool calls (default `openrouter/auto`).
-The UI uses the actual Arcade DX12/Win32 library from `D:\Projects\arcade\arcade_ui_standalone`;
-its source snapshot is under `vendor/arcade_ui_standalone`.
+The desktop is Electron + Next.js + Tailwind CSS + shadcn/ui. The former Arcade/Win32 frontend is removed.
 
 The key can also be supplied as `OPENROUTER_API_KEY`. Saved Windows keys use DPAPI
 for the current user. Linux uses the environment variable and ships the CLI:
@@ -46,8 +45,7 @@ python tests/package_smoke.py dist/nextagent-0.45.1-windows-x64.zip
 
 Linux uses `build/linux/nextagent` and the Linux tar.gz package. Install libcurl
  development headers before configuring Linux (`libcurl4-openssl-dev` on Ubuntu).
-Windows tests additionally exercise the actual GUI with WARP rendering, Unicode
-composer input, a native edit and a screenshot. HTTP tests use a local mock provider:
+Playwright tests exercise the actual Electron desktop, credential settings, native edits, file previews and screenshots. HTTP tests use a local mock provider:
 fragmented SSE, tool calls, real Python checks, usage and rejected credentials.
 `--offline` is an explicitly scripted self-test, not an AI model. Automated tests
 make no paid OpenRouter calls; a real conversation requires your API key.
@@ -56,3 +54,13 @@ Protocol references: [tool calling](https://openrouter.ai/docs/guides/features/t
 and [streaming](https://openrouter.ai/docs/api/reference/streaming).
 
 The model can use [AST labels and checked agent workflows](AGENT_WORKFLOWS.md).
+
+## Electron desktop
+
+The [Electron Harness](../harness-electron/README.md) uses Next.js static export, Tailwind CSS and shadcn/ui with the standard neutral palette. A context-isolated preload talks to a worker loading the native Node-API addon; next-agent and next-langserver run in that worker thread rather than CLI/language-server subprocesses. The model loop, workspace I/O, session history and checks reuse the native Harness implementation.
+
+## Instruction and provider caching
+
+`harness/instruction.md` is compiled into the native Harness and supplied before user messages. Runtime workspace/OS/profile and AGENTS.md follow in a separate stable block; tool schemas are sorted deterministically. Requests preserve conversation order and carry persistent session affinity. Explicit text cache boundaries cover instructions, environment and a rolling conversation tail; Claude/auto routing also gets the documented automatic cache hint. No timestamps or live revision numbers are injected into the prefix.
+
+The desktop displays only cache reads/writes actually reported by the provider. Cache support, minimum size, expiry and pricing vary by model; a cache write can cost more than ordinary input. No guaranteed savings are claimed. Provider behavior: [OpenRouter prompt caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
