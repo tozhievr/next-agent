@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 4.5)
-project(NextAgent VERSION 0.44.0 LANGUAGES C CXX)
+project(NextAgent VERSION 0.45.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -19,7 +19,7 @@ foreach(target lx_common lx_atn lx_rope lx_uast lx_lex lx_parse lx_host lx_host_
 endforeach()
 
 set(NEXTAGENT_SOURCES
-  src/checks.cpp src/util.cpp src/json.cpp src/platform.cpp src/core.cpp src/store.cpp src/symbols.cpp
+  src/agent.cpp src/checks.cpp src/util.cpp src/json.cpp src/platform.cpp src/core.cpp src/store.cpp src/symbols.cpp
   src/lsp_proto.cpp src/compilation.cpp src/diagnostic_gate.cpp
   src/language_engine.cpp src/refactor.cpp src/index.cpp src/semantic.cpp
   src/hybrid.cpp src/embed.cpp src/merge.cpp src/rpc.cpp)
@@ -120,3 +120,6 @@ endif()
 
 add_test(NAME native_languages COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/validate_languages.py --executable $<TARGET_FILE:nextagent> --report build/${NEXTAGENT_PLATFORM}/native-language-test.json)
 set_tests_properties(native_languages PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} TIMEOUT 120)
+
+add_test(NAME agent_features COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/agent_features.py $<TARGET_FILE:nextagent>)
+set_tests_properties(agent_features PROPERTIES TIMEOUT 120)

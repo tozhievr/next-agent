@@ -1,3 +1,4 @@
+#include "agent.h"
 #include <string>
 #include "rpc.h"
 #include "semantic.h"
@@ -1532,6 +1533,10 @@ static const Method METHODS[] = {
 /* 0 ok, -1 failure (na_errmsg), -2 unknown method */
 static int call_method(Rpc *r, const char *method, const J *params, J **out) {
     *out = NULL;
+    int extension=agent_method(r,method,params,out);if(extension!=-2)return extension;
+    if(!strcmp(method,"view")||!strcmp(method,"outline")||!strcmp(method,"select")||!strcmp(method,"analyze")){
+        const J *target=j_get(params,"target");if(j_is_str(target)&&agent_reconcile(r,target->s))return -1;
+    }
     for (size_t i = 0; i < sizeof METHODS / sizeof METHODS[0]; i++)
         if (strcmp(METHODS[i].name, method) == 0) {
             int rc = METHODS[i].fn(r, params, out);
@@ -1614,8 +1619,19 @@ static J *tool_def(const char *name, const char *desc, const char *schema_json) 
 
 static J *tools_list(void) {
     J *arr = j_arr();
-    j_push(arr, tool_def("view", "Read a document at the current revision.",
-                         "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}"));
+    const char *agent_schema=R"({"type":"object","properties":{"target":{"type":"string"},"label":{"type":"string"},"anchor":{"type":"string"},"action":{"type":"string"},"node_kind":{"type":"string"},"symbol":{"type":"string"},"scope":{"type":"string"},"within":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"},"expected_anchor":{"type":"string"}}})";
+    j_push(arr,tool_def("labels","Query real AST nodes and anchors. Bind a semantic label with action:bind, label, anchor. Resolve with action:resolve,label. Changed or ambiguous nodes fail closed.",agent_schema));
+    j_push(arr,tool_def("read_batch","Read requests (target/symbol/label/anchor) with a total JSON response budget.",R"({"type":"object","properties":{"requests":{"type":"array","items":{"type":"object"}},"budget_bytes":{"type":"integer","minimum":512,"maximum":1048576}},"required":["requests"]})"));
+    const char *transaction_schema=R"({"type":"object","properties":{"plan":{"type":"string"},"label":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"target":{"type":"string"},"anchor":{"type":"string"},"label":{"type":"string"},"symbol":{"type":"string"},"old":{"type":"string"},"new":{"type":"string"},"position":{"type":"string","enum":["replace","before","after"]}},"required":["new"]}},"files":{"type":"array","items":{"type":"object","properties":{"op":{"type":"string","enum":["create","mkdir","move","delete"]},"path":{"type":"string"},"to":{"type":"string"},"text":{"type":"string"},"recursive":{"type":"boolean"}},"required":["op","path"]}}}})";
+    j_push(arr,tool_def("prepare","Prepare a multi-file transaction without applying it; returns an exact compact diff and immutable plan. Supply plan alone to inspect it.",transaction_schema));
+    j_push(arr,tool_def("commit","Apply a prepared plan after rechecking every source and disk baseline; retries are idempotent. Inspect committed/written separately.",R"({"type":"object","properties":{"plan":{"type":"string"},"if_rev":{"type":"integer"}},"required":["plan"]})"));
+    j_push(arr,tool_def("change","Read current sources, prepare checked anchor/text/symbol edits and file operations, then commit and flush in one call. For preview use prepare and commit.",transaction_schema));
+    j_push(arr,tool_def("check_status","Return the recorded check with current revision/input freshness; successful old checks become stale after source changes.",R"({"type":"object","properties":{"check_id":{"type":"string"}}})"));
+    j_push(arr,tool_def("warm","Preparse selected files into persistent native sessions.",R"({"type":"object","properties":{"targets":{"type":"array","items":{"type":"string"}}},"required":["targets"]})"));
+    j_push(arr,tool_def("capabilities","List native module capabilities, actual loaded state, cache telemetry and grammar limits.",R"({"type":"object","properties":{}})"));
+
+    j_push(arr, tool_def("view", "Read a document, symbol, label or AST anchor at the current revision.",
+      R"({"type":"object","properties":{"target":{"type":"string"},"symbol":{"type":"string"},"label":{"type":"string"},"anchor":{"type":"string"},"with_anchor":{"type":"boolean"},"start_line":{"type":"integer"},"end_line":{"type":"integer"}},"anyOf":[{"required":["target"]},{"required":["label"]},{"required":["anchor"]}]})"));
     j_push(arr, tool_def("analyze", "Get versioned syntax diagnostics from the native language module.",
                          "{\"type\":\"object\",\"properties\":{\"target\":{\"type\":\"string\"}},\"required\":[\"target\"]}"));
     j_push(arr, tool_def("outline", "List native language top-level (or nested) symbols.",
@@ -1659,7 +1675,7 @@ static J *tools_list(void) {
     j_push(arr, tool_def("find_symbols", "Search symbols of every indexed language across the workspace by name substring.",
                          "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"},\"kind\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"query\"]}"));
     j_push(arr, tool_def("run_check", "Execute a build or test check through NextAgent; no shell/file commands. Capture stdout/stderr, real exit status, cancellation and timeout.",
-        "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"build\",\"test\",\"python\"]},\"build_dir\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"kind\"]}"));
+        "{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"build\",\"test\",\"python\"]},\"build_dir\":{\"type\":\"string\"},\"timeout_ms\":{\"type\":\"integer\"},\"inputs\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"kind\"]}"));
     j_push(arr, tool_def("tree", "List workspace files and folders through NextAgent; internal metadata and generated build folders are excluded.",
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"recursive\":{\"type\":\"boolean\"},\"limit\":{\"type\":\"integer\"}}}"));
     return arr;

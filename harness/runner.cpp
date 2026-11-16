@@ -31,9 +31,9 @@ J *native(const Json &value) {
     auto text = value.dump();
     return json_parse(text.data(), text.size());
 }
-const std::set<std::string> reads{"view",          "outline",    "select",           "search",
+const std::set<std::string> reads{"view", "labels", "read_batch", "warm", "prepare", "capabilities", "check_status",          "outline",    "select",           "search",
                                   "hybrid_search", "context",    "callers",          "callees",
-                                  "find_symbols",  "references", "language_modules", "analyze", "tree"};
+                                  "find_symbols",  "references", "language_modules", "analyze", "tree", "labels", "read_batch", "capabilities", "warm", "prepare"};
 std::string redact(std::string value, const std::string &secret) {
     if (!secret.empty())
         for (size_t p = 0; (p = value.find(secret, p)) != std::string::npos;)
@@ -64,11 +64,13 @@ Json Workspace::invoke(const std::string &method, const Json &params, std::stop_
     std::lock_guard lock(mutex);
     rpc.cancelled = +[](void *ctx) { return static_cast<std::stop_token *>(ctx)->stop_requested(); };
     rpc.cancel_context = &stop;
+    rpc.read_only=read_only;
     struct Reset {
         Rpc &rpc;
         ~Reset() {
             rpc.cancelled = nullptr;
             rpc.cancel_context = nullptr;
+            rpc.read_only=false;
         }
     } reset{rpc};
     auto dispatch = [&](const std::string &name, const Json &arguments) {

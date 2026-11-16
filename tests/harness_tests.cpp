@@ -96,6 +96,14 @@ int main() try {
     one.join();
     two.join();
     require(outlines_ok, "parallel native language state leaked between workspaces");
+    auto anchors=workspace->invoke("labels",Object{{"target","outline.py"},{"node_kind","function_def"}}, {},true);
+    require(anchors.at("nodes").as_array().size()==1,"read-only labels query failed");
+    auto anchor=string(anchors.at("nodes").as_array().front(),"anchor");
+    auto denied=workspace->invoke("labels",Object{{"action","bind"},{"label","test.alpha"},{"anchor",anchor}}, {},true);
+    require(denied.find("error")!=nullptr,"read-only label binding bypassed native policy");
+    auto denied_plan=workspace->invoke("prepare",Object{{"files",lx::host::JsonArray{Object{{"op","create"},{"path","forbidden.txt"},{"text","bad"}}}}}, {},true);
+    require(denied_plan.find("error")!=nullptr,"read-only prepare bypassed native policy");
+
     std::cout << "Harness: byte-fragmented SSE, UTF-8, truncated stream, native transactions, persistence, "
                  "read-only and cancellation passed\n";
     return 0;

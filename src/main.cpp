@@ -41,7 +41,8 @@ static const char USAGE[] =
           "  context QUERY [--budget TOKENS] [--path SUBSTR]   best code for a question, cut to a token budget\n"
           "  locate QUERY [--path SUBSTR] [--limit N] [--embed N]    ranked hybrid search (BM25 + names + phrase)\n"
           "  patch [FILE|-]                 JSON edits [{path,old,new,all}] applied as one revision\n"
-          "  serve [--diagnostics]        JSON-RPC 2.0, one object per line on stdio\n"
+          "  call METHOD [JSON|-]              invoke any native API; - reads JSON from stdin\n"
+    "  serve [--diagnostics]        JSON-RPC 2.0, one object per line on stdio\n"
     "  mcp [--diagnostics]         MCP stdio bridge\n";
 
 static void usage(void) { fputs(USAGE, stderr); }
@@ -204,14 +205,17 @@ static int run_method(Rpc *r, const char *method, J *params) {
         fwrite(t->s, 1, t->slen, stdout); /* --raw: the document text itself */
     } else if (res) {
         const J *paths = j_get(res, "paths");
-        if (g_autosync && paths && paths->k == J_ARR && paths->n) { /* the CLI is one command per process: put the revision on disk */
-            const char *names[64];
-            size_t n = paths->n < 64 ? paths->n : 64;
-            for (size_t i = 0; i < n; i++) names[i] = paths->items[i]->s;
+        const J *written=j_get(res,"written"),*flush_error=j_get(res,"flush_error");
+        if(written&&written->k==J_BOOL&&!written->b&&j_is_str(flush_error)){fprintf(stderr,"nextagent: committed but not written: %s\n",flush_error->s);code=1;}
+        if (g_autosync && paths && paths->k == J_ARR && paths->n && !j_get(res,"written")) { /* the CLI is one command per process: put the revision on disk */
+            const size_t n=paths->n;
+            const char **names=static_cast<const char**>(na_alloc(n*sizeof(*names)));
+            for(size_t i=0;i<n;i++)names[i]=paths->items[i]->s;
             if (flush_with_merge(r->store, names, n) != 0) {
                 fprintf(stderr, "nextagent: committed but not written to disk: %s\n", na_errmsg());
                 code = 1;
             }
+            free(names);
         }
         if (!g_brief || !print_brief(method, res)) {
             Buf out;
@@ -578,7 +582,7 @@ int main(int argc, char **argv) {
     LanguageEngine *cli_languages = NULL;
     {
         static const char *const lsp_cmds[] = {"outline", "select",     "view",   "replace-symbol", "insert", "apply",
-                                               "patch",   "replace",    "rename", "references",     "add-param", "find", "callers", "callees", NULL};
+                                               "patch",   "replace",    "rename", "references",     "add-param", "find", "callers", "callees", "call", NULL};
         bool want = !getenv("NEXTAGENT_NO_LSP");
         bool listed = false;
         for (int k = 0; lsp_cmds[k]; k++)
@@ -589,7 +593,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (strcmp(cmd, "view") == 0) {
+    if(strcmp(cmd,"call")==0){
+        if(nargs<1||nargs>2)goto bad;Buf input;buf_init(&input);
+        if(nargs==2&&!strcmp(args[1],"-")){char bytes[4096];size_t count;while((count=fread(bytes,1,sizeof bytes,stdin))>0){if(input.len+count>16*1024*1024){buf_free(&input);goto bad;}buf_put(&input,bytes,count);}}
+        else buf_puts(&input,nargs==2?args[1]:"{}");
+        J *params=json_parse(input.p?input.p:"",input.len);buf_free(&input);if(!params||params->k!=J_OBJ){json_free(params);goto bad;}
+        rpc.autoflush=g_autosync;code=run_method(&rpc,args[0],params);
+    } else if (strcmp(cmd, "view") == 0) {
         if (nargs < 1) goto bad;
         J *p = j_obj();
         j_set(p, "target", j_str(args[0]));

@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
+#include <filesystem>
 
 #define JOURNAL_MAGIC "AEDJ1\n"
 #define JOURNAL_MAGIC_LEN 6
@@ -14,6 +19,7 @@
 typedef struct {
     size_t doc;
     ChangeSet forward, inverse;
+    bool existence_set, before_exists, after_exists, before_directory, after_directory;
 } Delta;
 
 typedef struct {
@@ -27,16 +33,18 @@ typedef struct {
 typedef struct {
     char *path;
     bool has_head;
+    bool deleted, directory;
     int64_t rev;
     char *text;
     size_t len;
     bool base_set, base_exists;
     uint8_t base_hash[16];
-    int64_t base_rev; /* document revision whose text is the disk baseline (see store_merge_external) */
+    int64_t base_rev;  /* document revision whose text is the disk baseline (see store_merge_external) */
     size_t ckpt_bytes; /* delta bytes journaled since the last full-text record */
 } Doc;
 
 struct Store {
+    J *metadata;
     char *root, *dir, *journal, *lockpath;
     Doc *docs;
     size_t ndocs, capdocs;
@@ -48,13 +56,15 @@ struct Store {
 /* ---------------------------------------------------------------- docs --- */
 static Doc *doc_find(Store *st, const char *path) {
     for (size_t i = 0; i < st->ndocs; i++)
-        if (strcmp(st->docs[i].path, path) == 0) return &st->docs[i];
+        if (strcmp(st->docs[i].path, path) == 0)
+            return &st->docs[i];
     return NULL;
 }
 
 static size_t doc_index(Store *st, const char *path) {
     for (size_t i = 0; i < st->ndocs; i++)
-        if (strcmp(st->docs[i].path, path) == 0) return i;
+        if (strcmp(st->docs[i].path, path) == 0)
+            return i;
     if (st->ndocs == st->capdocs) {
         st->capdocs = st->capdocs ? st->capdocs * 2 : 16;
         st->docs = static_cast<Doc *>(na_realloc(st->docs, st->capdocs * sizeof *st->docs));
@@ -80,7 +90,8 @@ static J *edits_to_json(const ChangeSet *cs) {
 
 static int edits_from_json(const J *arr, ChangeSet *out) {
     cs_init(out);
-    if (!arr || arr->k != J_ARR) return na_fail("corrupt journal: edits");
+    if (!arr || arr->k != J_ARR)
+        return na_fail("corrupt journal: edits");
     for (size_t i = 0; i < arr->n; i++) {
         const J *e = arr->items[i];
         if (e->k != J_ARR || e->n != 3 || !j_is_int(e->items[0]) || !j_is_int(e->items[1]) ||
@@ -107,11 +118,13 @@ static J *base_to_json(bool exists, const uint8_t hash[16]) {
 static int base_from_json(const J *o, Doc *d) {
     const J *ex = j_get(o, "exists");
     const J *hs = j_get(o, "hash");
-    if (!ex || ex->k != J_BOOL) return na_fail("corrupt journal: baseline");
+    if (!ex || ex->k != J_BOOL)
+        return na_fail("corrupt journal: baseline");
     d->base_exists = ex->b;
     memset(d->base_hash, 0, 16);
     if (ex->b) {
-        if (!j_is_str(hs) || !hex_decode(hs->s, d->base_hash, 16)) return na_fail("corrupt journal: hash");
+        if (!j_is_str(hs) || !hex_decode(hs->s, d->base_hash, 16))
+            return na_fail("corrupt journal: hash");
     }
     d->base_set = true;
     return 0;
@@ -128,35 +141,57 @@ static void rev_push(Store *st, Rev r) {
 
 static size_t delta_bytes(const ChangeSet *cs) {
     size_t n = 0;
-    for (size_t i = 0; i < cs->n; i++) n += cs->v[i].tlen + 16;
+    for (size_t i = 0; i < cs->n; i++)
+        n += cs->v[i].tlen + 16;
     return n;
 }
 
 static int apply_record(Store *st, const J *rec) {
     const J *t = j_get(rec, "t");
-    if (!j_is_str(t)) return na_fail("corrupt journal: record type");
+    if (!j_is_str(t))
+        return na_fail("corrupt journal: record type");
+    if (strcmp(t->s, "meta") == 0) {
+        const J *key = j_get(rec, "key"), *value = j_get(rec, "value");
+        if (!j_is_str(key) || !value)
+            return na_fail("corrupt journal: metadata");
+        if (!st->metadata)
+            st->metadata = j_obj();
+        char *encoded = json_dump(value);
+        J *copy = json_parse(encoded, strlen(encoded));
+        free(encoded);
+        if (!copy)
+            return -1;
+        j_set(st->metadata, key->s, copy);
+        return 0;
+    }
     if (strcmp(t->s, "base") == 0) {
         const J *p = j_get(rec, "path");
-        if (!j_is_str(p)) return na_fail("corrupt journal: base path");
+        if (!j_is_str(p))
+            return na_fail("corrupt journal: base path");
         size_t di = doc_index(st, p->s);
         int brc = base_from_json(rec, &st->docs[di]);
-        if (brc == 0) st->docs[di].base_rev = st->docs[di].has_head ? st->docs[di].rev : 0;
+        if (brc == 0)
+            st->docs[di].base_rev = st->docs[di].has_head ? st->docs[di].rev : 0;
         return brc;
     }
     if (strcmp(t->s, "flush") == 0) {
         const J *docs = j_get(rec, "docs");
-        if (!docs || docs->k != J_ARR) return na_fail("corrupt journal: flush");
+        if (!docs || docs->k != J_ARR)
+            return na_fail("corrupt journal: flush");
         for (size_t i = 0; i < docs->n; i++) {
             const J *p = j_get(docs->items[i], "path");
-            if (!j_is_str(p)) return na_fail("corrupt journal: flush path");
+            if (!j_is_str(p))
+                return na_fail("corrupt journal: flush path");
             size_t di = doc_index(st, p->s);
             const J *b = j_get(docs->items[i], "base");
-            if (!b || base_from_json(b, &st->docs[di]) != 0) return -1;
+            if (!b || base_from_json(b, &st->docs[di]) != 0)
+                return -1;
             st->docs[di].base_rev = st->docs[di].rev;
         }
         return 0;
     }
-    if (strcmp(t->s, "commit") != 0) return na_fail("corrupt journal: unknown record");
+    if (strcmp(t->s, "commit") != 0)
+        return na_fail("corrupt journal: unknown record");
     const J *id = j_get(rec, "rev"), *parent = j_get(rec, "parent"), *label = j_get(rec, "label");
     const J *session = j_get(rec, "session"), *ts = j_get(rec, "ts"), *docs = j_get(rec, "docs");
     if (!j_is_int(id) || !j_is_int(ts) || !j_is_str(label) || !j_is_str(session) || !docs ||
@@ -173,26 +208,43 @@ static int apply_record(Store *st, const J *rec) {
     for (size_t i = 0; i < docs->n; i++) {
         const J *dj = docs->items[i];
         const J *p = j_get(dj, "path"), *text = j_get(dj, "text");
-        if (!j_is_str(p) || (text && !j_is_str(text))) return na_fail("corrupt journal: commit doc");
+        if (!j_is_str(p) || (text && !j_is_str(text)))
+            return na_fail("corrupt journal: commit doc");
         size_t di = doc_index(st, p->s);
         Doc *d = &st->docs[di];
         const J *base = j_get(dj, "base");
-        if (base && base_from_json(base, d) != 0) return -1;
-        if (base) d->base_rev = d->rev;
+        if (base && base_from_json(base, d) != 0)
+            return -1;
+        if (base)
+            d->base_rev = d->rev;
         Delta *dl = &r.d[r.nd++];
         dl->doc = di;
-        if (edits_from_json(j_get(dj, "forward"), &dl->forward) != 0) return -1;
-        if (edits_from_json(j_get(dj, "inverse"), &dl->inverse) != 0) return -1;
+        const J *be = j_get(dj, "before_exists"), *ae = j_get(dj, "exists");
+        dl->existence_set = be && ae;
+        dl->before_exists = be && be->k == J_BOOL ? be->b : true;
+        dl->after_exists = ae && ae->k == J_BOOL ? ae->b : true;
+        const J *bd = j_get(dj, "before_directory"), *ad = j_get(dj, "directory");
+        dl->before_directory = bd && bd->k == J_BOOL && bd->b;
+        dl->after_directory = ad && ad->k == J_BOOL && ad->b;
+        d->deleted = !dl->after_exists;
+        d->directory = dl->after_directory;
+
+        if (edits_from_json(j_get(dj, "forward"), &dl->forward) != 0)
+            return -1;
+        if (edits_from_json(j_get(dj, "inverse"), &dl->inverse) != 0)
+            return -1;
         if (text) {
             free(d->text);
             d->text = na_strndup(text->s, text->slen);
             d->len = text->slen;
             d->ckpt_bytes = 0;
         } else {
-            if (!d->has_head) return na_fail("corrupt journal: delta without a base text for %s", d->path);
+            if (!d->has_head)
+                return na_fail("corrupt journal: delta without a base text for %s", d->path);
             char *nt;
             size_t nl;
-            if (cs_apply_text(&dl->forward, d->text, d->len, &nt, &nl) != 0) return -1;
+            if (cs_apply_text(&dl->forward, d->text, d->len, &nt, &nl) != 0)
+                return -1;
             free(d->text);
             d->text = nt;
             d->len = nl;
@@ -200,6 +252,20 @@ static int apply_record(Store *st, const J *rec) {
         }
         d->has_head = true;
         d->rev = r.id;
+    }
+    const J *operation = j_get(rec, "operation_id");
+    if (j_is_str(operation)) {
+        if (!st->metadata)
+            st->metadata = j_obj();
+        J *done = j_obj(), *paths = j_arr();
+        j_set(done, "rev", j_int(r.id));
+        for (size_t i = 0; i < docs->n; i++) {
+            const J *p = j_get(docs->items[i], "path");
+            j_push(paths, j_str(p->s));
+        }
+        j_set(done, "paths", paths);
+        std::string key = std::string("committed/") + operation->s;
+        j_set(st->metadata, key.c_str(), done);
     }
     rev_push(st, r);
     return 0;
@@ -234,10 +300,12 @@ static int refresh(Store *st) {
     while (rc == 0 && b.len - off >= 4) {
         const uint8_t *p = (const uint8_t *)b.p + off;
         uint32_t len = rd32(p);
-        if (len > MAX_RECORD || b.len - off < (size_t)4 + len + 8) break;
+        if (len > MAX_RECORD || b.len - off < (size_t)4 + len + 8)
+            break;
         uint8_t digest[16];
         blake2b16(p + 4, len, digest);
-        if (memcmp(digest, p + 4 + len, 8) != 0) break;
+        if (memcmp(digest, p + 4 + len, 8) != 0)
+            break;
         J *rec = json_parse((const char *)p + 4, len);
         if (!rec) {
             buf_free(&b);
@@ -266,7 +334,8 @@ static int append_record(Store *st, J *rec) {
         buf_free(&payload);
         return na_fail("journal record too large");
     }
-    if (st->jpos == 0) buf_put(&frame, JOURNAL_MAGIC, JOURNAL_MAGIC_LEN);
+    if (st->jpos == 0)
+        buf_put(&frame, JOURNAL_MAGIC, JOURNAL_MAGIC_LEN);
     uint8_t len4[4];
     len4[0] = (uint8_t)(payload.len & 0xFF);
     len4[1] = (uint8_t)((payload.len >> 8) & 0xFF);
@@ -289,7 +358,8 @@ static int append_record(Store *st, J *rec) {
 
 static PfLock *begin_write(Store *st) {
     PfLock *l = pf_lock_acquire(st->lockpath, LOCK_TIMEOUT_MS);
-    if (!l) return NULL;
+    if (!l)
+        return NULL;
     if (refresh(st) != 0) {
         pf_lock_release(l);
         return NULL;
@@ -314,6 +384,11 @@ Store *store_open(const char *root) {
     st->journal = buf_take(&b);
     buf_printf(&b, "%s/journal.lock", st->dir);
     st->lockpath = buf_take(&b);
+    if (pf_is_reparse(st->dir) || pf_is_reparse(st->journal) || pf_is_reparse(st->lockpath)) {
+        na_seterr("private journal paths cannot be reparse points");
+        store_close(st);
+        return NULL;
+    }
     if (pf_mkdirs(st->dir) != 0 || refresh(st) != 0) {
         store_close(st);
         return NULL;
@@ -322,7 +397,8 @@ Store *store_open(const char *root) {
 }
 
 void store_close(Store *st) {
-    if (!st) return;
+    if (!st)
+        return;
     for (size_t i = 0; i < st->ndocs; i++) {
         free(st->docs[i].path);
         free(st->docs[i].text);
@@ -338,6 +414,7 @@ void store_close(Store *st) {
         }
         free(r->d);
     }
+    json_free(st->metadata);
     free(st->revs);
     free(st->root);
     free(st->dir);
@@ -351,7 +428,8 @@ const char *store_root(const Store *st) { return st->root; }
 /* ---------------------------------------------------------------- paths --- */
 static bool comp_is(const char *p, size_t cl, const char *name) {
     char tmp[16];
-    if (cl != strlen(name) || cl >= sizeof tmp) return false;
+    if (cl != strlen(name) || cl >= sizeof tmp)
+        return false;
     memcpy(tmp, p, cl);
     tmp[cl] = 0;
     return path_equal(tmp, name);
@@ -379,7 +457,8 @@ char *store_canon(const Store *st, const char *name) {
         return NULL;
     }
     const char *rel = norm + strlen(st->root);
-    while (*rel == '/') rel++;
+    while (*rel == '/')
+        rel++;
     /* the two configuration files the tool reads from .aed/ may be written like any other file */
     bool config = strcmp(rel, ".aed/lsp.json") == 0 || strcmp(rel, ".aed/embed.json") == 0;
     /* reserved components and alternate data streams / drive-relative forms */
@@ -396,7 +475,8 @@ char *store_canon(const Store *st, const char *name) {
             na_seterr("invalid path component");
             return NULL;
         }
-        if (!q) break;
+        if (!q)
+            break;
         p = q + 1;
     }
     /* reject symlinks / junctions anywhere below the workspace root */
@@ -414,7 +494,8 @@ char *store_canon(const Store *st, const char *name) {
             na_seterr("symlink escapes workspace");
             return NULL;
         }
-        if (!q) break;
+        if (!q)
+            break;
         p = q + 1;
     }
     buf_free(&walk);
@@ -448,6 +529,15 @@ static int load_doc(Store *st, const char *canon, Loaded *out) {
     char *full = disk_path(st, canon);
     Buf b;
     buf_init(&b);
+    if (pf_is_dir(full)) {
+        out->from_disk = true;
+        out->disk_exists = true;
+        blake2b16("<nextagent-directory>", 21, out->disk_hash);
+        out->snap = snap_new(0, "", 0);
+        free(full);
+        buf_free(&b);
+        return 0;
+    }
     int rc = pf_read_file(full, &b);
     free(full);
     if (rc < 0) {
@@ -470,12 +560,23 @@ static int load_doc(Store *st, const char *canon, Loaded *out) {
 
 int store_view(Store *st, const char *name, Snapshot **out) {
     char *canon = store_canon(st, name);
-    if (!canon) return -1;
+    if (!canon)
+        return -1;
     if (refresh(st) != 0) {
         free(canon);
         return -1;
     }
     Doc *d = doc_find(st, canon);
+    {
+        char *full = disk_path(st, canon);
+        bool isdir = d && d->has_head ? (!d->deleted && d->directory) : pf_is_dir(full);
+        free(full);
+        if (isdir) {
+            free(canon);
+            return na_fail("path_is_directory: %s", name);
+        }
+    }
+
     if (!d || !d->base_set) {
         PfLock *lock = begin_write(st);
         if (!lock) {
@@ -519,7 +620,8 @@ int store_view(Store *st, const char *name, Snapshot **out) {
     Loaded ld;
     int rc = load_doc(st, canon, &ld);
     free(canon);
-    if (rc != 0) return -1;
+    if (rc != 0)
+        return -1;
     *out = ld.snap;
     return 0;
 }
@@ -531,7 +633,8 @@ int64_t store_head(Store *st) {
 
 int store_snapshot_text(Store *st, const char *name, char **text, size_t *len) {
     char *canon = store_canon(st, name);
-    if (!canon) return -1;
+    if (!canon)
+        return -1;
     if (refresh(st) != 0) {
         free(canon);
         return -1;
@@ -539,17 +642,21 @@ int store_snapshot_text(Store *st, const char *name, char **text, size_t *len) {
     Loaded ld;
     int rc = load_doc(st, canon, &ld);
     free(canon);
-    if (rc != 0) return -1;
+    if (rc != 0)
+        return -1;
     *text = na_strndup(ld.snap->text, ld.snap->len);
-    if (len) *len = ld.snap->len;
+    if (len)
+        *len = ld.snap->len;
     snap_free(ld.snap);
     return 0;
 }
 
 int store_snapshot_paths(Store *st, StrList *out) {
-    if (refresh(st) != 0) return -1;
+    if (refresh(st) != 0)
+        return -1;
     for (size_t i = 0; i < st->ndocs; i++)
-        if (st->docs[i].has_head) sl_push(out, st->docs[i].path);
+        if (st->docs[i].has_head && !st->docs[i].deleted && !st->docs[i].directory)
+            sl_push(out, st->docs[i].path);
     sl_sort(out);
     return 0;
 }
@@ -559,7 +666,8 @@ void edit_result_free(EditResult *r) { sl_free(&r->paths); }
 /* ----------------------------------------------------------------- edit --- */
 int store_edit(Store *st, const char *const *names, const ChangeSet *changes, size_t n, int64_t if_rev,
                const char *label, const char *session, const Validator *validator, EditResult *result) {
-    if (n == 0) return na_fail("empty edit batch");
+    if (n == 0)
+        return na_fail("empty edit batch");
     char **canon = static_cast<char **>(na_alloc(n * sizeof *canon));
     char **expected = static_cast<char **>(na_alloc(n * sizeof *expected));
     size_t *expected_len = static_cast<size_t *>(na_alloc(n * sizeof *expected_len));
@@ -572,7 +680,8 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
     bool ok = true;
     for (i = 0; i < n; i++) {
         canon[i] = store_canon(st, names[i]);
-        if (!canon[i]) goto done;
+        if (!canon[i])
+            goto done;
     }
     for (i = 0; i < n; i++)
         for (size_t k = i + 1; k < n; k++)
@@ -580,7 +689,8 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
                 na_seterr("duplicate canonical paths in edit batch");
                 goto done;
             }
-    if (refresh(st) != 0) goto done;
+    if (refresh(st) != 0)
+        goto done;
     parent = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
     if (if_rev != STORE_NO_REV && if_rev != parent) {
         na_seterr("stale_rev: expected %lld, current %lld", (long long)if_rev, (long long)parent);
@@ -590,7 +700,8 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
         vdocs = static_cast<ValidateDoc *>(na_alloc(n * sizeof *vdocs));
         for (i = 0; i < n; i++) {
             Loaded ld;
-            if (load_doc(st, canon[i], &ld) != 0) goto done;
+            if (load_doc(st, canon[i], &ld) != 0)
+                goto done;
             expected[i] = na_strndup(ld.snap->text, ld.snap->len);
             expected_len[i] = ld.snap->len;
             Snapshot *before = snap_new(parent, ld.snap->text, ld.snap->len);
@@ -604,11 +715,13 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
             vdocs[i].before = before;
             vdocs[i].after = after;
         }
-        if (validator->validate(validator->ctx, vdocs, n) != 0) goto done;
+        if (validator->validate(validator->ctx, vdocs, n) != 0)
+            goto done;
     }
 
     lock = begin_write(st);
-    if (!lock) goto done;
+    if (!lock)
+        goto done;
     current = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
     if (current != parent || (if_rev != STORE_NO_REV && current != if_rev)) {
         na_seterr("stale_rev: expected %lld, current %lld", (long long)parent, (long long)current);
@@ -621,6 +734,18 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
     }
     docs = j_arr();
     for (i = 0; i < n && ok; i++) {
+        {
+            char *full = disk_path(st, canon[i]);
+            const Doc *known = doc_find(st, canon[i]);
+            bool directory =
+                pf_is_dir(full) || (known && known->has_head && !known->deleted && known->directory);
+            free(full);
+            if (directory) {
+                na_seterr("path_is_directory: %s", canon[i]);
+                ok = false;
+                break;
+            }
+        }
         Loaded ld;
         if (load_doc(st, canon[i], &ld) != 0) {
             ok = false;
@@ -645,13 +770,18 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
         J *dj = j_obj();
         j_set(dj, "path", j_str(canon[i]));
         Doc *d = doc_find(st, canon[i]);
+        j_set(dj, "before_exists", j_bool(d && d->has_head ? !d->deleted : ld.disk_exists));
+        j_set(dj, "exists", j_bool(true));
+        j_set(dj, "before_directory", j_bool(false));
+        j_set(dj, "directory", j_bool(false));
         /* Full text only as a checkpoint: a document's first revision, or once the journaled
          * deltas outweigh the text. Replay stays bounded and writes are amortized O(delta). */
         if (!d || !d->has_head || d->ckpt_bytes + delta_bytes(&changes[i]) + delta_bytes(&inverse) > d->len)
             j_set(dj, "text", j_strn(after->text, after->len));
         j_set(dj, "forward", edits_to_json(&changes[i]));
         j_set(dj, "inverse", edits_to_json(&inverse));
-        if (!d || !d->base_set) j_set(dj, "base", base_to_json(ld.disk_exists, ld.disk_hash));
+        if (!d || !d->base_set)
+            j_set(dj, "base", base_to_json(ld.disk_exists, ld.disk_hash));
         j_push(docs, dj);
         cs_free(&inverse);
         snap_free(after);
@@ -672,11 +802,13 @@ int store_edit(Store *st, const char *const *names, const ChangeSet *changes, si
     }
     json_free(docs);
     pf_lock_release(lock);
-    if (!ok) goto done;
+    if (!ok)
+        goto done;
     if (result) {
         result->rev = parent + 1;
         sl_init(&result->paths);
-        for (i = 0; i < n; i++) sl_push(&result->paths, names[i]);
+        for (i = 0; i < n; i++)
+            sl_push(&result->paths, names[i]);
     }
     rc = 0;
 done:
@@ -701,7 +833,12 @@ static int rebase_through(Store *st, const Rev *r, size_t doc, ChangeSet *edits)
     for (size_t k = (size_t)r->id; k < st->nrevs; k++) {
         const Rev *later = &st->revs[k];
         for (size_t di = 0; di < later->nd; di++) {
-            if (later->d[di].doc != doc) continue;
+            if (later->d[di].doc != doc)
+                continue;
+            const Delta &state = later->d[di];
+            if (state.existence_set && (state.before_exists != state.after_exists ||
+                                        state.before_directory != state.after_directory))
+                return na_fail("undo_conflict: file existence changed");
             const ChangeSet *f = &later->d[di].forward;
             for (size_t ei = 0; ei < edits->n; ei++) {
                 Edit *e = &edits->v[ei];
@@ -723,13 +860,64 @@ static int rebase_through(Store *st, const Rev *r, size_t doc, ChangeSet *edits)
 }
 
 int store_undo(Store *st, int64_t rev, const Validator *validator, EditResult *result) {
-    if (refresh(st) != 0) return -1;
+    if (refresh(st) != 0)
+        return -1;
     int64_t head = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
-    if (!head) return na_fail("no revisions to undo");
-    if (rev == 0) rev = head;
-    if (rev < 1 || rev > head) return na_fail("unknown revision %lld", (long long)rev);
+    if (!head)
+        return na_fail("no revisions to undo");
+    if (rev == 0)
+        rev = head;
+    if (rev < 1 || rev > head)
+        return na_fail("unknown revision %lld", (long long)rev);
     const Rev *r = &st->revs[rev - 1];
-    if (r->nd == 0) return na_fail("revision has no changes");
+    bool state_change = false;
+    for (size_t i = 0; i < r->nd; i++) {
+        const Delta &d = r->d[i];
+        if (d.existence_set && (d.before_exists != d.after_exists || d.before_directory != d.after_directory))
+            state_change = true;
+    }
+    if (state_change) {
+        std::vector<Delta> deltas(r->d, r->d + r->nd);
+        std::vector<std::string> paths;
+        for (auto &delta : deltas) {
+            paths.emplace_back(st->docs[delta.doc].path);
+            for (size_t k = size_t(rev); k < st->nrevs; k++)
+                for (size_t j = 0; j < st->revs[k].nd; j++)
+                    if (st->revs[k].d[j].doc == delta.doc)
+                        return na_fail("undo_conflict: file state changed after revision %lld",
+                                       (long long)rev);
+        }
+        std::unique_ptr<J, decltype(&json_free)> entries(j_arr(), json_free);
+        for (size_t i = 0; i < deltas.size(); i++) {
+            J *before = nullptr;
+            if (store_state(st, paths[i].c_str(), &before))
+                return -1;
+            const J *text = j_get(before, "text");
+            char *restored = nullptr;
+            size_t len = 0;
+            if (cs_apply_text(&deltas[i].inverse, text->s, text->slen, &restored, &len)) {
+                json_free(before);
+                return -1;
+            }
+            J *after = j_obj();
+            j_set(after, "exists", j_bool(deltas[i].before_exists));
+            j_set(after, "directory",
+                  j_bool(deltas[i].before_exists ? deltas[i].before_directory
+                                                 : (j_get(before, "directory")->b)));
+            j_set(after, "text", j_strn(restored, len));
+            free(restored);
+            J *entry = j_obj();
+            j_set(entry, "path", j_str(paths[i].c_str()));
+            j_set(entry, "before", before);
+            j_set(entry, "after", after);
+            j_push(entries.get(), entry);
+        }
+        char label[64];
+        snprintf(label, sizeof label, "undo revision %lld", (long long)rev);
+        return store_transaction(st, entries.get(), head, label, "history", nullptr, validator, result);
+    }
+    if (r->nd == 0)
+        return na_fail("revision has no changes");
     const char **names = static_cast<const char **>(na_alloc(r->nd * sizeof *names));
     ChangeSet *changes = static_cast<ChangeSet *>(na_alloc(r->nd * sizeof *changes));
     size_t made = 0;
@@ -738,23 +926,28 @@ int store_undo(Store *st, int64_t rev, const Validator *validator, EditResult *r
         names[i] = st->docs[r->d[i].doc].path;
         changes[i] = cs_clone(&r->d[i].inverse);
         made++;
-        if (rev != head && rebase_through(st, r, r->d[i].doc, &changes[i]) != 0) goto out;
+        if (rev != head && rebase_through(st, r, r->d[i].doc, &changes[i]) != 0)
+            goto out;
     }
     char label[64];
     snprintf(label, sizeof label, "undo revision %lld", (long long)rev);
     rc = store_edit(st, names, changes, r->nd, head, label, "cli", validator, result);
 out:
-    for (size_t i = 0; i < made; i++) cs_free(&changes[i]);
+    for (size_t i = 0; i < made; i++)
+        cs_free(&changes[i]);
     free(changes);
     free(names);
     return rc;
 }
 
 int store_redo(Store *st, const Validator *validator, EditResult *result) {
-    if (refresh(st) != 0) return -1;
-    if (!st->nrevs) return na_fail("nothing to redo");
+    if (refresh(st) != 0)
+        return -1;
+    if (!st->nrevs)
+        return na_fail("nothing to redo");
     const Rev *head = &st->revs[st->nrevs - 1];
-    if (strncmp(head->label, "undo revision ", 14) != 0) return na_fail("nothing to redo");
+    if (strncmp(head->label, "undo revision ", 14) != 0)
+        return na_fail("nothing to redo");
     return store_undo(st, head->id, validator, result);
 }
 
@@ -773,14 +966,18 @@ J *store_history(Store *st, int limit) {
     return arr;
 }
 
-/* What revision `rev` (0 = head) changed: per file, the hunks as removed/added text. `line` (1-based, in the text the
- * revision produced) is given for the head revision only, where that text is the current one. */
+/* What revision `rev` (0 = head) changed: per file, the hunks as removed/added text. `line` (1-based, in the
+ * text the revision produced) is given for the head revision only, where that text is the current one. */
 int store_rev_diff(Store *st, int64_t rev, J **out) {
-    if (refresh(st) != 0) return -1;
+    if (refresh(st) != 0)
+        return -1;
     int64_t head = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
-    if (!head) return na_fail("no revisions");
-    if (rev == 0) rev = head;
-    if (rev < 1 || rev > head) return na_fail("unknown revision %lld", (long long)rev);
+    if (!head)
+        return na_fail("no revisions");
+    if (rev == 0)
+        rev = head;
+    if (rev < 1 || rev > head)
+        return na_fail("unknown revision %lld", (long long)rev);
     const Rev *r = &st->revs[rev - 1];
     J *files = j_arr();
     for (size_t i = 0; i < r->nd; i++) {
@@ -792,7 +989,8 @@ int store_rev_diff(Store *st, int64_t rev, J **out) {
             if (rev == head && d->has_head && d->text) {
                 size_t b = cp_to_byte(d->text, d->len, iv->v[k].start), line = 1;
                 for (size_t q = 0; q < b; q++)
-                    if (d->text[q] == '\n') line++;
+                    if (d->text[q] == '\n')
+                        line++;
                 j_set(h, "line", j_int((int64_t)line));
             }
             j_set(h, "offset", j_int((int64_t)fw->v[k].start));
@@ -815,6 +1013,11 @@ int store_rev_diff(Store *st, int64_t rev, J **out) {
 
 /* ---------------------------------------------------------------- flush --- */
 static int disk_state(const char *full, bool *exists, uint8_t hash[16]) {
+    if (pf_is_dir(full)) {
+        *exists = true;
+        blake2b16("<nextagent-directory>", 21, hash);
+        return 0;
+    }
     Buf b;
     buf_init(&b);
     int rc = pf_read_file(full, &b);
@@ -823,13 +1026,15 @@ static int disk_state(const char *full, bool *exists, uint8_t hash[16]) {
         return -1;
     }
     *exists = rc == 0;
-    if (rc == 0) blake2b16(b.p ? b.p : "", b.len, hash);
+    if (rc == 0)
+        blake2b16(b.p ? b.p : "", b.len, hash);
     buf_free(&b);
     return 0;
 }
 
 static bool disk_conflict(const Doc *d, bool exists, const uint8_t hash[16]) {
-    if (exists != d->base_exists) return true;
+    if (exists != d->base_exists)
+        return true;
     return exists && memcmp(hash, d->base_hash, 16) != 0;
 }
 
@@ -842,7 +1047,8 @@ static int doc_base_text(Store *st, const Doc *d, char **out, size_t *outlen) {
     for (int64_t r = (int64_t)st->nrevs; r > d->base_rev; r--) {
         const Rev *rv = &st->revs[r - 1];
         for (size_t k = 0; k < rv->nd; k++) {
-            if (rv->d[k].doc != di) continue;
+            if (rv->d[k].doc != di)
+                continue;
             char *nt;
             size_t nl;
             if (cs_apply_text(&rv->d[k].inverse, text, len, &nt, &nl) != 0) {
@@ -861,7 +1067,8 @@ static int doc_base_text(Store *st, const Doc *d, char **out, size_t *outlen) {
 
 static int record_baseline(Store *st, const char *canon, bool exists, const uint8_t hash[16]) {
     PfLock *lock = begin_write(st);
-    if (!lock) return -1;
+    if (!lock)
+        return -1;
     J *rec = j_obj(), *docs = j_arr(), *e = j_obj();
     j_set(rec, "t", j_str("flush"));
     j_set(e, "path", j_str(canon));
@@ -880,11 +1087,13 @@ static int record_baseline(Store *st, const char *canon, bool exists, const uint
  * next flush overwrite the disk. The report has `status`: unchanged | fast_forward | merged | conflict |
  * took_theirs | kept_ours, plus `conflicts` and, when the journal changed, `rev`/`paths`. */
 int store_merge_external(Store *st, const char *name, const char *strategy, bool dry_run, J **report) {
-    if (!strategy) strategy = "auto";
+    if (!strategy)
+        strategy = "auto";
     if (strcmp(strategy, "auto") != 0 && strcmp(strategy, "ours") != 0 && strcmp(strategy, "theirs") != 0)
         return na_fail("invalid parameter: strategy must be auto, ours or theirs");
     char *canon = store_canon(st, name);
-    if (!canon) return -1;
+    if (!canon)
+        return -1;
     if (refresh(st) != 0) {
         free(canon);
         return -1;
@@ -900,7 +1109,8 @@ int store_merge_external(Store *st, const char *name, const char *strategy, bool
     size_t blen = 0;
     const char *status = "merged", *newtext = nullptr;
     size_t newlen = 0;
-    if (!d || !d->has_head || !d->base_set || disk_state(full, &exists, hash) != 0 || !disk_conflict(d, exists, hash)) {
+    if (!d || !d->has_head || !d->base_set || disk_state(full, &exists, hash) != 0 ||
+        !disk_conflict(d, exists, hash)) {
         j_set(rep, "status", j_str("unchanged"));
         goto done;
     }
@@ -910,7 +1120,8 @@ int store_merge_external(Store *st, const char *name, const char *strategy, bool
             j_set(rep, "message", j_str("the file was deleted on disk; use strategy ours to recreate it"));
             goto done;
         }
-        if (!dry_run) rc = record_baseline(st, canon, exists, hash);
+        if (!dry_run)
+            rc = record_baseline(st, canon, exists, hash);
         j_set(rep, "status", j_str("kept_ours"));
         goto done_paths;
     }
@@ -969,25 +1180,32 @@ int store_merge_external(Store *st, const char *name, const char *strategy, bool
             /* replace only the differing middle of the head text */
             const char *head = d->text ? d->text : "";
             size_t pre = 0, suf = 0, hl = d->len;
-            while (pre < hl && pre < newlen && head[pre] == newtext[pre]) pre++;
-            while (pre > 0 && pre < hl && ((unsigned char)head[pre] & 0xC0) == 0x80) pre--;
-            while (suf < hl - pre && suf < newlen - pre && head[hl - 1 - suf] == newtext[newlen - 1 - suf]) suf++;
-            while (suf > 0 && ((unsigned char)head[hl - suf] & 0xC0) == 0x80) suf--;
+            while (pre < hl && pre < newlen && head[pre] == newtext[pre])
+                pre++;
+            while (pre > 0 && pre < hl && ((unsigned char)head[pre] & 0xC0) == 0x80)
+                pre--;
+            while (suf < hl - pre && suf < newlen - pre && head[hl - 1 - suf] == newtext[newlen - 1 - suf])
+                suf++;
+            while (suf > 0 && ((unsigned char)head[hl - suf] & 0xC0) == 0x80)
+                suf--;
             if (pre + suf < hl || pre + suf < newlen) {
                 ChangeSet cs;
                 cs_init(&cs);
                 size_t a = utf8_cp_count(head, pre);
-                cs_add(&cs, a, a + utf8_cp_count(head + pre, hl - pre - suf), newtext + pre, newlen - pre - suf);
+                cs_add(&cs, a, a + utf8_cp_count(head + pre, hl - pre - suf), newtext + pre,
+                       newlen - pre - suf);
                 const char *names[1] = {canon};
                 EditResult res;
-                rc = store_edit(st, names, &cs, 1, (int64_t)st->nrevs, "merge external changes", "merge", NULL, &res);
+                rc = store_edit(st, names, &cs, 1, (int64_t)st->nrevs, "merge external changes", "merge",
+                                NULL, &res);
                 cs_free(&cs);
                 if (rc == 0) {
                     j_set(rep, "rev", j_int(res.rev));
                     edit_result_free(&res);
                 }
             }
-            if (rc == 0) rc = record_baseline(st, canon, true, hash);
+            if (rc == 0)
+                rc = record_baseline(st, canon, true, hash);
         }
     }
     free(base);
@@ -1012,7 +1230,8 @@ done:
 
 int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *written) {
     PfLock *lock = begin_write(st);
-    if (!lock) return -1;
+    if (!lock)
+        return -1;
     StrList wanted;
     sl_init(&wanted);
     int rc = -1;
@@ -1021,7 +1240,8 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
     if (paths) {
         for (size_t i = 0; i < npaths; i++) {
             char *c = store_canon(st, paths[i]);
-            if (!c) goto out;
+            if (!c)
+                goto out;
             sl_push(&wanted, c);
             free(c);
         }
@@ -1030,13 +1250,15 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
     sl_init(&selected);
     for (size_t i = 0; i < st->ndocs; i++) {
         const Doc *d = &st->docs[i];
-        if (!d->has_head || !d->base_set) continue;
-        if (paths && !sl_has(&wanted, d->path)) continue;
+        if (!d->has_head || !d->base_set)
+            continue;
+        if (paths && !sl_has(&wanted, d->path))
+            continue;
         sl_push(&selected, d->path);
     }
     sl_sort(&selected);
-    /* detect conflicts across ALL selected paths before writing any; a flush of everything (sync without paths)
-     * skips conflicted files, writes the rest and reports the skipped ones at the end */
+    /* detect conflicts across ALL selected paths before writing any; a flush of everything (sync without
+     * paths) skips conflicted files, writes the rest and reports the skipped ones at the end */
     for (size_t i = 0; i < selected.n;) {
         const Doc *d = doc_find(st, selected.v[i]);
         char *full = disk_path(st, d->path);
@@ -1044,13 +1266,16 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         uint8_t hash[16];
         int drc = disk_state(full, &exists, hash);
         free(full);
-        if (drc != 0) goto out_sel;
+        if (drc != 0)
+            goto out_sel;
         if (disk_conflict(d, exists, hash)) {
             if (paths) {
-                na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
+                na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)",
+                          d->path, d->path);
                 goto out_sel;
             }
-            if (!skipped) skipped = na_strdup(d->path);
+            if (!skipped)
+                skipped = na_strdup(d->path);
             nskipped++;
             free(selected.v[i]);
             memmove(selected.v + i, selected.v + i + 1, (selected.n - i - 1) * sizeof *selected.v);
@@ -1059,6 +1284,19 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         }
         i++;
     }
+    if (selected.n > 1)
+        std::sort(selected.v, selected.v + selected.n, [&](const char *a, const char *b) {
+            const Doc *x = doc_find(st, a), *y = doc_find(st, b);
+            auto priority = [](const Doc *d) {
+                return d->directory ? (d->deleted ? 3 : 0) : (d->deleted ? 2 : 1);
+            };
+            int px = priority(x), py = priority(y);
+            if (px != py)
+                return px < py;
+            if (px == 3 && strlen(a) != strlen(b))
+                return strlen(a) > strlen(b);
+            return strcmp(a, b) < 0;
+        });
     for (size_t i = 0; i < selected.n; i++) {
         const Doc *d = doc_find(st, selected.v[i]);
         char *full = disk_path(st, d->path);
@@ -1069,7 +1307,8 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
             goto out_sel;
         }
         if (disk_conflict(d, exists, hash)) {
-            na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)", d->path, d->path);
+            na_seterr("disk_conflict: external modification of %s (reconcile with: nextagent merge %s)",
+                      d->path, d->path);
             free(full);
             goto out_sel;
         }
@@ -1083,7 +1322,10 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
                 goto out_sel;
             }
         }
-        if (pf_write_atomic(full, d->text ? d->text : "", d->len) != 0) {
+        int write_rc = d->deleted     ? (exists ? (d->directory ? pf_remove_dir(full) : pf_remove(full)) : 0)
+                       : d->directory ? pf_mkdirs(full)
+                                      : pf_write_atomic(full, d->text ? d->text : "", d->len);
+        if (write_rc != 0) {
             free(full);
             goto out_sel;
         }
@@ -1093,17 +1335,22 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
         J *rec = j_obj(), *docs = j_arr(), *e = j_obj();
         j_set(rec, "t", j_str("flush"));
         j_set(e, "path", j_str(d->path));
-        j_set(e, "base", base_to_json(true, nh));
+        if (d->directory)
+            blake2b16("<nextagent-directory>", 21, nh);
+        j_set(e, "base", base_to_json(!d->deleted, nh));
         j_push(docs, e);
         j_set(rec, "docs", docs);
         int arc = append_record(st, rec);
         json_free(rec);
-        if (arc != 0) goto out_sel;
-        if (written) sl_push(written, selected.v[i]);
+        if (arc != 0)
+            goto out_sel;
+        if (written)
+            sl_push(written, selected.v[i]);
     }
     rc = 0;
     if (nskipped) {
-        na_seterr("disk_conflict: %zu file(s) changed outside nextagent were not written, the others were (first: %s; reconcile with: nextagent merge %s)",
+        na_seterr("disk_conflict: %zu file(s) changed outside nextagent were not written, the others were "
+                  "(first: %s; reconcile with: nextagent merge %s)",
                   nskipped, skipped, skipped);
         rc = -1;
     }
@@ -1115,3 +1362,299 @@ out:
     pf_lock_release(lock);
     return rc;
 }
+
+int store_meta_get(Store *st, const char *key, J **out) {
+    if (refresh(st) != 0)
+        return -1;
+    const J *v = j_get(st->metadata, key);
+    if (!v) {
+        *out = j_null();
+        return 0;
+    }
+    char *text = json_dump(v);
+    *out = json_parse(text, strlen(text));
+    free(text);
+    return *out ? 0 : -1;
+}
+int store_meta_put(Store *st, const char *key, const J *value, const char *expected_hash) {
+    if (!key || !*key || strlen(key) > 256 || !value)
+        return na_fail("invalid metadata key/value");
+    PfLock *lock = begin_write(st);
+    if (!lock)
+        return -1;
+    const J *old = j_get(st->metadata, key);
+    if (old && old->k == J_NULL)
+        old = nullptr;
+    char *oldtext = old ? json_dump(old) : nullptr;
+    char hx[33]{};
+    uint8_t hash[16];
+    if (oldtext) {
+        blake2b16(oldtext, strlen(oldtext), hash);
+        hex_encode(hash, 16, hx);
+    }
+    if (expected_hash && ((!strcmp(expected_hash, "missing") && old) ||
+                          (strcmp(expected_hash, "missing") && (!old || strcmp(expected_hash, hx))))) {
+        free(oldtext);
+        pf_lock_release(lock);
+        return na_fail("metadata_conflict: %s", key);
+    }
+    char *text = json_dump(value);
+    if (oldtext && !strcmp(oldtext, text)) {
+        free(oldtext);
+        free(text);
+        pf_lock_release(lock);
+        return 0;
+    }
+    free(oldtext);
+    J *rec = j_obj();
+    j_set(rec, "t", j_str("meta"));
+    j_set(rec, "key", j_str(key));
+    j_set(rec, "value", json_parse(text, strlen(text)));
+    free(text);
+    int rc = append_record(st, rec);
+    json_free(rec);
+    pf_lock_release(lock);
+    return rc;
+}
+
+int store_meta_list(Store *st, const char *prefix, J **out) {
+    if (refresh(st) != 0)
+        return -1;
+    *out = j_obj();
+    if (!st->metadata)
+        return 0;
+    for (size_t i = 0; i < st->metadata->n; i++)
+        if (!strncmp(st->metadata->keys[i], prefix, strlen(prefix)) && st->metadata->items[i]->k != J_NULL) {
+            char *v = json_dump(st->metadata->items[i]);
+            j_set(*out, st->metadata->keys[i], json_parse(v, strlen(v)));
+            free(v);
+        }
+    return 0;
+}
+
+namespace {
+bool state_flag(const J *state, const char *key) {
+    const J *v = j_get(state, key);
+    return v && v->k == J_BOOL && v->b;
+}
+const J *state_text(const J *state) { return j_get(state, "text"); }
+bool same_state(const J *a, const J *b) {
+    if (state_flag(a, "exists") != state_flag(b, "exists"))
+        return false;
+    if (!state_flag(a, "exists"))
+        return true;
+    if (state_flag(a, "directory") != state_flag(b, "directory"))
+        return false;
+    const J *x = state_text(a), *y = state_text(b);
+    return j_is_str(x) && j_is_str(y) && x->slen == y->slen && !memcmp(x->s, y->s, x->slen);
+}
+using OwnedJson = std::unique_ptr<J, decltype(&json_free)>;
+using OwnedSnap = std::unique_ptr<Snapshot, decltype(&snap_free)>;
+} // namespace
+int store_state(Store *st, const char *name, J **out) {
+    std::unique_ptr<char, decltype(&free)> path(store_canon(st, name), free);
+    if (!path || refresh(st))
+        return -1;
+    Doc *doc = doc_find(st, path.get());
+    bool exists = false, directory = false;
+    std::string text;
+    if (doc && doc->has_head) {
+        exists = !doc->deleted;
+        directory = doc->directory;
+        if (exists && !directory)
+            text.assign(doc->text, doc->len);
+    } else {
+        std::unique_ptr<char, decltype(&free)> full(disk_path(st, path.get()), free);
+        directory = pf_is_dir(full.get());
+        exists = directory || pf_is_file(full.get());
+        if (exists && !directory) {
+            Buf b;
+            buf_init(&b);
+            int rc = pf_read_file(full.get(), &b);
+            if (rc) {
+                buf_free(&b);
+                return na_fail("cannot read state: %s", name);
+            }
+            if (!utf8_valid(b.p ? b.p : "", b.len)) {
+                buf_free(&b);
+                return na_fail("invalid_utf8: file operations support UTF-8 documents: %s", name);
+            }
+            text.assign(b.p ? b.p : "", b.len);
+            buf_free(&b);
+        }
+    }
+    *out = j_obj();
+    j_set(*out, "exists", j_bool(exists));
+    j_set(*out, "directory", j_bool(directory));
+    j_set(*out, "text", j_strn(text.data(), text.size()));
+    return 0;
+}
+int store_transaction(Store *st, const J *entries, int64_t if_rev, const char *label, const char *session,
+                      const char *operation_id, const Validator *validator, EditResult *result) {
+    if (!entries || entries->k != J_ARR || !entries->n || entries->n > 2000)
+        return na_fail("transaction needs 1..2000 entries");
+    std::vector<std::string> paths;
+    std::vector<OwnedSnap> snapshots;
+    std::vector<ValidateDoc> validation;
+    for (size_t i = 0; i < entries->n; i++) {
+        const J *entry = entries->items[i], *path = j_get(entry, "path"), *before = j_get(entry, "before"),
+                *after = j_get(entry, "after");
+        if (!j_is_str(path) || !j_is_str(state_text(before)) || !j_is_str(state_text(after)))
+            return na_fail("invalid transaction state");
+        std::unique_ptr<char, decltype(&free)> name(store_canon(st, path->s), free);
+        if (!name)
+            return -1;
+        for (auto &old : paths)
+            if (path_equal(old.c_str(), name.get()))
+                return na_fail("duplicate transaction path");
+        paths.emplace_back(name.get());
+        if (state_flag(before, "exists") && state_flag(after, "exists") &&
+            state_flag(before, "directory") != state_flag(after, "directory"))
+            return na_fail("path type change requires separate paths");
+        if ((state_flag(after, "directory") || !state_flag(after, "exists")) && state_text(after)->slen)
+            return na_fail("directory/deleted state cannot contain text");
+        snapshots.emplace_back(snap_new(0, state_text(before)->s, state_text(before)->slen), snap_free);
+        auto b = snapshots.back().get();
+        snapshots.emplace_back(snap_new(0, state_text(after)->s, state_text(after)->slen), snap_free);
+        auto next = snapshots.back().get();
+        validation.push_back({nullptr, b, next});
+    }
+    for (size_t i = 0; i < paths.size(); i++)
+        validation[i].path = paths[i].c_str();
+    if (validator && validator->validate &&
+        validator->validate(validator->ctx, validation.data(), validation.size()))
+        return -1;
+    std::unique_ptr<PfLock, decltype(&pf_lock_release)> lock(begin_write(st), pf_lock_release);
+    if (!lock)
+        return -1;
+    if (operation_id) {
+        std::string key = std::string("committed/") + operation_id;
+        const J *done = j_get(st->metadata, key.c_str());
+        if (done && done->k == J_OBJ) {
+            result->rev = j_get(done, "rev")->i;
+            sl_init(&result->paths);
+            for (auto &path : paths)
+                sl_push(&result->paths, path.c_str());
+            return 0;
+        }
+    }
+    int64_t head = st->nrevs ? st->revs[st->nrevs - 1].id : 0;
+    if (if_rev != STORE_NO_REV && if_rev != head)
+        return na_fail("stale_rev: transaction expected %lld, current %lld", (long long)if_rev,
+                       (long long)head);
+    if (validator && validator->recheck && validator->recheck(validator->ctx))
+        return -1;
+    for (size_t i = 0; i < entries->n; i++)
+        if (state_flag(j_get(entries->items[i], "after"), "exists")) {
+            size_t slash = 0;
+            while ((slash = paths[i].find('/', slash)) != std::string::npos) {
+                auto parent = paths[i].substr(0, slash++);
+                bool planned = false;
+                for (size_t k = 0; k < paths.size(); k++)
+                    if (path_equal(parent.c_str(), paths[k].c_str())) {
+                        planned = true;
+                        const J *state = j_get(entries->items[k], "after");
+                        if (!state_flag(state, "exists") || !state_flag(state, "directory"))
+                            return na_fail("invalid transaction parent state: %s", parent.c_str());
+                    }
+                if (!planned) {
+                    std::unique_ptr<char, decltype(&free)> full(disk_path(st, parent.c_str()), free);
+                    const Doc *known=doc_find(st,parent.c_str());
+                if (!pf_is_dir(full.get())&&!(known&&known->has_head&&!known->deleted&&known->directory))
+                    return na_fail("missing transaction parent: %s",parent.c_str());
+                }
+            }
+        }
+    for (size_t i = 0; i < entries->n; i++) {
+        // Recheck path containment/reparse status under the lock, after speculative validation.
+        std::unique_ptr<char, decltype(&free)> checked(store_canon(st, paths[i].c_str()), free);
+        if (!checked)
+            return -1;
+        J *state = nullptr;
+        if (store_state(st, paths[i].c_str(), &state))
+            return -1;
+        OwnedJson actual(state, json_free);
+        if (!same_state(actual.get(), j_get(entries->items[i], "before")))
+            return na_fail("stale_plan: %s changed", paths[i].c_str());
+        Doc *d = doc_find(st, paths[i].c_str());
+        std::unique_ptr<char, decltype(&free)> full(disk_path(st, paths[i].c_str()), free);
+        bool exists = false;
+        uint8_t hash[16]{};
+        if (disk_state(full.get(), &exists, hash))
+            return -1;
+        if (d && d->base_set && disk_conflict(d, exists, hash))
+            return na_fail("disk_conflict: %s", paths[i].c_str());
+        if (state_flag(actual.get(), "directory") && state_flag(actual.get(), "exists") &&
+            !state_flag(j_get(entries->items[i], "after"), "exists")&&pf_is_dir(full.get())) {
+            std::error_code error;
+            auto dir = std::filesystem::path(std::u8string(reinterpret_cast<const char8_t *>(full.get())));
+            for (std::filesystem::directory_iterator it(dir, error), end; !error && it != end;
+                 it.increment(error)) {
+                auto utf8 = it->path().filename().u8string();
+                std::string child =
+                    paths[i] + "/" + std::string(reinterpret_cast<const char *>(utf8.data()), utf8.size());
+                bool removed = false;
+                for (size_t k = 0; k < paths.size(); k++)
+                    if (path_equal(child.c_str(), paths[k].c_str()) &&
+                        !state_flag(j_get(entries->items[k], "after"), "exists"))
+                        removed = true;
+                if (!removed)
+                    return na_fail("directory_not_empty: %s", paths[i].c_str());
+            }
+            if (error)
+                return na_fail("cannot inspect directory: %s", paths[i].c_str());
+        }
+    }
+    OwnedJson docs(j_arr(), json_free);
+    for (size_t i = 0; i < entries->n; i++) {
+        const J *before = j_get(entries->items[i], "before"), *after = j_get(entries->items[i], "after");
+        const J *bt = state_text(before), *at = state_text(after);
+        ChangeSet forward{}, inverse{};
+        cs_init(&forward);
+        cs_init(&inverse);
+        cs_add(&forward, 0, utf8_cp_count(bt->s, bt->slen), at->s, at->slen);
+        cs_add(&inverse, 0, utf8_cp_count(at->s, at->slen), bt->s, bt->slen);
+        J *doc = j_obj();
+        j_set(doc, "path", j_str(paths[i].c_str()));
+        j_set(doc, "text", j_strn(at->s, at->slen));
+        j_set(doc, "forward", edits_to_json(&forward));
+        j_set(doc, "inverse", edits_to_json(&inverse));
+        cs_free(&forward);
+        cs_free(&inverse);
+        j_set(doc, "before_exists", j_bool(state_flag(before, "exists")));
+        j_set(doc, "exists", j_bool(state_flag(after, "exists")));
+        j_set(doc, "before_directory", j_bool(state_flag(before, "directory")));
+        j_set(doc, "directory", j_bool(state_flag(after, "directory")));
+        Doc *old = doc_find(st, paths[i].c_str());
+        if (!old || !old->base_set) {
+            bool exists = false;
+            uint8_t hash[16]{};
+            std::unique_ptr<char, decltype(&free)> full(disk_path(st, paths[i].c_str()), free);
+            if (disk_state(full.get(), &exists, hash)) {
+                json_free(doc);
+                return -1;
+            }
+            j_set(doc, "base", base_to_json(exists, hash));
+        }
+        j_push(docs.get(), doc);
+    }
+    OwnedJson rec(j_obj(), json_free);
+    j_set(rec.get(), "t", j_str("commit"));
+    j_set(rec.get(), "rev", j_int(head + 1));
+    j_set(rec.get(), "parent", head ? j_int(head) : j_null());
+    j_set(rec.get(), "label", j_str(label ? label : "transaction"));
+    j_set(rec.get(), "session", j_str(session ? session : "agent"));
+    j_set(rec.get(), "ts", j_int(time(nullptr)));
+    j_set(rec.get(), "docs", docs.release());
+    if (operation_id)
+        j_set(rec.get(), "operation_id", j_str(operation_id));
+    if (append_record(st, rec.get()))
+        return -1;
+    result->rev = head + 1;
+    sl_init(&result->paths);
+    for (auto &path : paths)
+        sl_push(&result->paths, path.c_str());
+    return 0;
+}
+
+int store_state_paths(Store *st,StrList *out){if(refresh(st))return -1;for(size_t i=0;i<st->ndocs;i++)if(st->docs[i].has_head&&!st->docs[i].deleted)sl_push(out,st->docs[i].path);sl_sort(out);return 0;}

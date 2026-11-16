@@ -103,6 +103,8 @@ bool language_configured(LanguageEngine *h, const char *path); /* an entry for t
 int language_outline(LanguageEngine *h, const char *abs_path, const char *text, size_t len, bool nested, SymbolList *out);
 /* [{name, extensions, mode, available, loaded}] */
 J *language_status(LanguageEngine *h);
+/* Native grammar rule nodes with codepoint ranges, identity fingerprints and parent links. */
+int language_nodes(LanguageEngine *h,const char *path,const char *text,size_t len,J **out);
 
 /* ---- semantic requests (any server that implements them) ---- */
 typedef struct {

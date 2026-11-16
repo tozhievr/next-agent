@@ -62,6 +62,16 @@ int store_flush(Store *st, const char *const *paths, size_t npaths, StrList *wri
 /* Reconciles a document whose file changed outside NextAgent (what `sync` reports as disk_conflict) by a
  * line-based three-way merge. strategy: auto | ours | theirs. *report: {path, status, conflicts?, rev?, paths?}. */
 int store_merge_external(Store *st, const char *name, const char *strategy, bool dry_run, J **report);
+/* Journaled private agent metadata. expected_hash: NULL unconditional, "missing" create-only,
+ * or BLAKE2b-128 of the previous JSON serialization for compare-and-swap. */
+/* File/directory existence is journaled; transaction entries contain path,before,after states. */
+int store_state(Store *st,const char *path,J **out);
+int store_state_paths(Store *st,StrList *out);
+int store_transaction(Store *st,const J *entries,int64_t if_rev,const char *label,const char *session,
+                      const char *operation_id,const Validator *validator,EditResult *result);
+int store_meta_get(Store *st, const char *key, J **out);
+int store_meta_list(Store *st,const char *prefix,J **out);
+int store_meta_put(Store *st, const char *key, const J *value, const char *expected_hash);
 void edit_result_free(EditResult *r);
 
 #endif

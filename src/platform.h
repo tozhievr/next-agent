@@ -14,6 +14,7 @@ int pf_write_atomic(const char *path, const void *data, size_t n);
 /* Append `data` at byte offset `at` (truncating any torn tail), then flush to disk. */
 int pf_append_at(const char *path, uint64_t at, const void *data, size_t n);
 int pf_remove(const char *path);
+int pf_remove_dir(const char *path); /* empty directories only */
 char *pf_fullpath(const char *path); /* absolute, '/' separated, normalized */
 /* List immediate entries; reparse points are skipped. */
 int pf_list_dir(const char *dir, StrList *files, StrList *dirs);

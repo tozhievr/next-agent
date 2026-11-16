@@ -735,6 +735,29 @@ std::vector<DocumentSymbolNode> Services::outline(const Snapshot& snapshot) {
   if (!snapshot.root) return out;
   const LoadedModule* mod = snapshot.module.get();
 
+  if(mod && mod->id=="python") {
+    using Node=lx::uast::GreenNode;
+    auto rule=[&](const Node* n){return n&&!n->is_seq()?mod->symbol_name(lx::uast::kind_symbol(n->kind)):std::string_view{};};
+    std::function<std::pair<const Node*,uint32_t>(const Node*,uint32_t,std::string_view)> find=
+      [&](const Node* n,uint32_t off,std::string_view wanted)->std::pair<const Node*,uint32_t>{
+        if(!n)return {};if(rule(n)==wanted)return {n,off};
+        if(n->is_inner())for(auto& child:n->as_inner()->children()){auto found=find(child.node,off,wanted);if(found.first)return found;if(child.node)off+=child.node->width;}return {};
+      };
+    std::function<void(const Node*,uint32_t,std::vector<DocumentSymbolNode>&)> walk=
+      [&](const Node* n,uint32_t off,std::vector<DocumentSymbolNode>& dst){
+       if(!n||n->is_token()||n->is_error()||n->is_missing())return;
+       auto kind=rule(n);bool fn=kind=="function_def"||kind=="function_def_raw",cls=kind=="class_def"||kind=="class_def_raw";
+       if(fn||cls){auto raw=find(n,off,fn?"function_def_raw":"class_def_raw");if(!raw.first)raw={n,off};auto id=find(raw.first,raw.second,"NAME");if(!id.first)id=find(raw.first,raw.second,"name");
+        if(id.first){DocumentSymbolNode symbol;symbol.kind=fn?12:5;symbol.name=snapshot.rope.slice_text(id.second,id.second+id.first->width);symbol.range={off,off+n->width};symbol.selection_range={id.second,id.second+id.first->width};
+         std::function<void(const Node*,uint32_t)> body=[&](const Node* c,uint32_t pos){if(!c)return;auto k=rule(c);if((k=="block"||k=="class_body")&&c!=n){walk(c,pos,symbol.children);return;}if(c->is_inner())for(auto& child:c->as_inner()->children()){body(child.node,pos);if(child.node)pos+=child.node->width;}};body(raw.first,raw.second);
+         dst.push_back(std::move(symbol));return;
+        }
+       }
+       if(n->is_inner())for(auto& child:n->as_inner()->children()){walk(child.node,off,dst);if(child.node)off+=child.node->width;}
+      };
+    walk(snapshot.root.get(),0,out);return out;
+  }
+
   std::string qsrc = get_outline_query(mod);
   if (!qsrc.empty()) {
     if (auto cached = services::QueryCache::global().get_or_compile(qsrc)) {

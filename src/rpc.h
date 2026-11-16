@@ -10,6 +10,7 @@
 
 struct Rpc {
     Store *store;
+    bool read_only = false;
     bool (*cancelled)(void *) = nullptr;
     void *cancel_context = nullptr;
     Validator validator;
