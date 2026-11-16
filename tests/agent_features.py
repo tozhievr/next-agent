@@ -1,5 +1,5 @@
 """End-to-end native agent workflows; all fixture text is edited via NextAgent."""
-import argparse,json,sys,tempfile,time,subprocess
+import argparse,json,sys,tempfile,time,subprocess,os
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent/'tools'))
 from agent_io import AgentIO
@@ -13,6 +13,13 @@ with tempfile.TemporaryDirectory(prefix='nextagent-agent-') as temp:
     original='# Unicode: caf\u00e9 \U0001f600\n'+'def login(user):\n    return user\n\ndef logout(user):\n    return None\n'
     with AgentIO(root,native=True,executable=exe) as a:
         a.write('auth.py',original)
+        if os.name=='nt':
+            a.write('Case.py','original\n');a.write('case.py','updated\n');assert a.read('Case.py')=='updated\n'
+            a.write('\u0424\u0430\u0439\u043b.py','first\n');a.write('\u0444\u0430\u0439\u043b.py','second\n');assert a.read('\u0424\u0430\u0439\u043b.py')=='second\n'
+        else:
+            a.write('Case.py','upper\n');a.write('case.py','lower\n');assert a.read('Case.py')=='upper\n' and a.read('case.py')=='lower\n'
+
+
         query=a.call('labels',{'target':'auth.py','node_kind':'function_def','symbol':'login'})
         assert len(query['nodes'])==1,query
         anchor=query['nodes'][0]['anchor']
@@ -23,6 +30,7 @@ with tempfile.TemporaryDirectory(prefix='nextagent-agent-') as temp:
         failure(a,'labels',{'action':'bind','label':anchor,'anchor':anchor},'Reserved')
         plan=a.call('prepare',{'edits':[{'label':'auth.login','new':'def login(user):\n    return user.strip()\n\n'}],'files':[{'op':'create','path':'tests/test_auth.py','text':'import unittest\nclass TestAuth(unittest.TestCase):\n    def test_true(self): self.assertTrue(True)\n'}]})
         assert not plan['applied'] and a.read('auth.py')==original
+        proposed=a.call('read_batch',{'requests':[{'plan':plan['plan'],'target':'auth.py','side':'after'}]});assert 'strip' in proposed['items'][0]['text'] and 'strip' not in a.read('auth.py')
         assert all('start' in x for x in plan['diff'])
         # Unrelated text before the labeled node shifts its range but preserves identity.
         a.write('auth.py','# inserted prefix\n'+original)
@@ -73,6 +81,16 @@ with tempfile.TemporaryDirectory(prefix='nextagent-agent-') as temp:
         a.call('labels',{'action':'bind','label':'auth.logout','anchor':query['nodes'][0]['anchor']})
         capabilities=a.call('capabilities');assert len(capabilities['modules'])==30
         assert all(not m['capabilities']['semantic_rename'] for m in capabilities['modules'])
+        for ext,text in [('ts','export function probe(x: number): number { return x+1; }\n'),('js','function probe(x) { return x+1; }\n'),('kt','fun probe(x: Int): Int { return x+1 }\n'),('swift','func probe(_ x: Int) -> Int { return x+1 }\n'),('go','package main\nfunc probe(x int) int { return x+1 }\n')]:
+            a.write('probe.'+ext,text)
+            symbol=a.call('view',{'target':'probe.'+ext,'symbol':'probe','with_anchor':True})
+            assert 'return' in symbol['text'] and len(symbol['text'])>20,(ext,symbol)
+        large=''.join(f'def large_{i}(x):\n    return x+{i}\n\n' for i in range(900))
+        a.write('many.py',large)
+        one=a.call('view',{'target':'many.py','symbol':'large_899','with_anchor':True})
+        assert 'return x+899' in one['text'],one
+        filtered=a.call('labels',{'target':'many.py','node_kind':'function_def','limit':1})
+        assert filtered['matched']==900 and filtered['truncated'],filtered
         a.call('warm',{'targets':['auth.py']})
     # Named anchors and immutable plans survive process restart; derived caches avoid reparse.
     with AgentIO(root,native=True,executable=exe) as a:

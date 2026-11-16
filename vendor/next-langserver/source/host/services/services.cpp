@@ -1,5 +1,6 @@
 #include "host/services.hpp"
 #include "host/services/c_family_outline.hpp"
+#include "host/services/declaration_outline.hpp"
 #include "host/services/query_cache.hpp"
 
 #include "host/extensions.hpp"
@@ -758,6 +759,9 @@ std::vector<DocumentSymbolNode> Services::outline(const Snapshot& snapshot) {
     walk(snapshot.root.get(),0,out);return out;
   }
 
+  if(mod && (mod->id=="typescript"||mod->id=="javascript"||mod->id=="ecmascript"||mod->id=="kotlin"||mod->id=="swift"||mod->id=="go"||mod->id=="csharp"||mod->id=="rust"||mod->id=="php"||mod->id=="glsl")){
+    auto declarations=declaration_outline(snapshot);if(!declarations.empty())return declarations;
+  }
   std::string qsrc = get_outline_query(mod);
   if (!qsrc.empty()) {
     if (auto cached = services::QueryCache::global().get_or_compile(qsrc)) {

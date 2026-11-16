@@ -531,6 +531,14 @@ struct App {
         text("Исполнитель", rx + 25, 443, right - 50, 25);
         text("OpenRouter", rx + 25, 480, 120, 23, VIOLET);
         text(clip(config.model, 30), rx + 25, 509, right - 50, 35, MUTED);
+        std::string check_status="Проверки: не запускались";
+        auto check_color=MUTED;
+        if(v.last_check.is_object()){
+            if(!v.last_check.at("fresh").as_bool())check_status="Проверки: требуют обновления";
+            else if(v.last_check.at("exit_code").as_int()==0){check_status="Проверки: пройдены · рев. "+std::to_string(v.last_check.at("checked_revision").as_uint64());check_color=GREEN;}
+            else {check_status="Проверки: есть ошибки";check_color=VIOLET;}
+        }
+        text(check_status,rx+25,548,right-50,20,check_color);
         panel(rx + 12, 586, right - 24, 176);
         text("Метрики сессии", rx + 25, 600, right - 50, 26);
         text("Время                         " + number(v.elapsed, 2) + " с", rx + 25, 637, right - 50);

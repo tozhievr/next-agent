@@ -7,6 +7,7 @@
 
 static const char USAGE[] =
     "usage: nextagent [--root DIR] [--brief] [--no-sync] [--version] <command> [args]   (global flags may appear anywhere)\n"
+    "  call METHOD [JSON|-]          invoke native API; - reads JSON from stdin\n"
     "  apply [FILE|-] [--label S]     MANY edits in ONE revision from a script, no quoting:\n"
     "                                   @@@ replace PATH [all] / old text / @@@ with / new text\n"
     "                                   @@@ lines PATH A-B / new lines        @@@ symbol PATH NAME / new text\n"

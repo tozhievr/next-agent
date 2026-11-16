@@ -1,3 +1,4 @@
+#include "platform.h"
 #include "util.h"
 #include <ctype.h>
 #include <stdarg.h>
@@ -387,22 +388,20 @@ static bool ci_eq(char a, char b) {
     return tolower((unsigned char)a) == tolower((unsigned char)b);
 }
 
-bool path_equal(const char *a, const char *b) {
-    while (*a && *b) {
-        if (!ci_eq(*a, *b)) return false;
-        a++;
-        b++;
-    }
-    return *a == *b;
+bool path_equal(const char *a,const char *b){
+#ifdef _WIN32
+ return pf_paths_equal(a,b);
+#else
+ return !strcmp(a,b);
+#endif
 }
-
-bool path_inside(const char *root, const char *path) {
-    size_t rl = strlen(root);
-    while (rl > 0 && root[rl - 1] == '/') rl--;
-    if (strlen(path) <= rl + 1) return false;
-    for (size_t i = 0; i < rl; i++)
-        if (!ci_eq(root[i], path[i])) return false;
-    return path[rl] == '/';
+bool path_inside(const char *root,const char *path){
+#ifdef _WIN32
+ return pf_path_is_inside(root,path);
+#else
+ size_t length=strlen(root);while(length>0&&root[length-1]=='/')--length;
+ return strlen(path)>length+1&&!memcmp(root,path,length)&&path[length]=='/';
+#endif
 }
 
 bool path_has_suffix_ci(const char *path, const char *suffix) {

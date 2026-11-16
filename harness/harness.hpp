@@ -27,6 +27,7 @@ struct Event {
 struct View {
     std::string id, title, status = "Готов", answer, error;
     Json messages{lx::host::JsonArray{}};
+    Json last_check;
     std::vector<Event> events;
     std::vector<std::string> changed;
     uint64_t input_tokens = 0, output_tokens = 0, cached_tokens = 0, tool_calls = 0;

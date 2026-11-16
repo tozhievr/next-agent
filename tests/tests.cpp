@@ -131,7 +131,14 @@ static void test_util(void) {
     p = path_normalize("C:\\x\\..\\y");
     CHECK_STR(p, "C:/y");
     free(p);
+#ifdef _WIN32
     CHECK(path_inside("D:/ws", "d:/WS/a.c"));
+    CHECK(path_equal("A","a"));
+#else
+    CHECK(!path_inside("D:/ws", "d:/WS/a.c"));
+    CHECK(path_inside("D:/ws", "D:/ws/a.c"));
+    CHECK(!path_equal("A","a"));
+#endif
     CHECK(!path_inside("D:/ws", "D:/ws"));
     CHECK(!path_inside("D:/ws", "D:/ws2/a.c"));
     CHECK(path_inside_or_equal("D:/ws", "D:/ws"));

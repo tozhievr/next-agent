@@ -89,11 +89,12 @@ std::string slice(const Snapshot *s, size_t start, size_t end) {
         throw std::runtime_error("AST range outside source");
     return std::string(s->text + b, e - b);
 }
-V nodes(Rpc *r, const std::string &path, const Snapshot *snap) {
+V nodes(Rpc *r, const std::string &path, const Snapshot *snap,const V& filter=V(nullptr)) {
     Engine engine(r);
     J *out = nullptr;
     auto absolute = std::string(store_root(r->store)) + "/" + path;
-    check(language_nodes(engine.value, absolute.c_str(), snap->text, snap->len, &out));
+    std::unique_ptr<J,decltype(&json_free)> native_filter(encode(filter),json_free);
+    check(language_nodes(engine.value, absolute.c_str(), snap->text, snap->len, &out,native_filter.get()));
     auto value = decode(out);
     json_free(out);
     if (value.at("truncated").as_bool())
@@ -150,7 +151,7 @@ V resolve(Rpc *r, const std::string &input) {
         throw std::runtime_error("unknown_anchor: " + input);
     auto path = required(d, "path");
     auto snap = current(r, path);
-    auto tree = nodes(r, path, snap.get());
+    auto tree = nodes(r,path,snap.get(),O{{"node_kind",d.at("node_kind")},{"fingerprint",d.at("fingerprint")}});
     A matches;
     for (auto &n : tree.at("nodes").as_array())
         if (descriptor(n).dump() == d.dump())
@@ -163,6 +164,11 @@ V resolve(Rpc *r, const std::string &input) {
     node["anchor"] = id;
     node["text"] = slice(snap.get(), node.at("start").as_uint64(), node.at("end").as_uint64());
     return node;
+}
+V select_text(Rpc* r,const std::string& path,const std::string& text,const std::string& name,const V& params){
+    Engine engine(r);SymbolList all{};auto absolute=std::string(store_root(r->store))+"/"+path;check(language_outline(engine.value,absolute.c_str(),text.data(),text.size(),true,&all));
+    Symbol selected{};auto kind=str(params,"kind"),scope=str(params,"scope");int rc=symbols_select(&all,name.c_str(),params.at("kind").is_string()?kind.c_str():nullptr,params.at("scope").is_string()?scope.c_str():nullptr,&selected);symbols_free(&all);check(rc);
+    J* native=symbol_to_json(&selected);auto result=decode(native);json_free(native);free(selected.name);free(selected.kind);free(selected.scope);return result;
 }
 V labels(Rpc *r, const V &p) {
     auto action = str(p, "action");
@@ -211,7 +217,6 @@ V labels(Rpc *r, const V &p) {
         return resolve(r, str(p, "label"));
     auto path = canon(r, required(p, "target"));
     auto snap = current(r, path);
-    auto tree = nodes(r, path, snap.get());
     if(!p.at("offset").is_null()&&(!p.at("offset").is_number()||p.at("offset").as_int()<0||p.at("offset").as_double()!=double(p.at("offset").as_int())))throw std::runtime_error("offset must be a non-negative integer");
     auto limit = p.at("limit").is_null() ? 100 : p.at("limit").as_int();
     if (limit < 1 || limit > 1000)
@@ -224,6 +229,9 @@ V labels(Rpc *r, const V &p) {
         from = owner.at("start").as_uint64();
         to = owner.at("end").as_uint64();
     }
+    if(p.at("symbol").is_string()){auto selected=select_text(r,path,std::string(snap->text,snap->len),str(p,"symbol"),p);from=std::max(from,selected.at("start").as_uint64());to=std::min(to,selected.at("end").as_uint64());}
+    V filter=O{{"from",from},{"to",to}};if(p.at("node_kind").is_string())filter["node_kind"]=p.at("node_kind");
+    auto tree=nodes(r,path,snap.get(),filter);
     A items;
     size_t matched = 0;
     for (auto n : tree.at("nodes").as_array()) {
@@ -260,10 +268,10 @@ V invoke(Rpc *r, const std::string &method, const V &params) {
     return v.at("result");
 }
 V anchored_read(Rpc* r,const V& p){
-    V request=p;request["with_anchor"]=false;
-    auto result=invoke(r,"view",request);auto path=canon(r,required(p,"target"));auto name=required(p,"symbol");
-    auto selected=invoke(r,"select",O{{"target",path},{"name",name},{"scope",p.at("scope")},{"kind",p.at("kind")}});
-    auto snap=current(r,path);auto tree=nodes(r,path,snap.get());V best;uint64_t width=uint64_t(-1);int best_score=100;
+    auto path=canon(r,required(p,"target"));auto name=required(p,"symbol");auto snap=current(r,path);
+    auto selected=select_text(r,path,std::string(snap->text,snap->len),name,p);
+    auto tree=nodes(r,path,snap.get(),O{{"from",selected.at("start")},{"to",selected.at("end")}});V best;uint64_t width=uint64_t(-1);int best_score=100;
+    V result=O{{"path",path},{"rev",snap->rev},{"lines",snap->nlines}};
     for(auto candidate:tree.at("nodes").as_array()){
       auto start=candidate.at("start").as_uint64(),end=candidate.at("end").as_uint64();
       auto kind=str(candidate,"node_kind");std::transform(kind.begin(),kind.end(),kind.begin(),[](unsigned char c){return char(std::tolower(c));});
@@ -271,7 +279,20 @@ V anchored_read(Rpc* r,const V& p){
       if(start<=selected.at("start").as_uint64()&&end>=selected.at("end").as_uint64()&&(end-start<width||(end-start==width&&score<best_score))&&str(candidate.at("owner"),"name")==name){best=candidate;width=end-start;best_score=score;}
     }
     if(best.is_null())throw std::runtime_error("No uniquely addressable AST node covers the selected symbol");
+    result["text"]=slice(snap.get(),best.at("start").as_uint64(),best.at("end").as_uint64());
+    size_t line=0,column=0;snap_position(snap.get(),best.at("start").as_uint64(),&line,&column);result["start_line"]=line;
     result["anchor"]=remember(r,best);result["fingerprint"]=best.at("fingerprint");result["node_kind"]=best.at("node_kind");result["start"]=best.at("start");result["end"]=best.at("end");return result;
+}
+V plan_read(Rpc* r,const V& request){
+    auto id=required(request,"plan"),path=canon(r,required(request,"target"));auto plan=meta(r,"plan/"+id);if(plan.is_null())throw std::runtime_error("Unknown plan");
+    auto side=str(request,"side");if(side.empty())side="after";if(side!="before"&&side!="after")throw std::runtime_error("side must be before or after");
+    for(auto& entry:plan.at("entries").as_array())if(path_equal(str(entry,"path").c_str(),path.c_str())){
+        auto state=entry.at(side);auto text=str(state,"text");Snap snap(snap_new(plan.at("base_rev").as_int(),text.data(),text.size()),snap_free);
+        auto first=request.at("start_line").is_null()?1:request.at("start_line").as_int();auto last=request.at("end_line").is_null()?int64_t(snap->nlines):request.at("end_line").as_int();
+        if(first<1||last<first)throw std::runtime_error("Invalid snapshot line range");size_t start=size_t(first-1)<snap->nlines?snap->line_starts[first-1]:snap->ncp;
+        size_t end=size_t(last)<snap->nlines?snap->line_starts[last]:snap->ncp;
+        return O{{"path",path},{"plan",id},{"side",side},{"rev",plan.at("base_rev")},{"exists",state.at("exists")},{"directory",state.at("directory")},{"text",slice(snap.get(),start,end)},{"fingerprint",fingerprint(text)}};
+    }throw std::runtime_error("Path is not part of this plan");
 }
 V read_batch(Rpc *r, const V &p) {
     auto &requests = p.at("requests");
@@ -285,7 +306,8 @@ V read_batch(Rpc *r, const V &p) {
     for (auto request : requests.as_array()) {
         V item;
         try {
-            if (request.at("label").is_string() || request.at("anchor").is_string())
+            if(request.at("plan").is_string())item=plan_read(r,request);
+            else if (request.at("label").is_string() || request.at("anchor").is_string())
                 item = resolve(r, request.at("label").is_string() ? str(request, "label")
                                                                   : str(request, "anchor"));
             else
@@ -417,11 +439,7 @@ V prepare(Rpc *r, const V &p) {
             auto &doc = get(path);
             auto text = str(doc.before, "text");
             if (edit.at("symbol").is_string()) {
-                auto selected = invoke(r, "select",
-                                       O{{"target", path},
-                                         {"name", edit.at("symbol")},
-                                         {"scope", edit.at("scope")},
-                                         {"kind", edit.at("kind")}});
+                auto selected=select_text(r,path,text,str(edit,"symbol"),edit);
                 from = selected.at("start").as_uint64();
                 to = selected.at("end").as_uint64();
             } else if (edit.at("old").is_string()) {
@@ -554,7 +572,7 @@ V prepare(Rpc *r, const V &p) {
     A entries, diff;
     size_t bytes = 0;
     for (auto &[path, doc] : docs) {
-        if (doc.before.dump() == doc.after.dump())
+        if ((!doc.before.at("exists").as_bool()&&!doc.after.at("exists").as_bool())||doc.before.dump() == doc.after.dump())
             continue;
         entries.push_back(O{{"path", path}, {"before", doc.before}, {"after", doc.after}});
         bytes += str(doc.before, "text").size() + str(doc.after, "text").size();
@@ -679,11 +697,12 @@ int agent_method(Rpc *rpc, const char *method, const J *params, J **out) {
             check(check_fingerprint(rpc->store, paths.get(), &proof));
             auto now = decode(proof);
             json_free(proof);
-            bool fresh = saved.at("checked_revision").as_int() == store_head(rpc->store) &&
+            auto head=store_head(rpc->store);
+            bool fresh = saved.at("fresh").as_bool() && saved.at("checked_revision").as_int() == head &&
                          now.at("complete").as_bool() && saved.at("inputs").at("complete").as_bool() &&
                          str(now, "hash") == str(saved.at("inputs"), "hash");
             saved["fresh"] = fresh;
-            saved["current_revision"] = store_head(rpc->store);
+            saved["current_revision"] = head;
             saved["current_inputs"] = now;
             result = saved;
         } else if (!strcmp(method, "change")) {

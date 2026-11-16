@@ -647,3 +647,7 @@ int64_t pf_unix_ms(void) {
     return (int64_t)((((uint64_t)ft[1] << 32) | ft[0]) / 10000) - 11644473600000ll;
 }
 
+
+extern "C" __declspec(dllimport) int __stdcall CompareStringOrdinal(const WCHAR*,int,const WCHAR*,int,int);
+bool pf_paths_equal(const char *a,const char *b){WCHAR *x=to_wide(a),*y=to_wide(b);bool equal=x&&y&&CompareStringOrdinal(x,-1,y,-1,1)==2;free(x);free(y);return equal;}
+bool pf_path_is_inside(const char *root,const char *path){WCHAR *x=to_wide(root),*y=to_wide(path);bool inside=false;if(x&&y){size_t a=0,b=0;while(x[a])a++;while(a&&x[a-1]=='/')a--;while(y[b])b++;inside=b>a+1&&y[a]=='/'&&CompareStringOrdinal(x,int(a),y,int(a),1)==2;}free(x);free(y);return inside;}

@@ -61,6 +61,17 @@ Workspace::~Workspace() {
     store_close(store);
 }
 Json Workspace::invoke(const std::string &method, const Json &params, std::stop_token stop, bool read_only) {
+    // A long-running project check gets its own native store connection. Source views
+    // and cancellation must not block on the check's process lifetime.
+    if(method=="run_check"){
+        std::unique_ptr<Store,decltype(&store_close)> checking_store(store_open(root().c_str()),store_close);
+        if(!checking_store)return Object{{"error",na_errmsg()}};
+        Rpc checking{};checking.store=checking_store.get();checking.read_only=read_only;checking.session="harness-check";
+        checking.cancelled=+[](void* ctx){return static_cast<std::stop_token*>(ctx)->stop_requested();};checking.cancel_context=&stop;
+        J *request=native(Object{{"jsonrpc","2.0"},{"id",1},{"method",method},{"params",params}});
+        auto response=convert(rpc_dispatch(&checking,request));json_free(request);rpc_release(&checking);
+        if(response.find("error"))return Object{{"error",response.at("error")}};return response.at("result");
+    }
     std::lock_guard lock(mutex);
     rpc.cancelled = +[](void *ctx) { return static_cast<std::stop_token *>(ctx)->stop_requested(); };
     rpc.cancel_context = &stop;
@@ -227,6 +238,7 @@ Json Session::serialize() const {
                   {"title", view.title},
                   {"workspace", workspace->root()},
                   {"messages", view.messages},
+                  {"last_check",view.last_check},
                   {"input_tokens", view.input_tokens},
                   {"output_tokens", view.output_tokens},
                   {"cost", view.cost},
@@ -244,6 +256,7 @@ void Session::restore(const Json &data) {
     current.title = string(data, "title");
     if (data.at("messages").is_array())
         current.messages = data.at("messages");
+    current.last_check=data.at("last_check");if(current.last_check.is_object())current.last_check["fresh"]=false;
     current.input_tokens = data.at("input_tokens").as_uint64();
     current.output_tokens = data.at("output_tokens").as_uint64();
     current.cost = data.at("cost").as_double();
@@ -463,6 +476,14 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                 {
                     std::lock_guard lock(mutex);
                     current.tool_calls++;
+                    if(!string(result,"check_id").empty()){
+                        current.last_check=Object{};for(auto key:{"check_id","exit_code","fresh","checked_revision","current_revision","timed_out","cancelled"})current.last_check[key]=result.at(key);
+                    }
+                    if(current.last_check.is_object()&&!result.at("paths").as_array().empty()){
+                        auto revision=result.at("current_revision").is_number()?result.at("current_revision").as_int():result.at("rev").as_int();
+                        if(revision!=current.last_check.at("checked_revision").as_int())current.last_check["fresh"]=false;
+                    }
+
                     current.status = "Инструмент: " + name;
                     for (auto &path : result.at("paths").as_array()) {
                         std::string p(path.as_string());

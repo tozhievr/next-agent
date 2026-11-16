@@ -44,6 +44,7 @@ typedef struct {
 } Doc;
 
 struct Store {
+    bool state_format;
     J *metadata;
     char *root, *dir, *journal, *lockpath;
     Doc *docs;
@@ -56,14 +57,14 @@ struct Store {
 /* ---------------------------------------------------------------- docs --- */
 static Doc *doc_find(Store *st, const char *path) {
     for (size_t i = 0; i < st->ndocs; i++)
-        if (strcmp(st->docs[i].path, path) == 0)
+        if (path_equal(st->docs[i].path, path))
             return &st->docs[i];
     return NULL;
 }
 
 static size_t doc_index(Store *st, const char *path) {
     for (size_t i = 0; i < st->ndocs; i++)
-        if (strcmp(st->docs[i].path, path) == 0)
+        if (path_equal(st->docs[i].path, path))
             return i;
     if (st->ndocs == st->capdocs) {
         st->capdocs = st->capdocs ? st->capdocs * 2 : 16;
@@ -150,6 +151,10 @@ static int apply_record(Store *st, const J *rec) {
     const J *t = j_get(rec, "t");
     if (!j_is_str(t))
         return na_fail("corrupt journal: record type");
+    if(!strcmp(t->s,"format")){
+        const J *version=j_get(rec,"version");if(!j_is_int(version)||version->i!=2)return na_fail("unsupported journal format version");
+        st->state_format=true;return 0;
+    }
     if (strcmp(t->s, "meta") == 0) {
         const J *key = j_get(rec, "key"), *value = j_get(rec, "value");
         if (!j_is_str(key) || !value)
@@ -364,6 +369,7 @@ static PfLock *begin_write(Store *st) {
         pf_lock_release(l);
         return NULL;
     }
+    if(!st->state_format){J *format=j_obj();j_set(format,"t",j_str("format"));j_set(format,"version",j_int(2));int rc=append_record(st,format);json_free(format);if(rc){pf_lock_release(l);return NULL;}}
     return l;
 }
 

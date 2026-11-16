@@ -57,4 +57,9 @@ int pf_sock_write(PfSock *k, const void *data, size_t n); /* 0 ok */
 int pf_sock_read(PfSock *k, void *buf, size_t cap, int timeout_ms);
 void pf_sock_close(PfSock *k);
 
+#ifdef _WIN32
+bool pf_paths_equal(const char *a,const char *b);
+bool pf_path_is_inside(const char *root,const char *path);
+#endif
+
 #endif

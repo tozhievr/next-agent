@@ -312,6 +312,7 @@ bool language_handles(LanguageEngine *engine, const char *path) { return languag
 int language_outline(LanguageEngine *engine, const char *path, const char *text, size_t len, bool nested,
                      SymbolList *out) {
     *out = {};
+    const size_t ncp=utf8_cp_count(text,len);
     const char *cache_kind = nested ? "outline-nested-v3" : "outline-top-v3";
     if (J *cached = engine->cache_read(path, text, len, cache_kind)) {
         bool valid = cached->k == J_ARR;
@@ -319,7 +320,7 @@ int language_outline(LanguageEngine *engine, const char *path, const char *text,
             const J *entry = cached->items[i], *start = j_get(entry, "start"), *end = j_get(entry, "end"),
                     *sel = j_get(entry, "sel"), *line = j_get(entry, "line"), *col = j_get(entry, "column");
             valid = j_is_int(start) && j_is_int(end) && j_is_int(sel) && j_is_int(line) && j_is_int(col) &&
-                    start->i >= 0 && end->i >= start->i && uint64_t(end->i) <= utf8_cp_count(text, len) &&
+                    start->i >= 0 && end->i >= start->i && uint64_t(end->i) <= ncp &&
                     j_is_str(j_get(entry, "name")) && j_is_str(j_get(entry, "kind")) &&
                     j_is_str(j_get(entry, "scope"));
         }
@@ -454,14 +455,19 @@ DiagnosticOps language_ops(LanguageEngine *engine) {
     return {open_document, change_document, wait_diagnostics, close_document, engine, supports};
 }
 
-int language_nodes(LanguageEngine *engine, const char *path, const char *text, size_t len, J **out) {
-    if (J *cached = engine->cache_read(path, text, len, "ast-nodes-v1")) {
+int language_nodes(LanguageEngine *engine, const char *path, const char *text, size_t len, J **out,const J *filter) {
+    const size_t ncp=utf8_cp_count(text,len);const J *from=j_get(filter,"from"),*to=j_get(filter,"to"),*wanted_kind=j_get(filter,"node_kind"),*wanted_hash=j_get(filter,"fingerprint");
+    size_t first=j_is_int(from)?size_t(from->i):0,last=j_is_int(to)?size_t(to->i):ncp;
+    if(first>last||last>ncp)return na_fail("invalid AST filter range");
+    const size_t byte_first=cp_to_byte(text,len,first),byte_last=cp_to_byte(text,len,last);
+    char *query=filter?json_dump(filter):nullptr;std::string cache_kind="ast-nodes-v2:"+LanguageEngine::hash(query?query:"null");free(query);
+    if (J *cached = engine->cache_read(path, text, len, cache_kind.c_str())) {
         const J *nodes = j_get(cached, "nodes");
         bool valid = nodes && nodes->k == J_ARR;
         for (size_t i = 0; valid && i < nodes->n; i++) {
             const J *n = nodes->items[i], *a = j_get(n, "start"), *b = j_get(n, "end");
             valid = j_is_int(a) && j_is_int(b) && a->i >= 0 && b->i >= a->i &&
-                    uint64_t(b->i) <= utf8_cp_count(text, len) && j_is_str(j_get(n, "node_kind")) &&
+                    uint64_t(b->i) <= ncp && j_is_str(j_get(n, "node_kind")) &&
                     j_is_str(j_get(n, "fingerprint"));
         }
         if (valid) {
@@ -482,12 +488,14 @@ int language_nodes(LanguageEngine *engine, const char *path, const char *text, s
                 truncated = true;
                 return;
             }
+            if(size_t(off)+node->width<=byte_first||off>=byte_last)return;
             if (node->is_token() || node->is_error() || node->is_missing())
                 return;
             int next = parent;
             if (node->is_rule() && !node->is_seq() && node->width) {
                 auto kind = snap->module->symbol_name(lx::uast::kind_symbol(node->kind));
-                if (!kind.empty()) {
+                uint8_t digest[16];char node_hash[33];blake2b16(text+off,node->width,digest);hex_encode(digest,16,node_hash);
+                if (!kind.empty()&&off>=byte_first&&size_t(off)+node->width<=byte_last&&(!j_is_str(wanted_kind)||kind==wanted_kind->s)&&(!j_is_str(wanted_hash)||!strcmp(wanted_hash->s,node_hash))) {
                     J *entry = j_obj();
                     j_set(entry, "index", j_int(nodes->n));
                     j_set(entry, "parent", parent < 0 ? j_null() : j_int(parent));
@@ -516,7 +524,7 @@ int language_nodes(LanguageEngine *engine, const char *path, const char *text, s
     j_set(report, "language", j_str(snap->module->id.c_str()));
     j_set(report, "nodes", nodes);
     j_set(report, "truncated", j_bool(truncated));
-    engine->cache_write(path, text, len, "ast-nodes-v1", report);
+    engine->cache_write(path, text, len, cache_kind.c_str(), report);
     *out = report;
     return 0;
 }

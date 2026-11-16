@@ -103,6 +103,15 @@ int main() try {
     require(denied.find("error")!=nullptr,"read-only label binding bypassed native policy");
     auto denied_plan=workspace->invoke("prepare",Object{{"files",lx::host::JsonArray{Object{{"op","create"},{"path","forbidden.txt"},{"text","bad"}}}}}, {},true);
     require(denied_plan.find("error")!=nullptr,"read-only prepare bypassed native policy");
+    Json background_check;std::exception_ptr background_error;std::atomic<bool> checking=false;
+    std::jthread check_thread([&]{checking=true;try{background_check=workspace->invoke("run_check",Object{{"kind","python"},{"timeout_ms",1200}});}catch(...){background_error=std::current_exception();}});
+    while(!checking)std::this_thread::yield();pf_sleep_ms(60);
+    auto began=std::chrono::steady_clock::now();auto visible=workspace->invoke("view",Object{{"target","outline.py"}});
+    require(std::chrono::steady_clock::now()-began<std::chrono::milliseconds(700),"project check blocked workspace reads/UI");
+    workspace->write("outline.py","def alpha():\n    return 3\n");
+    check_thread.join();if(background_error)std::rethrow_exception(background_error);
+    require(!background_check.at("fresh").as_bool(),"check remained fresh after a concurrent edit");
+
 
     std::cout << "Harness: byte-fragmented SSE, UTF-8, truncated stream, native transactions, persistence, "
                  "read-only and cancellation passed\n";
