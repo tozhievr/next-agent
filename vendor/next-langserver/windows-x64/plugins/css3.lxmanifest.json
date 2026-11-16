@@ -1,0 +1,12 @@
+{
+  "id": "css3",
+  "display_name": "css3Parser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x177c78e12975348b",
+  "extensions": [
+    ".css",
+    ".css3"
+  ],
+  "library": "css3.dll"
+}

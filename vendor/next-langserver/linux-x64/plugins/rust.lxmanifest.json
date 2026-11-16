@@ -1,0 +1,11 @@
+{
+  "id": "rust",
+  "display_name": "RustParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x4de7bd9d42eb95dc",
+  "extensions": [
+    ".rs"
+  ],
+  "library": "librust.so"
+}

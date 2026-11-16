@@ -1,0 +1,1 @@
+import {reduceCart} from '../solution';import assert from 'node:assert/strict';const a={x:2};const b=reduceCart(a,{type:'add',sku:'x',quantity:3});assert.deepEqual(b,{x:5});assert.deepEqual(a,{x:2});assert.deepEqual(reduceCart(b,{type:'setQuantity',sku:'x',quantity:0}),{});assert.deepEqual(reduceCart(b,{type:'remove',sku:'z'}),b);

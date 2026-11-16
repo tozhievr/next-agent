@@ -2,6 +2,33 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## 0.45.1
+
+- Recognize `.cppm`, `.ixx`, `.ccm`, `.cxxm`, `.c++m` and `.mpp` as C++ module sources in native manifests, workspace symbols, refactoring and compilation scanning.
+
+- Add standalone `nextagent skill [--reference] [--json]` with canonical instructions embedded in the binary.
+- Rewrite the skill for native AST anchors, checked transactions, file operations and current verification capabilities; ship the skill in both distributions.
+
+## [0.45.0]
+
+- Durable AST labels and content anchors, including stale/ambiguous-node protection and concurrent binding checks.
+- Budgeted batch reads, anchored symbol reads, immutable prepare/commit plans and one-call checked changes.
+- Journaled create/move/delete/mkdir with undo/redo; safe journal format-2 marker for upgraded binaries.
+- Source/plugin/executable-addressed derived caches, warm-up and explicit module capabilities.
+- Revision/input-bound checks, current proof status and responsive Harness reads during long checks.
+- Full declaration ranges for Python and common declaration-shaped native ASTs; filtered labels on large files.
+- Fixed Windows path aliases and the remaining 64-path CLI flush limit.
+
+## Unreleased
+
+- Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.
+- Linked the own next-langserver host/engine directly into NextAgent; plugins are
+  selected lazily from file extensions and parsed in-process with persistent sessions.
+- Removed LSP Hub, subprocess language-server clients, the interim bridge DLL,
+  and the vendored libc23 runtime. Windows packages contain all 30 language plugins.
+- Added native-module integration tests and versioned diagnostic gate regression tests.
+- Added the Linux dlopen loader, all 30 native ELF plugins, tar.gz distribution and WSL2 verification.
+
 ## 0.44.0 - 2026-11-09
 
 ### Added

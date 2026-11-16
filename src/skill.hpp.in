@@ -1,0 +1,4 @@
+// Generated from the packaged skill; do not edit generated header.
+#pragma once
+inline constexpr char NEXTAGENT_SKILL[] = R"NASKILL(@NEXTAGENT_SKILL_TEXT@)NASKILL";
+inline constexpr char NEXTAGENT_SKILL_REFERENCE[] = R"NASKILL(@NEXTAGENT_REFERENCE_TEXT@)NASKILL";

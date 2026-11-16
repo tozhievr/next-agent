@@ -1,0 +1,11 @@
+{
+  "id": "template",
+  "display_name": "Template",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x3686531a48c4e3e9",
+  "extensions": [
+    ".template"
+  ],
+  "library": "template.dll"
+}

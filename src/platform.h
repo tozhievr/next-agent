@@ -14,6 +14,7 @@ int pf_write_atomic(const char *path, const void *data, size_t n);
 /* Append `data` at byte offset `at` (truncating any torn tail), then flush to disk. */
 int pf_append_at(const char *path, uint64_t at, const void *data, size_t n);
 int pf_remove(const char *path);
+int pf_remove_dir(const char *path); /* empty directories only */
 char *pf_fullpath(const char *path); /* absolute, '/' separated, normalized */
 /* List immediate entries; reparse points are skipped. */
 int pf_list_dir(const char *dir, StrList *files, StrList *dirs);
@@ -37,8 +38,11 @@ void pf_sleep_ms(unsigned ms);
 
 /* Child process with piped stdin/stdout (stderr discarded). */
 typedef struct PfProc PfProc;
+char *pf_executable(void); /* absolute path of the running executable */
 char *pf_which(const char *exe); /* full path or NULL */
 PfProc *pf_spawn(const char *exe, const char *args, const char *cwd);
+PfProc *pf_spawn_capture(const char *exe, const char *args, const char *cwd);
+int pf_proc_exit_code(PfProc *p);
 int pf_proc_write(PfProc *p, const void *data, size_t n);
 /* >0: bytes read; 0: timeout; -1: stream closed / process gone. */
 int pf_proc_read(PfProc *p, void *buf, size_t cap, int timeout_ms);
@@ -52,5 +56,10 @@ int pf_sock_write(PfSock *k, const void *data, size_t n); /* 0 ok */
 /* >0: bytes read; 0: timeout; -1: closed / error. */
 int pf_sock_read(PfSock *k, void *buf, size_t cap, int timeout_ms);
 void pf_sock_close(PfSock *k);
+
+#ifdef _WIN32
+bool pf_paths_equal(const char *a,const char *b);
+bool pf_path_is_inside(const char *root,const char *path);
+#endif
 
 #endif

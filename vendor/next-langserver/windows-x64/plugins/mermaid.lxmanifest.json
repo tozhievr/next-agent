@@ -1,0 +1,12 @@
+{
+  "id": "mermaid",
+  "display_name": "mermaidParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xa42efa8ecdc957ef",
+  "extensions": [
+    ".mmd",
+    ".mermaid"
+  ],
+  "library": "mermaid.dll"
+}

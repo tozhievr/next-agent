@@ -1,6 +1,6 @@
 $ nextagent outline a.c
 exit=0
-{"symbols":[{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""},{"name":"run","kind":"function","start":79,"end":122,"line":4,"column":0,"scope":""}]}
+{"symbols":[{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""},{"name":"run","kind":"function","start":79,"end":122,"line":4,"column":0,"scope":""},{"name":"P","kind":"struct","start":123,"end":149,"line":5,"column":0,"scope":""}]}
 $ nextagent outline a.c --nested
 exit=0
 {"symbols":[{"name":"calc","kind":"function","start":45,"end":78,"line":3,"column":0,"scope":""},{"name":"run","kind":"function","start":79,"end":122,"line":4,"column":0,"scope":""},{"name":"P","kind":"struct","start":123,"end":149,"line":5,"column":0,"scope":""},{"name":"x","kind":"field","start":134,"end":140,"line":5,"column":11,"scope":"P"},{"name":"y","kind":"field","start":141,"end":147,"line":5,"column":18,"scope":"P"}]}

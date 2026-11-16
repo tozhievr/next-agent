@@ -1,0 +1,1 @@
+export function parseQuery(input){const out=Object.create(null);if(input.startsWith('?'))input=input.slice(1);if(!input)return out;const decode=x=>decodeURIComponent(x.replace(/\+/g,' '));for(const part of input.split('&')){if(!part)continue;const i=part.indexOf('=');const k=decode(i<0?part:part.slice(0,i)),v=decode(i<0?'':part.slice(i+1));(out[k]??=[]).push(v);}return out;}

@@ -11,6 +11,7 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+!vendor/next-langserver/linux-x64/plugins/*.so
 downloads/
 eggs/
 .eggs/
@@ -223,3 +224,6 @@ __marimo__/
 build/
 *.obj
 .aed/
+
+# Generated distribution archives
+dist/

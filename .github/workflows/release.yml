@@ -37,9 +37,16 @@ jobs:
         run: |
           src=$(sed -n 's/.*#define NA_VERSION "\([^"]*\)".*/\1/p' src/util.h | tr -d '\r')
           [ "${TAG#v}" = "$src" ] || { echo "tag $TAG does not match NA_VERSION $src"; exit 1; }
+      - name: Install CMake 4.5
+        run: python tools/setup_cmake.py
       - name: Install toolchain (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld llvm ninja-build
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev
+          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          sudo bash /tmp/llvm.sh 23
+          echo "CLANG=clang-23" >> "$GITHUB_ENV"
+          echo "CXX=clang++-23" >> "$GITHUB_ENV"
       - name: Install toolchain (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -49,6 +56,8 @@ jobs:
           "C:\Program Files\LLVM\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
       - name: Build and test
         run: python build.py test --target ${{ matrix.target }}
+      - name: Bundled next-langserver integration
+        run: python tests/bundled_lsp.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
       - name: Parity
         run: python tests/parity.py build/${{ matrix.target }}/nextagent${{ matrix.target == 'windows' && '.exe' || '' }}
       - name: Package
@@ -60,11 +69,20 @@ jobs:
           name=nextagent-$ver-${{ matrix.target }}-x64
           mkdir -p dist/$name
           if [ "${{ matrix.target }}" = windows ]; then
-            cp build/windows/nextagent.exe dist/$name/
+            cp build/windows/nextagent.exe build/windows/nextagent-harness-cli.exe build/windows/nextagent-harness.exe dist/$name/
+            cp -R build/windows/plugins dist/$name/
           else
-            cp build/linux/nextagent dist/$name/ && chmod +x dist/$name/nextagent
+            cp build/linux/nextagent build/linux/nextagent-harness-cli dist/$name/
+            chmod +x dist/$name/nextagent dist/$name/nextagent-harness-cli
+            cp -R build/linux/plugins dist/$name/
           fi
-          cp README.md LICENSE CHANGELOG.md docs/AGENT_GUIDE.md dist/$name/
+          cp README.md LICENSE CHANGELOG.md dist/$name/
+          mkdir -p dist/$name/skill
+          cp -R skill/nextagent dist/$name/skill/
+          printf '%s\n' "$ver" > dist/$name/skill/nextagent/VERSION
+          mkdir -p dist/$name/docs
+          cp docs/AGENT_GUIDE.md docs/HARNESS.md docs/AGENT_WORKFLOWS.md dist/$name/docs/
+          cp -R docs/benchmarks dist/$name/docs/
           cd dist
           if [ "${{ matrix.target }}" = windows ]; then
             python -c "import shutil,sys; shutil.make_archive('$name','zip','.','$name')"

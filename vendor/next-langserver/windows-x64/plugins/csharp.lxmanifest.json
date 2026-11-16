@@ -1,0 +1,12 @@
+{
+  "id": "csharp",
+  "display_name": "CSharpParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x8a7d8460cb7ecee5",
+  "extensions": [
+    ".cs",
+    ".csharp"
+  ],
+  "library": "csharp.dll"
+}

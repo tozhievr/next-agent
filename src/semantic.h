@@ -8,7 +8,7 @@
 
 typedef struct {
     Store *st;
-    LspHub *hub;
+    LanguageEngine *languages;
     WsIndex *ix;
 } Sem;
 

@@ -1,0 +1,11 @@
+{
+  "id": "splitparser",
+  "display_name": "SplitParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0x316e6e86f0726b0d",
+  "extensions": [
+    ".splitparser"
+  ],
+  "library": "libsplitparser.so"
+}

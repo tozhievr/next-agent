@@ -78,7 +78,7 @@ def main():
         print("updated", GOLDEN)
         return 0
     with open(GOLDEN, encoding="utf-8", newline="") as f:
-        want = f.read()
+        want = f.read().replace("\r\n", "\n")
     if out != want:
         sys.stdout.buffer.write(out.encode("utf-8"))
         print("PARITY MISMATCH against tests/parity.golden", file=sys.stderr)

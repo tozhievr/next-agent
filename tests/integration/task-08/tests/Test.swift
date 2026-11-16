@@ -1,0 +1,1 @@
+@main struct Tests { static func main() { let a=encodeRuns("aaabbc");precondition(a.count==3);precondition(a[0].0=="a" && a[0].1==3);precondition(a[1].0=="b" && a[1].1==2);precondition(a[2].0=="c" && a[2].1==1);precondition(encodeRuns("").isEmpty);precondition(encodeRuns("😀😀")[0].1==2) } }

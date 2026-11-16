@@ -1,0 +1,1 @@
+fun main(){check(orderTasks(setOf("a","b","c"),listOf("c" to "a"))==listOf("a","b","c"));check(orderTasks(setOf("a","b"),listOf("a" to "b","b" to "a"))==null);check(orderTasks(setOf("a"),listOf("a" to "z"))==null);check(orderTasks(emptySet(),emptyList())==emptyList<String>())}

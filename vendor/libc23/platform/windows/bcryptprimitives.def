@@ -1,3 +1,0 @@
-LIBRARY bcryptprimitives.dll
-EXPORTS
-ProcessPrng

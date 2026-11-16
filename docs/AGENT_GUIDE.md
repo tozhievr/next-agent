@@ -19,11 +19,11 @@ NextAgent is a transactional editor that sits between you and the files of one w
 
 | Mode | Command | Use when |
 | --- | --- | --- |
-| MCP (stdio) | `nextagent --root DIR mcp [--clangd]` | Your harness supports MCP. Tools are `view outline select replace_symbol edit history sync`. |
-| JSON-RPC (stdio) | `nextagent --root DIR serve [--clangd]` | Long-lived process, one JSON object per line in, one per line out. |
+| MCP (stdio) | `nextagent --root DIR mcp [--diagnostics]` | Your harness supports MCP. Tools are `view outline select replace_symbol edit history sync`. |
+| JSON-RPC (stdio) | `nextagent --root DIR serve [--diagnostics]` | Long-lived process, one JSON object per line in, one per line out. |
 | CLI | `nextagent --root DIR <cmd>` | One-shot calls from a shell tool. State persists between calls via the journal. |
 
-`--clangd[=path]` turns on the diagnostic gate (section 8). The examples below use JSON-RPC; MCP tools take the same `params` as `arguments` and return the JSON result as text, with `isError: true` on failure.
+`--diagnostics` turns on the diagnostic gate (section 8). The examples below use JSON-RPC; MCP tools take the same `params` as `arguments` and return the JSON result as text, with `isError: true` on failure.
 
 ## 4. Methods
 
@@ -113,23 +113,21 @@ Errors arrive as JSON-RPC error `-32602` with a `message` (MCP: `isError:true`, 
 | `edits must be sorted and non-overlapping` | Overlapping ops | Merge them into one op. |
 | `undo_conflict` | Old revision overlaps later work | Undo the later revisions first, or fix forward with a new edit. |
 | `disk_conflict` | File changed outside NextAgent | Read the disk file, decide manually, then re-`edit`/`sync`. |
-| `diagnostics_regression: path: severity N: msg` | clangd gate rejected the edit | Fix the code so it does not add that diagnostic. |
-| `diagnostics_unavailable_or_stale` | clangd produced no fresh report | Retry; check clangd runs and the file compiles standalone. |
+| `diagnostics_regression: path: severity N: msg` | native diagnostic gate rejected the edit | Fix the code so it does not add that diagnostic. |
+| `diagnostics_unavailable_or_stale` | native parser produced no fresh report | Retry; inspect language_modules and the plugin diagnostics. |
 | `stale_validation` | Build files changed during validation | Retry. |
 | `path ...` errors | Unsafe or invalid path | Use a plain relative path inside the root. |
 
 A failed call never partially applies. It is always safe to retry after fixing the cause.
 
-## 8. The clangd diagnostic gate (`--clangd`)
+## 8. Native diagnostic gate (`--diagnostics`)
 
-When enabled, `edit`, `replace_symbol`, `undo` and `redo` are checked **before** committing:
-
-- Changed `.c/.h/.cc/.cpp/.cxx/.hh/.hpp/.hxx` files and the translation units that `#include "..."` them (transitively) are compared before vs after.
-- Any **new** diagnostic with severity ≤ 2 (errors and warnings) rejects the whole batch with `diagnostics_regression`. Pre-existing diagnostics are ignored; removing diagnostics is fine.
-- Include directories come from `compile_commands.json` in the root or `build/`. Without it clangd uses default flags, so project headers outside the file's directory may produce errors — provide a compilation database.
-- Non-C files (e.g. `.md`, `.txt`) bypass the gate.
-
-Limits you must know: it does not re-diagnose unchanged files for *semantic* header changes (a changed function signature will not flag callers); it follows only literal quoted includes. Treat a passing gate as "no new parse/semantic errors in the edited files", not as "the project builds". Always run the real build.
+Language analysis is enabled automatically in CLI, JSON-RPC and MCP modes.
+The file extension selects a native plugin in the in-process LanguageRegistry.
+`serve --diagnostics` / `mcp --diagnostics` additionally reject edits that introduce
+syntax warnings or errors. Reports must match the document version. Rejected
+edits change neither journal nor disk. Semantic/compiler validation is outside
+this gate's current capabilities. `--lsp` remains a compatibility alias.
 
 ## 9. Concurrency and multiple agents
 
@@ -219,8 +217,13 @@ Every command that changes text writes the result to disk immediately (`--no-syn
 
 ## 13. What does not exist
 
-Do not call or promise: branches, a file-watcher thread (outside changes are noticed by size and mtime on the next call), socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C use a language server found on PATH (started on demand by one-shot CLI calls, kept warm by `serve --lsp`; `NEXTAGENT_NO_LSP=1` disables it; see `lsp_servers`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
+Do not call or promise: branches, a file-watcher thread (outside changes are noticed by size and mtime on the next call), socket transport, automatic formatting, model-based semantic search (`locate` fuses BM25 with embeddings learned from the workspace itself, so it knows this code base's vocabulary but not general synonyms unless `.aed/embed.json` points to a real embedding model (`locate --embed N` feeds it); `search` is literal text, `find` matches names). `outline`/`select`/`references`/`rename`/`add_param` for languages other than C use the native next-langserver engine on Windows and Linux (plugins are selected and loaded inside the process by file extension; `NEXTAGENT_NO_LSP=1` disables it; see `language_modules`). Plain `view`/`edit`/`replace`/`patch`/`history`/`sync` work on any UTF-8 text file; invalid UTF-8 files are rejected.
 
 ## 14. Suggested system-prompt snippet
 
 > You edit code through NextAgent. Address text by Unicode codepoint offsets `[start,end)` or by C symbol name. Always call `open` first, pass `if_rev` from the last reply on every write, prefer `select`/`outline` over reading whole files and `replace_symbol` for rewriting a whole function. Batch multi-file changes in one `edit`. The view includes unsynced revisions; call `sync` before running builds or tests. On `stale_rev` re-read and retry; on `diagnostics_regression` fix the code; revert with `history undo`. Never use byte offsets or line numbers.
+
+
+Both native runtimes include 30 next-langserver plugins under `plugins`.
+It supplies syntax diagnostics and document symbols; semantic references and rename
+are currently unsupported. `NEXTAGENT_PLUGIN_DIR` selects another plugin directory.

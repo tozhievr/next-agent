@@ -1,14 +1,14 @@
-/* Workspace index: symbols (from the language servers, or the C scanner as a fallback) and an
+/* Workspace index: symbols from the native language engine and an
  * identifier inverted index for every source file below the root. Files are re-extracted only when
  * their content changed, so refreshing a large workspace after a small edit is cheap. */
 #ifndef NA_INDEX_H
 #define NA_INDEX_H
-#include "lsp.h"
+#include "language.hpp"
 #include "store.h"
 
 typedef struct WsIndex WsIndex;
 
-WsIndex *wsi_new(Store *st, LspHub *hub); /* hub may be NULL: C-family files use the scanner */
+WsIndex *wsi_new(Store *st, LanguageEngine *languages); /* languages may be NULL: C-family files use native snapshot analysis */
 void wsi_free(WsIndex *ix);
 /* Walks the workspace (plus unflushed store documents) and re-extracts the files that changed. */
 int wsi_refresh(WsIndex *ix);

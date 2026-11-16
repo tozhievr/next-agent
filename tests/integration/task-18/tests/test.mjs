@@ -1,0 +1,1 @@
+import {parseQuery} from '../solution.mjs';import assert from 'node:assert/strict';assert.deepEqual({...parseQuery('?a=1&a=2&b=&hello+world=x%20y')},{a:['1','2'],b:[''],'hello world':['x y']});assert.deepEqual({...parseQuery('')},{});assert.throws(()=>parseQuery('x=%ZZ'));assert.deepEqual({...parseQuery('flag')},{flag:['']});

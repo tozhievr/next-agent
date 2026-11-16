@@ -1,0 +1,212 @@
+[
+  {
+    "id": "task-01",
+    "language": "C++",
+    "title": "Checked integer arithmetic",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-02",
+    "language": "C++",
+    "title": "UTF-8 code point counter",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-03",
+    "language": "C++",
+    "title": "LRU cache",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-04",
+    "language": "C++",
+    "title": "Thread-safe bounded queue",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-05",
+    "language": "Kotlin",
+    "title": "Balanced delimiters",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-06",
+    "language": "Kotlin",
+    "title": "Stable event aggregation",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-07",
+    "language": "Kotlin",
+    "title": "Dependency topological sort",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-08",
+    "language": "Swift",
+    "title": "Run-length encoding",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-09",
+    "language": "Swift",
+    "title": "Interval union",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-10",
+    "language": "Swift",
+    "title": "JSON Pointer resolver",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-11",
+    "language": "Haskell",
+    "title": "Safe list rotation",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-12",
+    "language": "Haskell",
+    "title": "Expression AST evaluator",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-13",
+    "language": "Haskell",
+    "title": "Dijkstra shortest paths",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-14",
+    "language": "TypeScript",
+    "title": "Typed result combinators",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-15",
+    "language": "TypeScript",
+    "title": "Deep immutable merge",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-16",
+    "language": "TypeScript",
+    "title": "Promise pool",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-17",
+    "language": "TypeScript",
+    "title": "Discriminated event reducer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-18",
+    "language": "JavaScript",
+    "title": "Query-string parser",
+    "difficulty": "Easy",
+    "run": "node tests/test.mjs"
+  },
+  {
+    "id": "task-19",
+    "language": "JavaScript",
+    "title": "Event emitter",
+    "difficulty": "Medium",
+    "run": "node tests/test.mjs"
+  },
+  {
+    "id": "task-20",
+    "language": "JavaScript",
+    "title": "Retry with exponential backoff",
+    "difficulty": "Hard",
+    "run": "node tests/test.mjs"
+  },
+  {
+    "id": "task-21",
+    "language": "GLSL",
+    "title": "Grayscale fragment shader",
+    "difficulty": "Easy",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-22",
+    "language": "GLSL",
+    "title": "Normal transformation vertex shader",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-23",
+    "language": "GLSL",
+    "title": "Cook-Torrance BRDF function",
+    "difficulty": "Hard",
+    "run": "bash tests/run.sh"
+  },
+  {
+    "id": "task-24",
+    "language": "HTML",
+    "title": "Accessible signup form",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-25",
+    "language": "HTML",
+    "title": "Accessible data table",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-26",
+    "language": "HTML",
+    "title": "Accessible modal dialog markup",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-27",
+    "language": "CSS",
+    "title": "Responsive card grid",
+    "difficulty": "Easy",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-28",
+    "language": "CSS",
+    "title": "Accessible focus and reduced motion",
+    "difficulty": "Medium",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-29",
+    "language": "CSS",
+    "title": "Container-query component",
+    "difficulty": "Hard",
+    "run": "python3 tests/check.py"
+  },
+  {
+    "id": "task-30",
+    "language": "C++",
+    "title": "Arithmetic expression lexer",
+    "difficulty": "Medium",
+    "run": "bash tests/run.sh"
+  }
+]

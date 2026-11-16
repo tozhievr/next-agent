@@ -5,7 +5,7 @@
  * comments, string/char literals and #include targets are skipped. There is no
  * name resolution, so a local variable that shares a spelling with a function
  * is treated as the same symbol. Callers should review the reported
- * references (or rely on the clangd gate) for ambiguous names. */
+ * references and a compiler check for ambiguous names. */
 #ifndef NA_REFACTOR_H
 #define NA_REFACTOR_H
 #include "json.h"

@@ -1,0 +1,1 @@
+fun main(){val r=aggregate(listOf(Event("b",2),Event("a",3),Event("b",-5),Event("a",4)));check(r==listOf(UserTotal("b",-3),UserTotal("a",7)));check(aggregate(emptyList()).isEmpty());check(aggregate(listOf(Event("x",0)))==listOf(UserTotal("x",0)))}

@@ -1,0 +1,13 @@
+{
+  "id": "html5",
+  "display_name": "HTMLParser",
+  "abi_version": 1,
+  "lang_version": 1,
+  "grammar_hash": "0xf0e8aab13946e550",
+  "extensions": [
+    ".html",
+    ".htm",
+    ".html5"
+  ],
+  "library": "html5.dll"
+}
