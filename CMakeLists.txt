@@ -138,3 +138,6 @@ add_test(NAME agent_features COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURC
 set_tests_properties(agent_features PROPERTIES TIMEOUT 120)
 
 add_test(NAME skill_cli COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/skill_cli.py $<TARGET_FILE:nextagent>)
+
+add_test(NAME cpp_modules COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_modules.py $<TARGET_FILE:nextagent>)
+set_tests_properties(cpp_modules PROPERTIES TIMEOUT 120)

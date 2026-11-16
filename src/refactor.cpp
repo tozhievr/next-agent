@@ -215,7 +215,7 @@ static int be_to_cs(BEdits *l, const char *text, size_t len, ChangeSet *cs) {
 
 /* ------------------------------------------------------ workspace files */
 static bool is_cfile(const char *p) {
-    static const char *const ext[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"};
+    static const char *const ext[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx", ".cppm", ".ixx", ".ccm", ".cxxm", ".c++m", ".mpp"};
     for (size_t i = 0; i < sizeof ext / sizeof ext[0]; i++)
         if (path_has_suffix_ci(p, ext[i])) return true;
     return false;

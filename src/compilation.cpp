@@ -241,7 +241,9 @@ out:
 /* ------------------------------------------------------ dependency scan */
 static bool is_source_suffix(const char *p) {
     return path_has_suffix_ci(p, ".c") || path_has_suffix_ci(p, ".cc") || path_has_suffix_ci(p, ".cpp") ||
-           path_has_suffix_ci(p, ".cxx");
+           path_has_suffix_ci(p, ".cxx") || path_has_suffix_ci(p, ".cppm") ||
+           path_has_suffix_ci(p, ".ixx") || path_has_suffix_ci(p, ".ccm") ||
+           path_has_suffix_ci(p, ".cxxm") || path_has_suffix_ci(p, ".c++m") || path_has_suffix_ci(p, ".mpp");
 }
 
 static bool is_header_suffix(const char *p) {

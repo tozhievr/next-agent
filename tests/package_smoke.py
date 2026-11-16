@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="nextagent package ") as tmp:
         assert embedded["content"] == (exe.parent / "skill/nextagent" / filename).read_text(encoding="utf-8")
         assert embedded["version"] == (exe.parent / "skill/nextagent/VERSION").read_text().strip()
 
+    subprocess.run([sys.executable, str(ROOT / "tests/cpp_modules.py"), str(exe)], check=True)
     plugins = exe.parent / "plugins"
     assert len(list(plugins.glob("*.lxmanifest.json"))) == 30
     assert len(list(plugins.glob("*" + extension))) == 30

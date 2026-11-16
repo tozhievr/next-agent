@@ -164,7 +164,7 @@ void rpc_release(Rpc *r) {
 }
 
 static bool is_c_family(const char *p) {
-    static const char *const exts[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"};
+    static const char *const exts[] = {".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx", ".cppm", ".ixx", ".ccm", ".cxxm", ".c++m", ".mpp"};
     for (size_t i = 0; i < sizeof exts / sizeof *exts; i++)
         if (path_has_suffix_ci(p, exts[i])) return true;
     return false;

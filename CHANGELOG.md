@@ -4,6 +4,8 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 
 ## 0.45.1
 
+- Recognize `.cppm`, `.ixx`, `.ccm`, `.cxxm`, `.c++m` and `.mpp` as C++ module sources in native manifests, workspace symbols, refactoring and compilation scanning.
+
 - Add standalone `nextagent skill [--reference] [--json]` with canonical instructions embedded in the binary.
 - Rewrite the skill for native AST anchors, checked transactions, file operations and current verification capabilities; ship the skill in both distributions.
 

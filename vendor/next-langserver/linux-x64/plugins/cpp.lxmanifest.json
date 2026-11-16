@@ -10,7 +10,13 @@
     ".cxx",
     ".hpp",
     ".hxx",
-    ".hh"
+    ".hh",
+    ".cppm",
+    ".ixx",
+    ".ccm",
+    ".cxxm",
+    ".c++m",
+    ".mpp"
   ],
   "library": "libcpp.so",
   "token_literals": {
