@@ -7,14 +7,14 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Choose a concrete OpenRouter model from a searchable catalog. `openrouter/auto` stays available, and an id that is not listed can be entered directly.
 - Show the workspace as an expandable file tree instead of a drill-down list.
 - Show session context as window usage and the files touched in the turn. The cached share of input tokens is a progress bar.
-- Publish Windows, Linux and macOS portable and setup packages from the `harness-v*` release workflow. The workflow downloads the Electron runtime before packaging and generates macOS plugins from the pinned grammar sources.
+- Publish Windows and Linux portable and setup packages from the `harness-v*` release workflow. The workflow downloads the Electron runtime before packaging.
 
 ## 0.46.0
 
 - Harness keeps going after a failed tool call and returns the error to the model, so a bad call can be corrected in the same turn.
 - Syntax diagnostics no longer ride along with transaction checks. `--lsp` does not reject writes; only `--diagnostics` does. Advisory gate mode never blocks a commit.
 - Symbol search ranks an exact name ahead of a substring. A unique exact name resolves even when a kind or scope hint misses, instead of `symbol_not_found` whose hint repeats that name.
-- Add a macOS platform layer and build native language plugins for that host in CI.
+- Add a macOS platform layer. Release packages are Windows and Linux.
 
 - Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.
 - Linked the own next-langserver host/engine directly into NextAgent; plugins are

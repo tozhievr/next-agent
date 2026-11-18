@@ -13,19 +13,11 @@ jobs:
         include:
           - os: windows-latest
           - os: ubuntu-latest
-          - os: macos-latest
     runs-on: ${{ matrix.os }}
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - uses: actions/checkout@v4
-      - name: Grammar sources for macOS plugins
-        if: runner.os == 'macOS'
-        uses: actions/checkout@v4
-        with:
-          repository: tozhievr/next-langserver
-          ref: af82c507fa0f8774ec7058a3c57360db27396c82
-          path: next-langserver
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
@@ -57,21 +49,6 @@ jobs:
           sudo bash /tmp/llvm.sh 23
           echo "CLANG=clang-23" >> "$GITHUB_ENV"
           echo "CXX=clang++-23" >> "$GITHUB_ENV"
-      - name: macOS toolchain
-        if: runner.os == 'macOS'
-        run: |
-          brew install ninja
-          if brew info llvm@23 >/dev/null 2>&1; then brew install llvm@23; prefix="$(brew --prefix llvm@23)"; else brew install llvm; prefix="$(brew --prefix llvm)"; fi
-          echo "$prefix/bin" >> "$GITHUB_PATH"
-          echo "CLANG=$prefix/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=$prefix/bin/clang++" >> "$GITHUB_ENV"
-          "$prefix/bin/clang++" --version
-      - name: macOS language plugins
-        if: runner.os == 'macOS'
-        run: |
-          export SDKROOT="$(xcrun --show-sdk-path)"
-          python tools/generate_grammars.py --source next-langserver
-          python tools/build_plugins.py --source next-langserver --cc "$CLANG"
       - name: Dependencies
         working-directory: harness-electron
         run: bun install --frozen-lockfile
@@ -103,10 +80,6 @@ jobs:
             harness-electron/release/linux/*.sha256
             harness-electron/release/linux/setup/*.AppImage
             harness-electron/release/linux/setup/*.sha256
-            harness-electron/release/macos/*.dmg
-            harness-electron/release/macos/*.sha256
-            harness-electron/release/macos/setup/*.dmg
-            harness-electron/release/macos/setup/*.sha256
 
   publish:
     if: startsWith(github.ref, 'refs/tags/harness-v')
@@ -125,9 +98,9 @@ jobs:
         run: |
           tag="${GITHUB_REF_NAME}"
           ver=${tag#harness-v}
-          mapfile -d '' files < <(find dist -type f \( -name '*.exe' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.sha256' \) -print0)
+          mapfile -d '' files < <(find dist -type f \( -name '*.exe' -o -name '*.AppImage' -o -name '*.sha256' \) -print0)
           [ "${#files[@]}" -gt 0 ] || { echo "no harness artifacts"; exit 1; }
-          printf 'NextAgent Harness %s\n\nWindows, Linux and macOS portable builds and installers.\n' "$ver" > notes.md
+          printf 'NextAgent Harness %s\n\nWindows and Linux portable builds and installers.\n' "$ver" > notes.md
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
           else
