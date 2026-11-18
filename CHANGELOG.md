@@ -7,7 +7,7 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Choose a concrete OpenRouter model from a searchable catalog. `openrouter/auto` stays available, and an id that is not listed can be entered directly.
 - Show the workspace as an expandable file tree instead of a drill-down list.
 - Show session context as window usage and the files touched in the turn. The cached share of input tokens is a progress bar.
-- Publish Windows, Linux and macOS portable and setup packages from the `harness-v*` release workflow.
+- Publish Windows, Linux and macOS portable and setup packages from the `harness-v*` release workflow. The workflow downloads the Electron runtime before packaging and generates macOS plugins from the pinned grammar sources.
 
 ## 0.46.0
 

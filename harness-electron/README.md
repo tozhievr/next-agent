@@ -33,7 +33,7 @@ Each artifact has a SHA-256 sidecar. Setup is a custom Electron wizard with vect
 
 Portable launches keep application data beside the executable/AppImage in `NextAgent Harness Data`. Installed launches use the normal per-user application-data location. Move the entire portable data folder with the executable to retain sessions; keep credentials private. On Linux, FUSE support is needed for ordinary AppImage mounting; `APPIMAGE_EXTRACT_AND_RUN=1` is available on systems that cannot mount it.
 
-A separate [Harness release workflow](../.github/workflows/harness-release.yml) builds Windows, Linux and macOS independently of core CLI releases. A `harness-v*` tag that matches `package.json` publishes the portable and setup files on that GitHub release. The native core CLI remains independently distributed; no Win32 GUI is included in it. macOS language plugins are compiled in that job from the pinned `tozhievr/next-langserver` grammar snapshot.
+A separate [Harness release workflow](../.github/workflows/harness-release.yml) builds Windows, Linux and macOS independently of core CLI releases. A `harness-v*` tag that matches `package.json` publishes the portable and setup files on that GitHub release. The native core CLI remains independently distributed; no Win32 GUI is included in it. macOS language plugins are generated with lxgen from the pinned `tozhievr/next-langserver` grammars and compiled in that job. Packaging uses the Electron binary from `node_modules/electron/dist` and does not publish on its own.
 
 ## Instructions and provider caching
 

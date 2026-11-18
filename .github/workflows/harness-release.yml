@@ -68,10 +68,16 @@ jobs:
           "$prefix/bin/clang++" --version
       - name: macOS language plugins
         if: runner.os == 'macOS'
-        run: python tools/build_plugins.py --source next-langserver --cc "$CLANG"
+        run: |
+          export SDKROOT="$(xcrun --show-sdk-path)"
+          python tools/generate_grammars.py --source next-langserver
+          python tools/build_plugins.py --source next-langserver --cc "$CLANG"
       - name: Dependencies
         working-directory: harness-electron
         run: bun install --frozen-lockfile
+      - name: Electron runtime
+        working-directory: harness-electron
+        run: node node_modules/electron/install.js
       - name: Configure native core
         run: python build.py test
       - name: Static checks
