@@ -21,19 +21,18 @@ The static renderer is served by Electron over a local protocol; no Next.js serv
 bun run dist
 ```
 
-Build on the target host. Output is isolated under `release/windows/`, `release/linux/` or `release/macos/`:
+Build on the target host. Output is isolated under `release/windows/` or `release/linux/`:
 
 | Platform | Portable | Animated installer |
 |---|---|---|
 | Windows x64 | `NextAgent-Harness-0.47.0-windows-x64-Portable.exe` | `setup/NextAgent-Harness-0.47.0-windows-x64-Setup.exe` |
 | Linux x64 | `NextAgent-Harness-0.47.0-linux-x86_64-Portable.AppImage` | `setup/NextAgent-Harness-0.47.0-linux-x86_64-Setup.AppImage` |
-| macOS | `NextAgent-Harness-0.47.0-mac-<arch>-Portable.dmg` | `setup/NextAgent-Harness-0.47.0-mac-<arch>-Setup.dmg` |
 
 Each artifact has a SHA-256 sidecar. Setup is a custom Electron wizard with vector animation, folder selection, actual copy progress and per-file integrity checks. It stages the payload before replacing an existing marked installation; unmarked directories are protected. Raw `original-fs` APIs copy ASAR archives as binary files instead of traversing Electron's virtual archive view. Installation failures remove only staging data. Windows setup adds user shortcuts and an Apps uninstall entry; Linux adds a user application-menu entry. The app's `--uninstall` flow validates the installation marker and preserves projects and external session data.
 
 Portable launches keep application data beside the executable/AppImage in `NextAgent Harness Data`. Installed launches use the normal per-user application-data location. Move the entire portable data folder with the executable to retain sessions; keep credentials private. On Linux, FUSE support is needed for ordinary AppImage mounting; `APPIMAGE_EXTRACT_AND_RUN=1` is available on systems that cannot mount it.
 
-A separate [Harness release workflow](../.github/workflows/harness-release.yml) builds Windows, Linux and macOS independently of core CLI releases. A `harness-v*` tag that matches `package.json` publishes the portable and setup files on that GitHub release. The native core CLI remains independently distributed; no Win32 GUI is included in it. macOS language plugins are compiled in that job from the pinned `tozhievr/next-langserver` grammar snapshot.
+A separate [Harness release workflow](../.github/workflows/harness-release.yml) builds Windows and Linux independently of core CLI releases. A `harness-v*` tag that matches `package.json` publishes the portable and setup files on that GitHub release. The native core CLI remains independently distributed; no Win32 GUI is included in it. Packaging uses the Electron binary from `node_modules/electron/dist` and does not publish on its own.
 
 ## Instructions and provider caching
 

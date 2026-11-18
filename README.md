@@ -90,7 +90,7 @@ Choose either example in a fresh workspace: creating an existing destination is 
 
 ## Harness with OpenRouter
 
-The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The old Win32/Arcade frontend has been removed. Harness is distributed separately as Setup and Portable for Windows, Linux and macOS. A `harness-v*` tag publishes those packages.
+The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The old Win32/Arcade frontend has been removed. Harness is distributed separately as Setup and Portable for Windows and Linux. A `harness-v*` tag publishes those packages.
 
 
 The Harness links **next-agent + next-langserver** in one process. The desktop uses Electron, Next.js, Tailwind CSS and standard shadcn/ui themes. The model reads and changes the workspace through next-agent tools; no generic shell tool is exposed to it.

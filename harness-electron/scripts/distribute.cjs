@@ -8,7 +8,7 @@ async function configuredBuild(options) {
   await fs.mkdir(directory, { recursive: true });
   const file = path.join(directory, crypto.randomUUID() + ".json");
   await fs.writeFile(file, JSON.stringify(options.config));
-  return build({ ...options, config: file });
+  return build({ ...options, config: file, publish: "never" });
 }
 async function manifest(root, prefix = "") {
   const entries = [];

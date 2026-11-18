@@ -93,6 +93,8 @@ class Session {
 
  private:
   uint32_t utf16_pos_to_byte(const lx::Rope& rope, Utf16Position pos) const noexcept;
+  std::shared_ptr<const Snapshot> load_published() const noexcept;
+  void store_published(std::shared_ptr<const Snapshot> snap) noexcept;
 
   std::string uri_;
   LanguageRegistry& registry_;
@@ -110,7 +112,14 @@ class Session {
   std::atomic<int64_t> lsp_version_{0};
   std::vector<std::shared_ptr<const Layer>> layers_;
 
+  // libc++ does not implement std::atomic<std::shared_ptr<T>> yet. Other standard
+  // libraries publish the snapshot with that specialization.
+#if defined(__cpp_lib_atomic_shared_ptr)
   std::atomic<std::shared_ptr<const Snapshot>> published_;
+#else
+  mutable std::mutex published_mu_;
+  std::shared_ptr<const Snapshot> published_;
+#endif
   mutable std::mutex history_mu_;
   std::deque<std::shared_ptr<const Snapshot>> history_;
   std::vector<std::shared_ptr<const Layer>> published_layers_;
