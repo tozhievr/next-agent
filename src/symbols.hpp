@@ -19,8 +19,12 @@ typedef struct {
 } SymbolList;
 
 void symbols_free(SymbolList *l);
-/* Unique match by name (and optional kind/scope) in an outline. Errors: symbol_not_found / ambiguous_symbol.
- */
+/* 0 exact, 1 case-insensitive exact, 2 prefix, 3 substring, -1 none.
+ * An empty query matches every name at rank 3. */
+int symbol_name_rank(const char *name, const char *query);
+/* Unique match by name (and optional kind/scope) in an outline. A kind/scope hint that
+ * excludes the only symbol of that exact name still resolves it. Several symbols of the
+ * same name stay ambiguous. Errors: symbol_not_found / ambiguous_symbol. */
 int symbols_select(const SymbolList *all, const char *name, const char *kind, const char *scope, Symbol *out);
 J *symbol_to_json(const Symbol *s);
 

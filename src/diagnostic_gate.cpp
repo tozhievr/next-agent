@@ -12,6 +12,7 @@ struct DiagnosticGate {
     DiagnosticOps ops;
     Store *store;
     int max_severity;
+    bool enforce; /* false: syntax diagnostics never reject the commit */
     StrList changed; /* paths read by the last validate() */
     uint8_t state[16];
     bool has_state;
@@ -34,8 +35,14 @@ DiagnosticGate *gate_new(const char *root, DiagnosticOps ops, Store *store, int 
     g->ops = ops;
     g->store = store;
     g->max_severity = maximum_severity;
+    g->enforce = true;
     sl_init(&g->changed);
     return g;
+}
+
+void gate_set_enforce(DiagnosticGate *g, bool enforce) {
+    if (g)
+        g->enforce = enforce;
 }
 
 void gate_free(DiagnosticGate *g) {
@@ -232,6 +239,11 @@ static void close_all(DiagnosticGate *g, Target *t, size_t n) {
 
 static int validate_cb(void *ctx, const ValidateDoc *docs, size_t n) {
     DiagnosticGate *g = static_cast<DiagnosticGate *>(ctx);
+    /* Stale revisions, overlaps and path checks live in the store. A false or
+     * unwanted syntax diagnostic must not join those constraints unless the
+     * caller opted into enforcement. */
+    if (!g->enforce)
+        return 0;
     Target *t = NULL;
     size_t nt = 0;
     J **before = NULL;

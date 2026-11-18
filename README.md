@@ -6,7 +6,7 @@
 
 Use the **CLI**, **MCP**, **JSON-RPC**, or the **desktop/CLI Harness with OpenRouter**. Harness workspace operations go through the native next-agent API. File extensions automatically select the appropriate language module.
 
-**Development version: 0.45.1.** Windows x64 and Linux x64 distributions include 30 native modules. Application and test sources use C++26; language analysis needs no external server process.
+**Development version: 0.46.0.** Windows x64 and Linux x64 distributions include 30 native modules. Application and test sources use C++26; language analysis needs no external server process.
 
 [Install](#install) · [Quick start](#quick-start) · [Harness](#harness-with-openrouter) · [Labels](#ast-labels-and-transactions) · [Languages](#native-language-modules) · [Build](#build-and-test)
 
@@ -90,7 +90,7 @@ Choose either example in a fresh workspace: creating an existing destination is 
 
 ## Harness with OpenRouter
 
-The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The old Win32/Arcade frontend has been removed. Harness is distributed separately as Setup and Portable for Windows/Linux.
+The Electron desktop lives in [`harness-electron/`](harness-electron/README.md): Next.js, Tailwind CSS and standard shadcn/ui themes, with an in-process Node-API bridge to the same native core. Run `bun run native:build`, `bun run build`, then `bun run desktop` from that directory. The old Win32/Arcade frontend has been removed. Harness is distributed separately as Setup and Portable for Windows, Linux and macOS. A `harness-v*` tag publishes those packages.
 
 
 The Harness links **next-agent + next-langserver** in one process. The desktop uses Electron, Next.js, Tailwind CSS and standard shadcn/ui themes. The model reads and changes the workspace through next-agent tools; no generic shell tool is exposed to it.
@@ -207,7 +207,7 @@ Windows, with the toolchain on `PATH`:
 ```powershell
 python build.py test --target windows
 python package.py
-python tests/package_smoke.py dist/nextagent-0.45.1-windows-x64.zip
+python tests/package_smoke.py dist/nextagent-0.46.0-windows-x64.zip
 ```
 
 Linux or a WSL2 Linux shell:
@@ -215,7 +215,7 @@ Linux or a WSL2 Linux shell:
 ```sh
 CLANG=clang-23 CXX=clang++-23 python3 build.py test --target linux
 python3 package.py
-python3 tests/package_smoke.py dist/nextagent-0.45.1-linux-x64.tar.gz
+python3 tests/package_smoke.py dist/nextagent-0.46.0-linux-x64.tar.gz
 ```
 
 On Ubuntu, install `libcurl4-openssl-dev` before configuring. `python tools/setup_cmake.py` downloads pinned CMake into `build/toolchain`; add its printed `bin` directory to `PATH`.

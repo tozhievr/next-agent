@@ -5,7 +5,6 @@ import {
   ArrowUp,
   ArrowUpRight,
   CheckCheck,
-  ChevronDown,
   ChevronRight,
   Code2,
   Command,
@@ -14,7 +13,6 @@ import {
   FolderOpen,
   GitBranch,
   History,
-  Layers,
   Loader2,
   MessageSquare,
   Minus,
@@ -33,6 +31,8 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Brand } from "@/components/brand";
+import { FileTree } from "@/components/file-tree";
+import { ModelPicker } from "@/components/model-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -46,7 +46,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type {
   Capabilities,
-  Entry,
+  CatalogModel,
+  Message,
   Opened,
   Session,
   SessionSummary,
@@ -86,6 +87,49 @@ function Metric({ label, value }: { label: string; value: React.ReactNode }) {
     </div>
   );
 }
+function Bar({
+  label,
+  value,
+  max,
+  detail,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  detail: string;
+}) {
+  const share = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  return (
+    <div className="py-1.5">
+      <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono tabular-nums">{detail}</span>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-foreground"
+          style={{ width: `${share}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+function contextPaths(messages: Message[]) {
+  const found = new Set<string>();
+  const pattern = /"(?:target|path)"\s*:\s*"((?:\\.|[^"\\])+)"/g;
+  for (const message of messages) {
+    const blobs = [
+      typeof message.content === "string" ? message.content : "",
+      ...(message.tool_calls || []).map((call) => call.function?.arguments || ""),
+    ];
+    for (const blob of blobs)
+      for (const match of blob.matchAll(pattern)) {
+        const path = match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        if (path) found.add(path);
+      }
+  }
+  return [...found];
+}
 function Card({
   title,
   children,
@@ -122,8 +166,9 @@ export default function Home() {
     [apiKey, setApiKey] = useState("");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [entries, setEntries] = useState<Entry[]>([]),
-    [treePath, setTreePath] = useState(""),
+    [catalog, setCatalog] = useState<CatalogModel[]>([]),
+    [catalogError, setCatalogError] = useState(""),
+    [catalogLoading, setCatalogLoading] = useState(false),
     [filter, setFilter] = useState(""),
     [file, setFile] = useState<{ path: string; text: string } | null>(null),
     [history, setHistory] = useState<unknown>(null),
@@ -142,12 +187,22 @@ export default function Home() {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
-  async function loadTree(path = "") {
-    const result = await window.harness?.tree(path);
-    if (result) {
-      setEntries(result);
-      setTreePath(path);
+  async function ensureModels() {
+    if (catalog.length || catalogLoading || !window.harness) return;
+    setCatalogLoading(true);
+    try {
+      setCatalog(await window.harness.models());
+      setCatalogError("");
+    } catch (e) {
+      setCatalogError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCatalogLoading(false);
     }
+  }
+  async function selectModel(id: string) {
+    setModel(id);
+    const next = await attempt(() => window.harness!.settings({ model: id }));
+    if (next) setSettings(next);
   }
   function opened(result: Opened) {
     generation.current++;
@@ -155,8 +210,6 @@ export default function Home() {
     setSession(result.session);
     setCaps(result.capabilities);
     setFile(null);
-    setEntries([]);
-    void loadTree();
   }
   useEffect(() => {
     if (!window.harness) return;
@@ -172,7 +225,9 @@ export default function Home() {
         setSettings(data.settings);
         setModel(data.settings.model);
         setCaps(data.capabilities);
-        if (data.root) void loadTree();
+        void window.harness!.models().then(setCatalog).catch((error: Error) => {
+          if (active) setCatalogError(error.message);
+        });
       })
       .catch((e) => setError(e.message));
     return () => {
@@ -203,13 +258,8 @@ export default function Home() {
         .harness!.sessions()
         .then(setSessions)
         .catch(() => {});
-      if (root)
-        void window
-          .harness!.tree(treePath)
-          .then(setEntries)
-          .catch(() => {});
     }
-  }, [running, connected, root, treePath, session.tool_calls, session.id]);
+  }, [running, connected, session.id]);
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "smooth" });
   }, [session.answer, session.messages.length]);
@@ -321,6 +371,7 @@ export default function Home() {
               </span>
             </Button>
           </div>
+          <div className="flex max-h-[38%] min-h-28 flex-col">
           <div className="px-4 pb-2 pt-3 text-[10px] font-medium tracking-widest text-muted-foreground">
             СЕССИИ
           </div>
@@ -334,7 +385,7 @@ export default function Home() {
               placeholder="Найти сессию…"
             />
           </div>
-          <div className="min-h-28 flex-1 overflow-y-auto px-2">
+          <div className="min-h-0 flex-1 overflow-y-auto px-2">
             {visibleSessions.length ? (
               visibleSessions.map((s) => (
                 <button
@@ -361,68 +412,48 @@ export default function Home() {
               </p>
             )}
           </div>
-          <div className="border-t p-3">
-            <div className="mb-3 flex items-center justify-between px-1">
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col border-t">
+            <div className="flex items-center justify-between px-3 pb-1 pt-3">
               <span className="text-[10px] font-medium tracking-widest text-muted-foreground">
-                WORKSPACE
+                ФАЙЛЫ
               </span>
-              <Folder className="size-3.5 text-muted-foreground" />
+              <button
+                disabled={!connected || running || busy}
+                onClick={choose}
+                className="text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                {root ? "Сменить" : "Открыть"}
+              </button>
             </div>
-            <Button
-              variant="outline"
-              className="w-full justify-start"
-              disabled={!connected || running || busy}
-              onClick={choose}
-            >
-              <FolderOpen />
-              {root ? "Сменить папку" : "Открыть папку"}
-            </Button>
-            {root && (
+            {root ? (
               <>
                 <p
-                  className="mt-3 truncate px-1 font-mono text-[10px] text-muted-foreground"
+                  className="truncate px-3 pb-1 font-mono text-[10px] text-muted-foreground"
                   title={root}
                 >
-                  {root}
+                  {shortPath(root)}
                 </p>
-                <div className="mt-2 max-h-48 overflow-y-auto">
-                  {treePath && (
-                    <button
-                      onClick={() =>
-                        attempt(() =>
-                          loadTree(treePath.replace(/\/?[^/]+\/?$/, "")),
-                        )
-                      }
-                      className="w-full px-2 py-1.5 text-left text-xs text-muted-foreground"
-                    >
-                      ../
-                    </button>
-                  )}
-                  {entries.map((e) => (
-                    <button
-                      key={e.path}
-                      onClick={() =>
-                        e.directory
-                          ? attempt(() => loadTree(e.path))
-                          : read(e.path)
-                      }
-                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-                    >
-                      {e.directory ? (
-                        <Folder className="size-3.5 shrink-0" />
-                      ) : (
-                        <FileCode2 className="size-3.5 shrink-0" />
-                      )}
-                      <span className="truncate">
-                        {e.name || shortPath(e.path)}
-                      </span>
-                      {e.directory && (
-                        <ChevronRight className="ml-auto size-3" />
-                      )}
-                    </button>
-                  ))}
+                <div className="min-h-0 flex-1 overflow-y-auto px-1 pb-2">
+                  <FileTree
+                    key={root}
+                    tick={session.tool_calls || 0}
+                    onOpenFile={(path) => void read(path)}
+                  />
                 </div>
               </>
+            ) : (
+              <div className="px-3 pb-3">
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  disabled={!connected || running || busy}
+                  onClick={choose}
+                >
+                  <FolderOpen />
+                  Открыть папку
+                </Button>
+              </div>
             )}
           </div>
           <div className="flex items-center gap-2 border-t px-3 py-2.5">
@@ -605,16 +636,17 @@ export default function Home() {
               />
               <div className="flex items-center justify-between gap-2 pt-2">
                 <div className="flex min-w-0 items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="max-w-56 justify-start text-muted-foreground"
-                    onClick={() => setSettingsOpen(true)}
-                  >
-                    <Zap className="!size-3" />
-                    <span className="truncate">{settings.model}</span>
-                    <ChevronDown className="!size-3" />
-                  </Button>
+                  <ModelPicker
+                    compact
+                    upward
+                    value={settings.model}
+                    models={catalog}
+                    loading={catalogLoading}
+                    error={catalogError}
+                    disabled={!connected || running}
+                    onOpen={() => void ensureModels()}
+                    onSelect={(id) => void selectModel(id)}
+                  />
                   <button
                     aria-pressed={readOnly}
                     onClick={() => setReadOnly(!readOnly)}
@@ -734,9 +766,15 @@ export default function Home() {
                   label="Входные токены"
                   value={(session.input_tokens || 0).toLocaleString()}
                 />
-                <Metric
-                  label="Из кеша провайдера"
-                  value={(session.cached_tokens || 0).toLocaleString()}
+                <Bar
+                  label="Доля из кеша"
+                  value={session.cached_tokens || 0}
+                  max={session.input_tokens || 0}
+                  detail={
+                    session.input_tokens
+                      ? `${Math.round(((session.cached_tokens || 0) / session.input_tokens) * 100)}%`
+                      : "—"
+                  }
                 />
                 <Metric
                   label="Записано в кеш"
@@ -783,40 +821,55 @@ export default function Home() {
                 )}
               </Card>
             </TabsContent>
-            <TabsContent value="context" className="min-h-0 overflow-y-auto">
-              <Card title="Языковое ядро" icon={Layers}>
-                <p className="mb-3 text-xs leading-5 text-muted-foreground">
-                  Модули загружаются по расширению файла внутри процесса.
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {caps?.modules.map((m) => (
-                    <span
-                      key={m.name}
-                      className="rounded border px-2 py-1 font-mono text-[10px] text-muted-foreground"
-                    >
-                      {m.name}
-                      {m.loaded ? " •" : ""}
-                    </span>
-                  )) || (
-                    <span className="text-xs text-muted-foreground">
-                      Откройте проект для загрузки контекста.
-                    </span>
-                  )}
-                </div>
+            <TabsContent value="context" className="min-h-0 space-y-3 overflow-y-auto">
+              <Card title="Окно сессии" icon={Workflow}>
+                <Bar
+                  label="Занято контекстом"
+                  value={session.input_tokens || 0}
+                  max={
+                    catalog.find((item) => item.id === settings.model)?.context ||
+                    0
+                  }
+                  detail={
+                    catalog.find((item) => item.id === settings.model)?.context
+                      ? `${(session.input_tokens || 0).toLocaleString()} / ${catalog.find((item) => item.id === settings.model)!.context.toLocaleString()}`
+                      : `${(session.input_tokens || 0).toLocaleString()} токенов`
+                  }
+                />
+                <Bar
+                  label="Доля из кеша"
+                  value={session.cached_tokens || 0}
+                  max={session.input_tokens || 0}
+                  detail={
+                    session.input_tokens
+                      ? `${(session.cached_tokens || 0).toLocaleString()} из ${(session.input_tokens || 0).toLocaleString()}`
+                      : "—"
+                  }
+                />
+                {!catalog.find((item) => item.id === settings.model)?.context && (
+                  <p className="pt-2 text-[10px] leading-4 text-muted-foreground">
+                    Откройте список моделей, чтобы шкала сравнилась с окном выбранной модели.
+                  </p>
+                )}
               </Card>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3 w-full"
-                disabled={!root}
-                onClick={() =>
-                  attempt(async () =>
-                    setHistory(await window.harness!.labels()),
-                  )
-                }
-              >
-                Показать AST labels
-              </Button>
+              <Card title="Файлы в этом ходе" icon={FileCode2}>
+                {contextPaths(session.messages).length ? (
+                  contextPaths(session.messages).map((path) => (
+                    <button
+                      key={path}
+                      onClick={() => void read(path)}
+                      className="flex w-full items-center gap-2 py-1.5 text-left font-mono text-[10px] hover:underline"
+                    >
+                      <FileCode2 className="size-3 shrink-0" />
+                      <span className="truncate">{path}</span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    Сюда попадут файлы, которые модель прочитала или изменила в этой сессии.
+                  </p>
+                )}
+              </Card>
             </TabsContent>
             <TabsContent value="logs" className="min-h-0 overflow-y-auto">
               {session.events.length ? (
@@ -869,7 +922,13 @@ export default function Home() {
           </button>
         </div>
       </footer>
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Dialog
+        open={settingsOpen}
+        onOpenChange={(open) => {
+          setSettingsOpen(open);
+          if (open) setModel(settings.model);
+        }}
+      >
         <DialogContent>
           <DialogTitle className="text-lg font-semibold">
             Настройки исполнителя
@@ -878,14 +937,18 @@ export default function Home() {
             Подключите модель с поддержкой инструментов через OpenRouter.
           </DialogDescription>
           <div className="space-y-4 py-2">
-            <label className="grid gap-2 text-xs font-medium">
+            <div className="grid gap-2 text-xs font-medium">
               Модель
-              <Input
+              <ModelPicker
                 value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="openrouter/auto"
+                models={catalog}
+                loading={catalogLoading}
+                error={catalogError}
+                disabled={!connected}
+                onOpen={() => void ensureModels()}
+                onSelect={setModel}
               />
-            </label>
+            </div>
             <label className="grid gap-2 text-xs font-medium">
               API-ключ
               <Input

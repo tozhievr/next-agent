@@ -792,30 +792,71 @@ int rf_add_include(Store *st, const char *target, const char *header, bool syste
 }
 
 /* -------------------------------------------------------- find_symbols */
-static bool contains_ci(const char *hay, const char *needle) {
-    size_t n = strlen(needle);
-    if (n == 0) return true;
-    for (const char *p = hay; *p; p++) {
-        size_t k = 0;
-        while (k < n && p[k] && tolower((unsigned char)p[k]) == tolower((unsigned char)needle[k])) k++;
-        if (k == n) return true;
+struct RankedSymbol {
+    int rank;
+    size_t order;
+    J *obj;
+};
+
+static void keep_symbol(RankedSymbol **kept, size_t *nk, size_t limit, int rank, J *obj, size_t *order,
+                        bool *truncated) {
+    if (rank < 0) {
+        json_free(obj);
+        return;
     }
-    return false;
+    if (*nk < limit) {
+        *kept = static_cast<RankedSymbol *>(na_realloc(*kept, (*nk + 1) * sizeof **kept));
+        (*kept)[(*nk)++] = {rank, (*order)++, obj};
+        return;
+    }
+    *truncated = true;
+    size_t worst = 0;
+    for (size_t i = 1; i < *nk; i++)
+        if ((*kept)[i].rank > (*kept)[worst].rank ||
+            ((*kept)[i].rank == (*kept)[worst].rank && (*kept)[i].order > (*kept)[worst].order))
+            worst = i;
+    if (rank < (*kept)[worst].rank)
+        json_free((*kept)[worst].obj), (*kept)[worst] = {rank, (*order)++, obj};
+    else
+        json_free(obj);
+}
+
+static J *ranked_symbols(RankedSymbol *kept, size_t nk, bool truncated) {
+    for (size_t i = 1; i < nk; i++) {
+        RankedSymbol item = kept[i];
+        size_t j = i;
+        while (j > 0 && (kept[j - 1].rank > item.rank ||
+                         (kept[j - 1].rank == item.rank && kept[j - 1].order > item.order))) {
+            kept[j] = kept[j - 1];
+            j--;
+        }
+        kept[j] = item;
+    }
+    J *arr = j_arr();
+    for (size_t i = 0; i < nk; i++)
+        j_push(arr, kept[i].obj);
+    J *o = j_obj();
+    j_set(o, "count", j_int((int64_t)nk));
+    j_set(o, "truncated", j_bool(truncated));
+    j_set(o, "symbols", arr);
+    free(kept);
+    return o;
 }
 
 int rf_find_symbols(Store *st, const char *query, const char *kind, size_t limit, J **out) {
     if (limit == 0 || limit > 1000) limit = 100;
     StrList files;
     if (ws_files(st, NULL, &files) != 0) return -1;
-    J *arr = j_arr();
+    RankedSymbol *kept = NULL;
+    size_t nk = 0, order = 0;
     bool truncated = false;
-    for (size_t f = 0; f < files.n && !truncated; f++) {
+    int rc = 0;
+    for (size_t f = 0; f < files.n && rc == 0; f++) {
         char *text;
         size_t len;
         if (ws_read(st, files.v[f], &text, &len) != 0) {
-            sl_free(&files);
-            json_free(arr);
-            return -1;
+            rc = -1;
+            break;
         }
         if (!text) continue;
         Snapshot *snap = snap_new(0, text, len);
@@ -824,14 +865,11 @@ int rf_find_symbols(Store *st, const char *query, const char *kind, size_t limit
             for (size_t i = 0; i < list.n; i++) {
                 const Symbol *s = &list.v[i];
                 if (kind && strcmp(kind, s->kind) != 0) continue;
-                if (!contains_ci(s->name, query)) continue;
-                if (arr->n >= limit) {
-                    truncated = true;
-                    break;
-                }
+                int rank = symbol_name_rank(s->name, query);
+                if (rank < 0) continue;
                 J *o = symbol_to_json(s);
                 j_set(o, "path", j_str(files.v[f]));
-                j_push(arr, o);
+                keep_symbol(&kept, &nk, limit, rank, o, &order, &truncated);
             }
             symbols_free(&list);
         }
@@ -839,10 +877,11 @@ int rf_find_symbols(Store *st, const char *query, const char *kind, size_t limit
         free(text);
     }
     sl_free(&files);
-    J *o = j_obj();
-    j_set(o, "count", j_int((int64_t)arr->n));
-    j_set(o, "truncated", j_bool(truncated));
-    j_set(o, "symbols", arr);
-    *out = o;
+    if (rc != 0) {
+        for (size_t i = 0; i < nk; i++) json_free(kept[i].obj);
+        free(kept);
+        return -1;
+    }
+    *out = ranked_symbols(kept, nk, truncated);
     return 0;
 }

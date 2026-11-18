@@ -54,6 +54,47 @@ function canEncrypt() {
 function publicSettings() {
   return { model, hasKey: !!key, canStoreKey: canEncrypt() };
 }
+let modelCatalog = null;
+function invalidateModels() {
+  modelCatalog = null;
+}
+async function listModels() {
+  if (modelCatalog) return modelCatalog;
+  const headers = { Accept: "application/json" };
+  if (key) headers.Authorization = "Bearer " + key;
+  const response = await net.fetch("https://openrouter.ai/api/v1/models", {
+    headers,
+  });
+  if (!response.ok)
+    throw new Error("OpenRouter не отдал каталог моделей: " + response.status);
+  const body = await response.json();
+  const rows = Array.isArray(body.data) ? body.data : [];
+  const models = rows
+    .filter((item) => item && typeof item.id === "string" && item.id.length < 200)
+    .map((item) => ({
+      id: item.id,
+      name: typeof item.name === "string" && item.name ? item.name : item.id,
+      context: Number(item.context_length) || 0,
+      tools:
+        Array.isArray(item.supported_parameters) &&
+        item.supported_parameters.includes("tools"),
+    }));
+  if (!models.some((item) => item.id === "openrouter/auto"))
+    models.unshift({
+      id: "openrouter/auto",
+      name: "OpenRouter Auto",
+      context: 0,
+      tools: true,
+    });
+  models.sort((a, b) => {
+    if (a.id === "openrouter/auto") return -1;
+    if (b.id === "openrouter/auto") return 1;
+    if (a.tools !== b.tools) return a.tools ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  modelCatalog = models;
+  return models;
+}
 app
   .whenReady()
   .then(async () => {
@@ -103,7 +144,7 @@ app
       resources,
       app.isPackaged
         ? "native"
-        : `native/bin/${process.platform === "win32" ? "win" : "linux"}`,
+        : `native/bin/${process.platform === "win32" ? "win" : process.platform === "darwin" ? "mac" : "linux"}`,
     );
     process.env.NEXTAGENT_PLUGIN_DIR = path.join(nativeDir, "plugins");
     worker = new Worker(path.join(__dirname, "worker.cjs"), {
@@ -210,6 +251,7 @@ app
         model = v.model.trim() || "openrouter/auto";
         saved.model = model;
         if (typeof v.apiKey === "string" && v.apiKey.trim()) {
+          invalidateModels();
           const nextKey = v.apiKey.trim();
           if (/[\r\n]/.test(nextKey) || nextKey.length > 2048)
             throw new Error("Invalid API key");
@@ -219,12 +261,14 @@ app
             : undefined;
         }
         if (v.clearKey) {
+          invalidateModels();
           key = "";
           delete saved.key;
         }
         await persist();
         return publicSettings();
       }
+      if (action === "models") return listModels();
       if (action === "window") {
         if (input.command === "minimize") win.minimize();
         else if (input.command === "maximize") {

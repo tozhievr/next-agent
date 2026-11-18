@@ -4,6 +4,10 @@
 
 #include "platform_posix.cpp"
 
+#elif defined(__APPLE__)
+
+#include "platform_apple.cpp"
+
 #else
 
 #include "platform_win.cpp"

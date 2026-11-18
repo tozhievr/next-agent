@@ -2,6 +2,28 @@
 
 All product versions follow [Semantic Versioning](https://semver.org/).
 
+## Harness 0.47.0
+
+- Choose a concrete OpenRouter model from a searchable catalog. `openrouter/auto` stays available, and an id that is not listed can be entered directly.
+- Show the workspace as an expandable file tree instead of a drill-down list.
+- Show session context as window usage and the files touched in the turn. The cached share of input tokens is a progress bar.
+- Publish Windows, Linux and macOS portable and setup packages from the `harness-v*` release workflow.
+
+## 0.46.0
+
+- Harness keeps going after a failed tool call and returns the error to the model, so a bad call can be corrected in the same turn.
+- Syntax diagnostics no longer ride along with transaction checks. `--lsp` does not reject writes; only `--diagnostics` does. Advisory gate mode never blocks a commit.
+- Symbol search ranks an exact name ahead of a substring. A unique exact name resolves even when a kind or scope hint misses, instead of `symbol_not_found` whose hint repeats that name.
+- Add a macOS platform layer and build native language plugins for that host in CI.
+
+- Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.
+- Linked the own next-langserver host/engine directly into NextAgent; plugins are
+  selected lazily from file extensions and parsed in-process with persistent sessions.
+- Removed LSP Hub, subprocess language-server clients, the interim bridge DLL,
+  and the vendored libc23 runtime. Windows packages contain all 30 language plugins.
+- Added native-module integration tests and versioned diagnostic gate regression tests.
+- Added the Linux dlopen loader, all 30 native ELF plugins, tar.gz distribution and WSL2 verification.
+
 ## Harness 0.46.0
 
 - Replace the Win32/Arcade desktop with the separately packaged Electron Harness.
@@ -25,16 +47,6 @@ All product versions follow [Semantic Versioning](https://semver.org/).
 - Revision/input-bound checks, current proof status and responsive Harness reads during long checks.
 - Full declaration ranges for Python and common declaration-shaped native ASTs; filtered labels on large files.
 - Fixed Windows path aliases and the remaining 64-path CLI flush limit.
-
-## Unreleased
-
-- Migrated application and tests to strict C++26 with Clang 23.1.3 and CMake 4.5.
-- Linked the own next-langserver host/engine directly into NextAgent; plugins are
-  selected lazily from file extensions and parsed in-process with persistent sessions.
-- Removed LSP Hub, subprocess language-server clients, the interim bridge DLL,
-  and the vendored libc23 runtime. Windows packages contain all 30 language plugins.
-- Added native-module integration tests and versioned diagnostic gate regression tests.
-- Added the Linux dlopen loader, all 30 native ELF plugins, tar.gz distribution and WSL2 verification.
 
 ## 0.44.0 - 2026-11-09
 

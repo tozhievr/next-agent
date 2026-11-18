@@ -127,7 +127,10 @@ The file extension selects a native plugin in the in-process LanguageRegistry.
 `serve --diagnostics` / `mcp --diagnostics` additionally reject edits that introduce
 syntax warnings or errors. Reports must match the document version. Rejected
 edits change neither journal nor disk. Semantic/compiler validation is outside
-this gate's current capabilities. `--lsp` remains a compatibility alias.
+this gate's current capabilities. `--lsp` is still accepted, but it does not enable
+the gate: a parser diagnostic is not a transaction constraint unless `--diagnostics`
+asks for that policy. `--no-gate` forces the gate off. `stale_rev`, overlap and
+path checks reject a commit either way.
 
 ## 9. Concurrency and multiple agents
 

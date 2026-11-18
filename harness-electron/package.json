@@ -1,6 +1,6 @@
 {
   "name": "harness-electron",
-  "version": "0.46.0",
+  "version": "0.47.0",
   "private": true,
   "scripts": {
     "dev": "next dev --hostname 127.0.0.1",
@@ -98,6 +98,12 @@
       "category": "Development",
       "executableName": "nextagent-harness",
       "syncDesktopName": true
+    },
+    "mac": {
+      "target": "dir",
+      "icon": "assets/icon.png",
+      "category": "public.app-category.developer-tools",
+      "identity": null
     },
     "electronDist": "node_modules/electron/dist",
     "artifactName": "NextAgent-Harness-${version}-${os}-${arch}.${ext}"

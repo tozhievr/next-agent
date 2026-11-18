@@ -540,6 +540,18 @@ static void test_native_c_symbols(void) {
     free(sym.kind);
     free(sym.scope);
     CHECK_ERR(syntax_select(s, "nope", NULL, NULL, &sym), "symbol_not_found");
+    CHECK(strstr(na_errmsg(), "similar: add") == NULL);
+    /* A wrong kind hint must not hide the only declaration of that exact name. */
+    CHECK(syntax_select(s, "add", "method", NULL, &sym) == 0);
+    CHECK(strcmp(sym.kind, "function") == 0);
+    free(sym.name);
+    free(sym.kind);
+    free(sym.scope);
+    CHECK(syntax_select(s, "ADD", NULL, NULL, &sym) == 0);
+    CHECK(strcmp(sym.name, "add") == 0);
+    free(sym.name);
+    free(sym.kind);
+    free(sym.scope);
 
     ChangeSet cs;
     const char *repl = "int add(int a, int b) { return b + a; }";
@@ -556,6 +568,57 @@ static void test_native_c_symbols(void) {
     s = snap_new(0, dup, strlen(dup));
     CHECK_ERR(syntax_select(s, "f", NULL, NULL, &sym), "ambiguous_symbol");
     snap_free(s);
+}
+
+static void test_symbol_resolution(void) {
+    g_test = "symbol-resolution";
+    CHECK(symbol_name_rank("add", "add") == 0);
+    CHECK(symbol_name_rank("Add", "add") == 1);
+    CHECK(symbol_name_rank("additional", "add") == 2);
+    CHECK(symbol_name_rank("xadd", "add") == 3);
+    CHECK(symbol_name_rank("width", "add") < 0);
+    Symbol raw[3];
+    memset(raw, 0, sizeof raw);
+    raw[0].name = const_cast<char *>("additional");
+    raw[0].kind = const_cast<char *>("function");
+    raw[0].scope = const_cast<char *>("");
+    raw[0].line = 1;
+    raw[1].name = const_cast<char *>("add");
+    raw[1].kind = const_cast<char *>("function");
+    raw[1].scope = const_cast<char *>("");
+    raw[1].line = 2;
+    raw[2].name = const_cast<char *>("add");
+    raw[2].kind = const_cast<char *>("variable");
+    raw[2].scope = const_cast<char *>("");
+    raw[2].line = 3;
+    SymbolList all = {raw, 3, 3};
+    Symbol out;
+    memset(&out, 0, sizeof out);
+    int rc = symbols_select(&all, "add", "method", NULL, &out);
+    CHECK_ERR(rc, "ambiguous_symbol");
+    CHECK(strstr(na_errmsg(), "function@2") != NULL);
+    CHECK(strstr(na_errmsg(), "variable@3") != NULL);
+    CHECK(strstr(na_errmsg(), "symbol_not_found") == NULL);
+    Symbol only[2] = {raw[0], raw[1]};
+    SymbolList one = {only, 2, 2};
+    CHECK(symbols_select(&one, "add", "method", NULL, &out) == 0);
+    CHECK_STR(out.kind, "function");
+    free(out.name);
+    free(out.kind);
+    free(out.scope);
+
+    char *ws = new_ws();
+    put_file(ws, "rank.c", "int additional(void) { return 0; }\nint add(void) { return 1; }\n");
+    Store *st = store_open(ws);
+    J *o = NULL;
+    CHECK(rf_find_symbols(st, "add", NULL, 1, &o) == 0);
+    CHECK(j_get(o, "count")->i == 1);
+    const J *ranked = j_get(o, "symbols");
+    const J *ranked_name = ranked && ranked->n == 1 ? j_get(ranked->items[0], "name") : NULL;
+    CHECK_STR(ranked_name && ranked_name->k == J_STR ? ranked_name->s : NULL, "add");
+    json_free(o);
+    store_close(st);
+    free(ws);
 }
 
 /* ---------------------------------------------------------------- lsp */
@@ -807,6 +870,29 @@ static void test_gate(void) {
     int opens = fake.opens;
     CHECK(edit1(st, "n.txt", 0, 1, "BAD", STORE_NO_REV, &v, NULL) == 0);
     CHECK(fake.opens == opens);
+    gate_free(g);
+    store_close(st);
+    free(ws);
+}
+
+static void test_gate_advisory(void) {
+    g_test = "gate-advisory";
+    char *ws = new_ws();
+    put_file(ws, "a.c", "int a(void) {return 0;}\n");
+    put_file(ws, "b.c", "int b(void) {return 0;}\n");
+    Store *st = store_open(ws);
+    FakeState fake;
+    memset(&fake, 0, sizeof fake);
+    DiagnosticOps ops = {f_open, f_change, f_wait, f_close, &fake};
+    DiagnosticGate *g = gate_new(ws, ops, st, 1);
+    gate_set_enforce(g, false);
+    Validator v = gate_validator(g);
+    CHECK(edit1(st, "b.c", 0, 0, "BAD\n", 0, &v, NULL) == 0);
+    CHECK(fake.opens == 0);
+    int64_t head = store_head(st);
+    gate_set_enforce(g, true);
+    CHECK_ERR(edit1(st, "a.c", 0, 0, "BAD\n", head, &v, NULL), "diagnostics_regression");
+    CHECK(store_head(st) == head);
     gate_free(g);
     store_close(st);
     free(ws);
@@ -1622,7 +1708,7 @@ int main(int argc, char **argv) {
     }
     const char *tmp = getenv("TEMP");
     if (!tmp) tmp = getenv("TMPDIR");
-#ifdef __linux__
+#ifndef _WIN32
     if (!tmp) tmp = "/tmp";
 #endif
     snprintf(g_base, sizeof g_base, "%s/nextagent-tests", tmp ? tmp : ".");
@@ -1636,11 +1722,13 @@ int main(int argc, char **argv) {
     RUN(test_store_torn_tail_and_conflict);
     RUN(test_validator);
     RUN(test_native_c_symbols);
+    RUN(test_symbol_resolution);
     RUN(test_refactor);
     RUN(test_lsp_codec_framing);
     RUN(test_lsp_diag);
     RUN(test_lsp_build);
     RUN(test_gate);
+    RUN(test_gate_advisory);
     RUN(test_gate_dependents);
     RUN(test_rpc);
     RUN(test_language_engine);

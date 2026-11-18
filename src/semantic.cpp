@@ -1,5 +1,6 @@
 #include "semantic.h"
 #include "refactor.h"
+#include "symbols.hpp"
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,13 +140,22 @@ static bool whole_word_at(const char *t, size_t len, size_t at, size_t n) {
     return before && after;
 }
 
+static bool name_at(const char *text, size_t len, size_t byte, const char *name) {
+    size_t n = strlen(name);
+    return byte != (size_t)-1 && byte + n <= len && memcmp(text + byte, name, n) == 0 &&
+           whole_word_at(text, len, byte, n);
+}
+
 static int name_offset(Docs *docs, const char *path, const Symbol *sym, const char *name, size_t *off) {
-    if (sym->sel != (size_t)-1) {
-        *off = sym->sel;
-        return 0;
-    }
     Doc *d = docs_get(docs, path);
     if (!d) return -1;
+    if (sym->sel != (size_t)-1) {
+        size_t selected = cp_to_byte(d->text, d->len, sym->sel);
+        if (name_at(d->text, d->len, selected, name)) {
+            *off = sym->sel;
+            return 0;
+        }
+    }
     size_t b0 = cp_to_byte(d->text, d->len, sym->start), b1 = cp_to_byte(d->text, d->len, sym->end), n = strlen(name);
     if (b0 == (size_t)-1) b0 = 0;
     if (b1 == (size_t)-1 || b1 > d->len) b1 = d->len;
@@ -190,11 +200,75 @@ static int resolve(Sem *s, Docs *docs, const char *name, const char *kind, const
             hits++;
         }
     }
-    free(want);
     int rc = 0;
-    if (hits == 0) rc = na_fail("symbol_not_found: %s", name);
-    else if (hits > stored) rc = na_fail("ambiguous_symbol: %s (%zu definitions; narrow with kind, scope or path)", name, hits);
-    for (size_t i = 0; rc == 0 && i < stored; i++) rc = name_offset(docs, defs[i].path, defs[i].sym, name, &defs[i].offset);
+    bool relaxed = false;
+    if (hits == 0) {
+        relaxed = true;
+        /* Kind/scope missed. An exact same name is still a resolution, not a miss
+         * whose similar-list repeats that name. */
+        for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
+            if (want && strcmp(wsi_path(s->ix, i), want) != 0) continue;
+            const SymbolList *l = wsi_symbols(s->ix, i);
+            for (size_t k = 0; k < l->n; k++) {
+                const Symbol *y = &l->v[k];
+                if (strcmp(y->name, name) != 0) continue;
+                if (hits < 8)
+                    buf_printf(&cand, "%s%s:%zu %s%s%s", hits ? ", " : "", wsi_path(s->ix, i), y->line, y->kind,
+                               y->scope[0] ? " in " : "", y->scope);
+                if (stored < MAX_DEFS) {
+                    defs[stored].path = na_strdup(wsi_path(s->ix, i));
+                    defs[stored].sym = y;
+                    defs[stored].offset = 0;
+                    stored++;
+                }
+                hits++;
+            }
+        }
+    }
+    if (hits == 0) {
+        for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
+            if (want && strcmp(wsi_path(s->ix, i), want) != 0) continue;
+            const SymbolList *l = wsi_symbols(s->ix, i);
+            for (size_t k = 0; k < l->n; k++) {
+                const Symbol *y = &l->v[k];
+                if (symbol_name_rank(y->name, name) != 1) continue;
+                if (hits < 8)
+                    buf_printf(&cand, "%s%s:%zu %s %s%s%s", hits ? ", " : "", wsi_path(s->ix, i), y->line, y->name,
+                               y->kind, y->scope[0] ? " in " : "", y->scope);
+                if (stored < MAX_DEFS) {
+                    defs[stored].path = na_strdup(wsi_path(s->ix, i));
+                    defs[stored].sym = y;
+                    defs[stored].offset = 0;
+                    stored++;
+                }
+                hits++;
+            }
+        }
+    }
+    if (hits == 0) {
+        size_t shown = 0;
+        for (size_t i = 0; i < wsi_nfiles(s->ix) && shown < 5; i++) {
+            if (want && strcmp(wsi_path(s->ix, i), want) != 0) continue;
+            const SymbolList *l = wsi_symbols(s->ix, i);
+            for (size_t k = 0; k < l->n && shown < 5; k++) {
+                int rank = symbol_name_rank(l->v[k].name, name);
+                if (rank < 2) continue;
+                buf_printf(&cand, "%s%s", shown ? ", " : "", l->v[k].name);
+                shown++;
+            }
+        }
+        rc = shown ? na_fail("symbol_not_found: %s (similar: %s)", name, cand.p)
+                   : na_fail("symbol_not_found: %s", name);
+    } else if (relaxed && hits > 1)
+        rc = na_fail("ambiguous_symbol: %s (%zu definitions: %s; narrow with kind, scope or path)", name, hits,
+                     cand.p);
+    else if (hits > stored)
+        rc = na_fail("ambiguous_symbol: %s (%zu definitions; narrow with kind, scope or path)", name, hits);
+    free(want);
+    for (size_t i = 0; rc == 0 && i < stored; i++) {
+        const char *spelling = defs[i].sym->name && strcmp(defs[i].sym->name, name) != 0 ? defs[i].sym->name : name;
+        rc = name_offset(docs, defs[i].path, defs[i].sym, spelling, &defs[i].offset);
+    }
     /* A declaration and its definition are one entity: the server decides by listing both as references. */
     if (rc == 0 && stored > 1) {
         rc = sync_candidates(s, docs, name);
@@ -542,39 +616,64 @@ int sem_search(Sem *s, const char *query, bool word, bool ignore_case, size_t co
 
 /* ---- find_symbols ---- */
 
-static bool contains_ci(const char *hay, const char *needle) {
-    size_t n = strlen(needle);
-    if (n == 0) return true;
-    for (const char *p = hay; *p; p++) {
-        size_t k = 0;
-        while (k < n && p[k] && tolower((unsigned char)p[k]) == tolower((unsigned char)needle[k])) k++;
-        if (k == n) return true;
+struct SemHit {
+    int rank;
+    size_t order;
+    J *obj;
+};
+
+static void keep_symbol(SemHit **kept, size_t *nk, size_t limit, int rank, J *obj, size_t *order,
+                        bool *truncated) {
+    if (*nk < limit) {
+        *kept = static_cast<SemHit *>(na_realloc(*kept, (*nk + 1) * sizeof **kept));
+        (*kept)[(*nk)++] = {rank, (*order)++, obj};
+        return;
     }
-    return false;
+    *truncated = true;
+    size_t worst = 0;
+    for (size_t i = 1; i < *nk; i++)
+        if ((*kept)[i].rank > (*kept)[worst].rank ||
+            ((*kept)[i].rank == (*kept)[worst].rank && (*kept)[i].order > (*kept)[worst].order))
+            worst = i;
+    if (rank < (*kept)[worst].rank)
+        json_free((*kept)[worst].obj), (*kept)[worst] = {rank, (*order)++, obj};
+    else
+        json_free(obj);
 }
 
 int sem_find_symbols(Sem *s, const char *query, const char *kind, size_t limit, J **out) {
     if (limit == 0 || limit > 1000) limit = 100;
     if (wsi_refresh(s->ix) != 0) return -1;
-    J *arr = j_arr();
+    SemHit *kept = NULL;
+    size_t nk = 0, order = 0;
     bool truncated = false;
-    for (size_t i = 0; i < wsi_nfiles(s->ix) && !truncated; i++) {
+    for (size_t i = 0; i < wsi_nfiles(s->ix); i++) {
         const SymbolList *l = wsi_symbols(s->ix, i);
         for (size_t k = 0; k < l->n; k++) {
             const Symbol *y = &l->v[k];
             if (kind && strcmp(kind, y->kind) != 0) continue;
-            if (!contains_ci(y->name, query)) continue;
-            if (arr->n >= limit) {
-                truncated = true;
-                break;
-            }
+            int rank = symbol_name_rank(y->name, query);
+            if (rank < 0) continue;
             J *o = symbol_to_json(y);
             j_set(o, "path", j_str(wsi_path(s->ix, i)));
-            j_push(arr, o);
+            keep_symbol(&kept, &nk, limit, rank, o, &order, &truncated);
         }
     }
+    for (size_t i = 1; i < nk; i++) {
+        SemHit item = kept[i];
+        size_t j = i;
+        while (j > 0 && (kept[j - 1].rank > item.rank ||
+                         (kept[j - 1].rank == item.rank && kept[j - 1].order > item.order))) {
+            kept[j] = kept[j - 1];
+            j--;
+        }
+        kept[j] = item;
+    }
+    J *arr = j_arr();
+    for (size_t i = 0; i < nk; i++) j_push(arr, kept[i].obj);
+    free(kept);
     J *o = j_obj();
-    j_set(o, "count", j_int((int64_t)arr->n));
+    j_set(o, "count", j_int((int64_t)nk));
     j_set(o, "truncated", j_bool(truncated));
     j_set(o, "symbols", arr);
     *out = o;

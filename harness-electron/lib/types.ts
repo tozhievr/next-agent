@@ -38,6 +38,12 @@ export type Session = {
 };
 export type SessionSummary = { id: string; title: string; workspace: string };
 export type Settings = { model: string; hasKey: boolean; canStoreKey: boolean };
+export type CatalogModel = {
+  id: string;
+  name: string;
+  context: number;
+  tools: boolean;
+};
 export type Capabilities = {
   version: string;
   modules: { name: string; loaded: boolean; available: boolean }[];
@@ -72,6 +78,7 @@ export interface HarnessAPI {
     apiKey?: string;
     clearKey?: boolean;
   }): Promise<Settings>;
+  models(): Promise<CatalogModel[]>;
   window(command: string): Promise<null>;
   selfTest(): Promise<Opened>;
 }

@@ -24,6 +24,12 @@ async function run(resources, uninstallTarget = "") {
           "utf8",
         ),
       );
+  const executableName =
+    process.platform === "win32"
+      ? "NextAgent Harness.exe"
+      : process.platform === "darwin"
+        ? "NextAgent Harness.app"
+        : "nextagent-harness";
   let target =
     process.platform === "win32"
       ? path.join(
@@ -33,7 +39,9 @@ async function run(resources, uninstallTarget = "") {
           "Programs",
           "NextAgent Harness",
         )
-      : path.join(app.getPath("home"), ".local", "opt", "nextagent-harness");
+      : process.platform === "darwin"
+        ? path.join(app.getPath("home"), "Applications", "NextAgent Harness")
+        : path.join(app.getPath("home"), ".local", "opt", "nextagent-harness");
   if (process.env.NEXTAGENT_SETUP_TEST_TARGET)
     target = path.resolve(process.env.NEXTAGENT_SETUP_TEST_TARGET);
   if (uninstallTarget) target = path.resolve(uninstallTarget);
@@ -117,14 +125,7 @@ async function run(resources, uninstallTarget = "") {
         win.close();
         return status;
       }
-      await shell.openPath(
-        path.join(
-          target,
-          process.platform === "win32"
-            ? "NextAgent Harness.exe"
-            : "nextagent-harness",
-        ),
-      );
+      await shell.openPath(path.join(target, executableName));
       win.close();
       return status;
     }
@@ -168,7 +169,7 @@ async function run(resources, uninstallTarget = "") {
                   const info = shell.readShortcutLink(link);
                   if (
                     path.resolve(info.target).toLowerCase() ===
-                    path.resolve(target, "NextAgent Harness.exe").toLowerCase()
+                    path.resolve(target, executableName).toLowerCase()
                   )
                     await fs.unlink(link);
                 } catch {}
@@ -178,7 +179,7 @@ async function run(resources, uninstallTarget = "") {
                 "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NextAgentHarness",
                 "/f",
               ]).catch(() => {});
-            } else
+            } else if (process.platform !== "darwin")
               await fs.rm(
                 path.join(
                   app.getPath("home"),
@@ -190,7 +191,7 @@ async function run(resources, uninstallTarget = "") {
             return;
           }
           if (process.platform === "win32") {
-            const executable = path.join(target, "NextAgent Harness.exe");
+            const executable = path.join(target, executableName);
             const registry =
               "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NextAgentHarness";
             for (const [name, value] of Object.entries({
@@ -237,7 +238,7 @@ async function run(resources, uninstallTarget = "") {
               "create",
               shortcut,
             );
-          } else {
+          } else if (process.platform !== "darwin") {
             const directory = path.join(
               app.getPath("home"),
               ".local",

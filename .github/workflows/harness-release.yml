@@ -4,22 +4,41 @@ on:
     tags: ["harness-v*"]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   desktop:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+          - os: ubuntu-latest
+          - os: macos-latest
     runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
     steps:
       - uses: actions/checkout@v4
+      - name: Grammar sources for macOS plugins
+        if: runner.os == 'macOS'
+        uses: actions/checkout@v4
+        with:
+          repository: tozhievr/next-langserver
+          ref: af82c507fa0f8774ec7058a3c57360db27396c82
+          path: next-langserver
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
+          python-version: "3.13"
+      - name: Match tag to the Harness package version
+        if: startsWith(github.ref, 'refs/tags/harness-v')
+        shell: bash
+        run: |
+          ver=${GITHUB_REF_NAME#harness-v}
+          pkg=$(python -c "import json; print(json.load(open('harness-electron/package.json'))['version'])")
+          [ "$ver" = "$pkg" ] || { echo "tag $GITHUB_REF_NAME does not match harness $pkg"; exit 1; }
       - name: CMake
         run: python tools/setup_cmake.py
       - name: Windows toolchain
@@ -38,6 +57,18 @@ jobs:
           sudo bash /tmp/llvm.sh 23
           echo "CLANG=clang-23" >> "$GITHUB_ENV"
           echo "CXX=clang++-23" >> "$GITHUB_ENV"
+      - name: macOS toolchain
+        if: runner.os == 'macOS'
+        run: |
+          brew install ninja
+          if brew info llvm@23 >/dev/null 2>&1; then brew install llvm@23; prefix="$(brew --prefix llvm@23)"; else brew install llvm; prefix="$(brew --prefix llvm)"; fi
+          echo "$prefix/bin" >> "$GITHUB_PATH"
+          echo "CLANG=$prefix/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$prefix/bin/clang++" >> "$GITHUB_ENV"
+          "$prefix/bin/clang++" --version
+      - name: macOS language plugins
+        if: runner.os == 'macOS'
+        run: python tools/build_plugins.py --source next-langserver --cc "$CLANG"
       - name: Dependencies
         working-directory: harness-electron
         run: bun install --frozen-lockfile
@@ -56,7 +87,7 @@ jobs:
         run: bun run test:desktop
       - uses: actions/upload-artifact@v4
         with:
-          name: nextagent-harness-${{ runner.os }}
+          name: nextagent-harness-${{ runner.os }}-${{ runner.arch }}
           path: |
             harness-electron/release/windows/*.exe
             harness-electron/release/windows/*.sha256
@@ -66,3 +97,33 @@ jobs:
             harness-electron/release/linux/*.sha256
             harness-electron/release/linux/setup/*.AppImage
             harness-electron/release/linux/setup/*.sha256
+            harness-electron/release/macos/*.dmg
+            harness-electron/release/macos/*.sha256
+            harness-electron/release/macos/setup/*.dmg
+            harness-electron/release/macos/setup/*.sha256
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/harness-v')
+    needs: desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: nextagent-harness-*
+          merge-multiple: true
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          ver=${tag#harness-v}
+          mapfile -d '' files < <(find dist -type f \( -name '*.exe' -o -name '*.AppImage' -o -name '*.dmg' -o -name '*.sha256' \) -print0)
+          [ "${#files[@]}" -gt 0 ] || { echo "no harness artifacts"; exit 1; }
+          printf 'NextAgent Harness %s\n\nWindows, Linux and macOS portable builds and installers.\n' "$ver" > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${files[@]}" --clobber
+          else
+            gh release create "$tag" "${files[@]}" --title "NextAgent Harness $ver" --notes-file notes.md
+          fi

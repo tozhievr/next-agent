@@ -1,5 +1,6 @@
 """Install an official CMake release in build/toolchain; also supports GitHub Actions."""
 import os
+import sys
 from pathlib import Path
 import platform
 import tarfile
@@ -8,12 +9,18 @@ import zipfile
 
 VERSION = "4.5.0-rc1"
 ROOT = Path(__file__).resolve().parent.parent / "build/toolchain"
-system = "windows" if os.name == "nt" else "linux"
-if platform.machine().lower() not in ("amd64", "x86_64"):
+machine = platform.machine().lower()
+if sys.platform == "darwin":
+    system, arch = "macos", "universal"
+elif os.name == "nt":
+    system, arch = "windows", "x86_64"
+else:
+    system, arch = "linux", "x86_64"
+if system != "macos" and machine not in ("amd64", "x86_64"):
     raise SystemExit("This project currently packages x86-64 toolchains only")
-name = f"cmake-{VERSION}-{system}-x86_64"
+name = f"cmake-{VERSION}-{system}-{arch}"
 suffix = ".zip" if system == "windows" else ".tar.gz"
-binary = ROOT / name / "bin" / ("cmake.exe" if os.name == "nt" else "cmake")
+binary = (ROOT / name / "CMake.app" / "Contents" / "bin" / "cmake") if system == "macos" else ROOT / name / "bin" / ("cmake.exe" if os.name == "nt" else "cmake")
 if not binary.is_file():
     ROOT.mkdir(parents=True, exist_ok=True)
     archive = ROOT / (name + suffix)
