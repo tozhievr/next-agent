@@ -111,7 +111,7 @@ lx_status Session::reparse(const std::shared_ptr<CancelToken>& cancel) {
     return LX_BAD_ARG;
   }
 
-  auto old_snap = published_.load(std::memory_order_acquire);
+  auto old_snap = load_published();
   bool need_full = false;
   if (!old_snap || !old_snap->root) {
     need_full = true;
@@ -195,7 +195,7 @@ lx_status Session::reparse(const std::shared_ptr<CancelToken>& cancel) {
   snap->truncated = pout.truncated;
 
   // Publish atomically (§6.6)
-  published_.store(snap, std::memory_order_release);
+  store_published(snap);
   layers_ = new_layers;
   pending_ = lx::ChangeSet{};
 
@@ -252,8 +252,26 @@ lx_status Session::reparse(const std::shared_ptr<CancelToken>& cancel) {
   return pout.status;
 }
 
-std::shared_ptr<const Snapshot> Session::snapshot() const noexcept {
+std::shared_ptr<const Snapshot> Session::load_published() const noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr)
   return published_.load(std::memory_order_acquire);
+#else
+  std::lock_guard lock(published_mu_);
+  return published_;
+#endif
+}
+
+void Session::store_published(std::shared_ptr<const Snapshot> snap) noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr)
+  published_.store(std::move(snap), std::memory_order_release);
+#else
+  std::lock_guard lock(published_mu_);
+  published_ = std::move(snap);
+#endif
+}
+
+std::shared_ptr<const Snapshot> Session::snapshot() const noexcept {
+  return load_published();
 }
 
 std::shared_ptr<const Snapshot> Session::snapshot_at(uint64_t version) const {
@@ -275,9 +293,14 @@ std::vector<std::shared_ptr<const Layer>> Session::layers() const {
 }
 
 LayeredCursor Session::layered_cursor() const {
+#if defined(__cpp_lib_atomic_shared_ptr)
   std::lock_guard lock(history_mu_);
   auto snap = published_.load(std::memory_order_acquire);
   return LayeredCursor(std::move(snap), published_layers_);
+#else
+  std::scoped_lock lock(published_mu_, history_mu_);
+  return LayeredCursor(published_, published_layers_);
+#endif
 }
 
 }  // namespace lx::host
