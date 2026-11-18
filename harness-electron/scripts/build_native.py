@@ -2,7 +2,7 @@
 import json,os,subprocess,sys,urllib.request
 from pathlib import Path
 APP=Path(__file__).resolve().parents[1];ROOT=APP.parent
-platform='windows' if os.name=='nt' else 'linux';build=ROOT/'build'/platform
+platform='windows' if os.name=='nt' else 'macos' if sys.platform=='darwin' else 'linux';build=ROOT/'build'/platform
 headers=APP/'node_modules/node-api-headers/include'
 args=['cmake','-S',str(ROOT),'-B',str(build),'-DNEXTAGENT_ELECTRON=ON',f'-DNODE_API_INCLUDE={headers}']
 if os.name=='nt':

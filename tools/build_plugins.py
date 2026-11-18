@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 import re
 import shutil
@@ -18,7 +19,7 @@ parser.add_argument("--source", type=Path, default=ROOT.parent / "next-langserve
 parser.add_argument("--cc", default=os.environ.get("CLANG", "clang"))
 parser.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
 args = parser.parse_args()
-platform = "windows" if os.name == "nt" else "linux"
+platform = "windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else "linux"
 canonical = ROOT / "vendor/next-langserver/windows-x64/plugins"
 manifests = {json.loads(p.read_text(encoding="utf-8"))["id"]: p
              for p in canonical.glob("*.lxmanifest.json")}
@@ -71,6 +72,9 @@ for idx, source in enumerate(sources["go"]):
 lines = ["cmake_minimum_required(VERSION 4.5)", "project(NextAgentPlugins LANGUAGES C)",
          "set(CMAKE_C_STANDARD 99)", "set(CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded)",
          'include_directories("' + (ROOT / "vendor/next-langserver/source/include").as_posix() + '")']
+if platform == "macos":
+    lines.append('set(CMAKE_SHARED_LIBRARY_PREFIX "lib")')
+    lines.append('set(CMAKE_SHARED_LIBRARY_SUFFIX ".so")')
 for lang, files in sorted(sources.items()):
     lines.append(f"add_library({lang} SHARED " + " ".join('"' + p.as_posix() + '"' for p in files) + ")")
 (project / "CMakeLists.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -92,7 +96,10 @@ for lang, manifest in sorted(manifests.items()):
             shutil.copytree(canonical / queries, destination / queries, dirs_exist_ok=True)
 
 vendor = ROOT / "vendor/next-langserver"
-files = sorted(p for folder in ("source", "overrides", "windows-x64", "linux-x64")
+folders = ["source", "overrides", "windows-x64", "linux-x64"]
+if (vendor / "macos-x64").is_dir():
+    folders.append("macos-x64")
+files = sorted(p for folder in folders
                for p in (vendor / folder).rglob("*") if p.is_file())
 (vendor / "SHA256SUMS.txt").write_text("".join(
     hashlib.sha256(p.read_bytes()).hexdigest() + "  " + p.relative_to(vendor).as_posix() + "\n"

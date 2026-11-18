@@ -14,8 +14,9 @@ imported DLL is KERNEL32.dll; no debug or redistributable VC runtime is required
 The former standalone runtime executable and interim bridge DLL are not used.
 `linux-x64/plugins/` contains the same 30 languages built as ELF .so libraries
 with Linux Clang 23.1.6 in WSL2 Ubuntu 26.04. Both snapshots include the query
-resources. `tools/build_plugins.py` rebuilds either platform from the sibling
-next-langserver generated grammar projects.
+resources. `tools/build_plugins.py` rebuilds Windows, Linux or macOS from the sibling
+next-langserver generated grammar projects. macOS `.so` bundles are produced on the
+release runner and are not stored in this snapshot.
 
 The vendored host has a downstream Linux loader implementation using
 `dlopen(RTLD_NOW | RTLD_LOCAL)`, `dlsym`, and `dlclose`, with the same ABI and

@@ -40,7 +40,7 @@ python build.py test
 python tests/bundled_lsp.py build/windows/nextagent.exe
 python tests/parity.py build/windows/nextagent.exe
 python package.py
-python tests/package_smoke.py dist/nextagent-0.45.1-windows-x64.zip
+python tests/package_smoke.py dist/nextagent-0.46.0-windows-x64.zip
 ```
 
 Linux uses `build/linux/nextagent` and the Linux tar.gz package. Install libcurl

@@ -1,4 +1,4 @@
-# NextAgent 0.45.1 workflow reference
+# NextAgent 0.46.0 workflow reference
 
 The core exposes these APIs through JSON-RPC, MCP and the in-process Harness.
 `nextagent --root DIR call METHOD -` reads the parameter object from stdin. The

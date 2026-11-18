@@ -1047,8 +1047,12 @@ int main(int argc, char **argv) {
         bool use_languages = getenv("NEXTAGENT_NO_LSP") == NULL;
         bool diagnostics = false;
         for (int k = 0; k < nargs; k++) {
-            if (strcmp(args[k], "--diagnostics") == 0 || strcmp(args[k], "--lsp") == 0) diagnostics = true;
-            else if (strcmp(args[k], "--no-gate") == 0) diagnostics = false;
+            if (strcmp(args[k], "--diagnostics") == 0) diagnostics = true;
+            else if (strcmp(args[k], "--lsp") == 0) {
+                /* Older clients passed --lsp to start language tooling. Tooling is
+                 * already on. This flag must not turn parser diagnostics into a
+                 * commit rejection; that policy is only --diagnostics. */
+            } else if (strcmp(args[k], "--no-gate") == 0) diagnostics = false;
             else goto bad;
         }
         LanguageEngine *languages = use_languages ? language_new(store_root(store)) : NULL;

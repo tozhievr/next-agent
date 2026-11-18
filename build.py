@@ -9,7 +9,8 @@ import sys
 ROOT = Path(__file__).resolve().parent
 ap = argparse.ArgumentParser(description=__doc__)
 ap.add_argument("command", nargs="?", default="build", choices=["build", "test", "clean"])
-ap.add_argument("--target", choices=["windows", "linux"], default="windows" if os.name == "nt" else "linux")
+host = "windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else "linux"
+ap.add_argument("--target", choices=["windows", "linux", "macos"], default=host)
 ap.add_argument("--cc", default=os.environ.get("CLANG", "clang"))
 ap.add_argument("--cxx", default=os.environ.get("CXX", "clang++"))
 ap.add_argument("--config", choices=["release", "debug"], default="release")
@@ -22,7 +23,7 @@ def run(args):
 if a.command == "clean":
     run(["cmake", "--build", str(out), "--target", "clean"])
 else:
-    if (a.target == "windows") != (os.name == "nt"):
+    if a.target != host:
         ap.error("Use a native host or configure CMake with an explicit cross-compilation toolchain")
     run(["cmake", "-S", str(ROOT), "-B", str(out), "-G", "Ninja",
          "-DCMAKE_C_COMPILER=" + a.cc, "-DCMAKE_CXX_COMPILER=" + a.cxx,

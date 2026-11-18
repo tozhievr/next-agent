@@ -34,51 +34,45 @@ async function manifest(root, prefix = "") {
 }
 (async () => {
   const pkg = require("../package.json"),
-    windows = process.platform === "win32";
+    windows = process.platform === "win32",
+    mac = process.platform === "darwin";
   const config = {
     ...pkg.build,
     electronDist: process.env.NEXTAGENT_ELECTRON_DIST || pkg.build.electronDist,
   };
-  const platform = windows ? Platform.WINDOWS : Platform.LINUX;
-  const output = path.join(project, "release", windows ? "windows" : "linux");
+  const platform = windows ? Platform.WINDOWS : mac ? Platform.MAC : Platform.LINUX;
+  const arch = process.arch === "arm64" ? Arch.arm64 : Arch.x64;
+  const output = path.join(project, "release", windows ? "windows" : mac ? "macos" : "linux");
   config.directories = { output: path.relative(project, output) };
   await configuredBuild({
     projectDir: project,
-    targets: platform.createTarget(
-      windows ? ["portable"] : ["AppImage"],
-      Arch.x64,
-    ),
+    targets: platform.createTarget(windows ? ["portable"] : mac ? ["dmg"] : ["AppImage"], arch),
     config: {
       ...config,
-      artifactName:
-        "NextAgent-Harness-${version}-${os}-${arch}-Portable.${ext}",
+      artifactName: "NextAgent-Harness-${version}-${os}-${arch}-Portable.${ext}",
       ...(windows
         ? {
             portable: {
-              artifactName:
-                "NextAgent-Harness-${version}-windows-${arch}-Portable.exe",
+              artifactName: "NextAgent-Harness-${version}-windows-${arch}-Portable.exe",
             },
           }
-        : {
-            deb: {
-              artifactName: "NextAgent-Harness-${version}-linux-${arch}.deb",
-            },
-          }),
+        : mac
+          ? { mac: { ...config.mac, identity: null } }
+          : {
+              deb: {
+                artifactName: "NextAgent-Harness-${version}-linux-${arch}.deb",
+              },
+            }),
     },
   });
-  const payload = path.join(
-    output,
-    windows ? "win-unpacked" : "linux-unpacked",
-  );
+  const unpackedName = windows ? "win-unpacked" : mac ? (process.arch === "arm64" ? "mac-arm64" : "mac") : "linux-unpacked";
+  const payload = path.join(output, unpackedName);
   const description = { version: pkg.version, files: await manifest(payload) };
   const manifestPath = path.join(output, "payload-manifest.json");
   await fs.writeFile(manifestPath, JSON.stringify(description));
   await configuredBuild({
     projectDir: project,
-    targets: platform.createTarget(
-      windows ? ["portable"] : ["AppImage"],
-      Arch.x64,
-    ),
+    targets: platform.createTarget(windows ? ["portable"] : mac ? ["dmg"] : ["AppImage"], arch),
     config: {
       ...config,
       appId: "dev.nextagent.harness.setup",
@@ -97,17 +91,18 @@ async function manifest(root, prefix = "") {
       ...(windows
         ? {
             portable: {
-              artifactName:
-                "NextAgent-Harness-${version}-windows-${arch}-Setup.exe",
+              artifactName: "NextAgent-Harness-${version}-windows-${arch}-Setup.exe",
             },
           }
-        : {}),
+        : mac
+          ? { mac: { ...config.mac, identity: null } }
+          : {}),
     },
   });
   const resultFiles = [];
   for (const directory of [output, path.join(output, "setup")])
     for (const name of await fs.readdir(directory)) {
-      if (/\.(exe|AppImage|deb)$/.test(name)) {
+      if (/\.(exe|AppImage|deb|dmg)$/.test(name)) {
         const file = path.join(directory, name);
         const hash = crypto
           .createHash("sha256")

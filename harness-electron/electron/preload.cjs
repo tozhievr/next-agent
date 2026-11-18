@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("harness", {
   history: () => invoke("history"),
   labels: () => invoke("labels"),
   settings: (values) => invoke("settings", { values }),
+  models: () => invoke("models"),
   window: (command) => invoke("window", { command }),
   selfTest: () => invoke("selfTest"),
 });

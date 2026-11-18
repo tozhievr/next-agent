@@ -10,13 +10,13 @@ test("native workspace, streamed session, history and persistent restore", async
   );
   process.env.NEXTAGENT_PLUGIN_DIR = path.resolve(
     __dirname,
-    `../native/bin/${process.platform === "win32" ? "win" : "linux"}/plugins`,
+    `../native/bin/${process.platform === "win32" ? "win" : process.platform === "darwin" ? "mac" : "linux"}/plugins`,
   );
   const worker = new Worker(path.resolve(__dirname, "../electron/worker.cjs"), {
     workerData: {
       addon: path.resolve(
         __dirname,
-        `../native/bin/${process.platform === "win32" ? "win" : "linux"}/nextagent_desktop.node`,
+        `../native/bin/${process.platform === "win32" ? "win" : process.platform === "darwin" ? "mac" : "linux"}/nextagent_desktop.node`,
       ),
     },
   });

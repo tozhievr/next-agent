@@ -1,6 +1,6 @@
 # NextAgent skill
 
-Requires NextAgent 0.45.1. The binary exposes its bundled instructions directly:
+Requires NextAgent 0.46.0. The binary exposes its bundled instructions directly:
 
 ```text
 nextagent skill

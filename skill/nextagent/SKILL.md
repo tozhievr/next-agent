@@ -3,7 +3,7 @@ name: nextagent
 description: Navigate and edit a code workspace with the nextagent CLI, native AST labels and checked multi-file transactions. Use for targeted code reads, coordinated edits, file moves, undoable changes and verification through next-agent.
 ---
 
-# NextAgent 0.45.1
+# NextAgent 0.46.0
 
 Use `nextagent --version` to confirm the binary. `nextagent skill` returns this instruction from the binary itself; `nextagent skill --reference` returns the detailed workflow reference. Neither command opens a workspace or loads language modules. `--json` returns a versioned machine-readable document.
 

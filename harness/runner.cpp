@@ -89,8 +89,16 @@ Json Workspace::invoke(const std::string &method, const Json &params, std::stop_
         J *request = native(Object{{"jsonrpc", "2.0"}, {"id", 1}, {"method", name}, {"params", arguments}});
         auto response = convert(rpc_dispatch(&rpc, request));
         json_free(request);
-        if (response.find("error"))
-            return Json(Object{{"error", response.at("error")}});
+        if (response.find("error")) {
+            auto &err = response.at("error");
+            auto message = string(err, "message");
+            if (message.empty())
+                message = err.is_string() ? std::string(err.as_string()) : err.dump();
+            return Json(Object{{"error", message},
+                               {"recoverable", true},
+                               {"instruction",
+                                "This call failed and did not change the journal. Correct the arguments or choose another tool, then retry."}});
+        }
         return response.at("result");
     };
     if (reads.contains(method) && params.at("target").is_string()) {
@@ -485,14 +493,28 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
                 try {
                     if (stop.stop_requested())
                         throw std::runtime_error("Cancelled");
+                    if (name.empty())
+                        throw std::runtime_error("Tool call is missing a name");
                     if (!allowed.contains(name))
                         throw std::runtime_error("Tool not permitted in this profile");
-                    result = workspace->invoke(name, parse(string(tool.at("function"), "arguments")), stop,
-                                               config.read_only);
+                    auto raw = string(tool.at("function"), "arguments");
+                    Json args = Object{};
+                    if (!raw.empty()) {
+                        auto parsed = lx::host::parse_json(raw);
+                        if (!parsed)
+                            throw std::runtime_error("Invalid tool arguments: " + parsed.error);
+                        args = std::move(*parsed.value);
+                    }
+                    result = workspace->invoke(name, args, stop, config.read_only);
                 } catch (const std::exception &e) {
-                    result = Object{{"error", e.what()}};
+                    if (stop.stop_requested())
+                        throw;
+                    result = Object{{"error", e.what()},
+                                    {"recoverable", true},
+                                    {"instruction",
+                                     "This call failed and did not change the journal. Correct the arguments or choose another tool, then retry."}};
                 }
-                {
+                try {
                     std::lock_guard lock(mutex);
                     current.tool_calls++;
                     if(!string(result,"check_id").empty()){
@@ -505,11 +527,16 @@ void Session::run(std::string prompt, Config config, std::stop_token stop) {
 
                     current.status = "Инструмент: " + name;
                     for (auto &path : result.at("paths").as_array()) {
+                        if (!path.is_string())
+                            continue;
                         std::string p(path.as_string());
                         if (std::find(current.changed.begin(), current.changed.end(), p) ==
                             current.changed.end())
                             current.changed.push_back(p);
                     }
+                } catch (const std::exception &) {
+                    // Bookkeeping must not drop the tool result. The model needs that
+                    // error to correct the call on the next step.
                 }
                 auto text = result.dump();
                 size_t cap = 60000;

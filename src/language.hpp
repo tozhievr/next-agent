@@ -133,6 +133,10 @@ int language_rename(LanguageEngine *h, const char *abs_path, const char *text, s
 typedef struct DiagnosticGate DiagnosticGate;
 DiagnosticGate *gate_new(const char *root, DiagnosticOps ops, Store *store, int maximum_severity);
 void gate_free(DiagnosticGate *g);
+/* Diagnostics are not a transaction constraint unless enforcement is on.
+ * gate_new starts enforced, which is the explicit --diagnostics policy.
+ * Advisory mode still lets the caller read analyze reports; it never rejects a commit. */
+void gate_set_enforce(DiagnosticGate *g, bool enforce);
 Validator gate_validator(DiagnosticGate *g);
 
 #endif

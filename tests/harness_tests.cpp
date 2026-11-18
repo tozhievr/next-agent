@@ -112,6 +112,44 @@ int main() try {
     check_thread.join();if(background_error)std::rethrow_exception(background_error);
     require(!background_check.at("fresh").as_bool(),"check remained fresh after a concurrent edit");
 
+    auto resolved = workspace->invoke("select", Object{{"target", "outline.py"}, {"name", "alpha"}, {"kind", "method"}});
+    require(resolved.find("error") == nullptr, "unique symbol became symbol_not_found when the kind hint missed");
+    require(string(resolved, "name") == "alpha", "symbol resolution did not return the exact name");
+    auto broken = workspace->invoke(
+        "replace_text", Object{{"target", "outline.py"}, {"old", "return 3"}, {"new", "return ("}});
+    require(broken.find("error") == nullptr, "syntax diagnostic rejected a write without a diagnostics policy");
+
+    class RetryTransport : public Transport {
+        int turn = 0;
+
+      public:
+        void stream(const Config &, const Json &request, std::stop_token stop, const Sink &sink) override {
+            if (stop.stop_requested())
+                throw std::runtime_error("Cancelled");
+            Json delta;
+            const char *finish = "stop";
+            if (turn++ == 0) {
+                Json function = Object{{"name", "select"}, {"arguments", "{"}};
+                Json call = Object{{"index", 0}, {"id", "bad_select"}, {"function", function}};
+                delta = Object{{"tool_calls", Array{call}}};
+                finish = "tool_calls";
+            } else if (request.dump().find("Invalid tool arguments") == std::string::npos)
+                throw std::runtime_error("model did not receive the tool error");
+            else
+                delta = Object{{"content", "Исправил вызов после ошибки инструмента."}};
+            auto payload = Json(Object{{"choices", Array{Object{{"delta", delta}, {"finish_reason", finish}}}}}).dump();
+            sink("data: " + payload + "\n\ndata: [DONE]\n\n");
+        }
+    };
+    config.read_only = false;
+    Session recover(workspace, nullptr, std::make_shared<RetryTransport>());
+    require(recover.start("Repair the failed tool call", config), "recovery session failed to start");
+    recover.wait();
+    auto recovered = recover.snapshot();
+    require(recovered.error.empty(), recovered.error.c_str());
+    require(recovered.answer.find("Исправил") != std::string::npos, "model was not given another turn after the tool error");
+    require(recovered.messages.dump().find("Invalid tool arguments") != std::string::npos,
+            "tool error was not paired into the conversation");
 
     std::cout << "Harness: byte-fragmented SSE, UTF-8, truncated stream, native transactions, persistence, "
                  "read-only and cancellation passed\n";
