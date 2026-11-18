@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 // Declaration structure comes from the native parser tree, never a second lexer.
 namespace lx::host {
 inline std::vector<DocumentSymbolNode> c_family_outline(const Snapshot &snapshot) {
